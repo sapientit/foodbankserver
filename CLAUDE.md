@@ -19,14 +19,16 @@ server-side rendering, no PDF generation. Screens, printing and layout are not o
 | Lint                | `npm run lint` (`lint:fix` to autofix)     |
 | Format              | `npm run format` (`format:check` in CI)    |
 | Test                | `npm test` (`test:watch`, `test:coverage`) |
+| Check the contract  | `npm run check:openapi`                    |
 | **Everything**      | `npm run check`                            |
 | Generate migration  | `npm run db:generate`                      |
 | Apply migrations    | `npm run db:migrate:local` / `:remote`     |
 | Regenerate bindings | `npm run cf-typegen`                       |
 | Deploy              | `npm run deploy`                           |
 
-`npm run check` runs typegen, typecheck, lint, format check, tests and a deploy dry-run. It must
-pass before any change is considered done. Do not weaken a rule to make it pass.
+`npm run check` runs typegen, typecheck, lint, format check, the OpenAPI contract check, tests and a
+deploy dry-run. It must pass before any change is considered done. Do not weaken a rule to make it
+pass.
 
 **CI runs exactly this** on every push and pull request — `.github/workflows/check.yml`. It needs
 no Cloudflare credentials (`wrangler types` reads the config locally, `--dry-run` never calls the
@@ -40,8 +42,10 @@ Rerun `npm run cf-typegen` after changing `wrangler.jsonc` — `check` does it f
 ## Stack
 
 - **Cloudflare Workers**, ESM only. **Not Node** — there is no `process`, no `fs`, no `node:*`.
-  `nodejs_compat` is deliberately off, and `@types/node` is deliberately absent, so reaching for a
-  Node API is a compile error rather than a production failure.
+  `nodejs_compat` is deliberately off, and `tsconfig.json` sets `types` to the Workers types only —
+  so even though `@types/node` is installed for the build tooling, Worker code cannot see a Node
+  global and reaching for one is a compile error rather than a production failure. Do not add
+  `@types/node` to that `types` array.
 - **Hono 4** for routing.
 - **D1** (SQLite) with **Drizzle**, migrations in `migrations/`.
 - **Zod 4** for parsing anything crossing a trust boundary.
@@ -367,6 +371,21 @@ matters — would silently require authentication on any public route mounted af
 
 Attach middleware per route instead: `routes.get('/sessions', ...readers, handler)`. That also
 puts the access level next to the thing it protects. `test/route-mounting.test.ts` guards this.
+
+## The client contract
+
+`openapi.yaml` describes every route; `API.md` covers the sequences a schema cannot express (the
+refresh cycle, the referral flow, the picking order, who may see what). The separate React frontend
+generates its types from the spec, so **the spec is part of the API, not documentation about it.**
+
+`npm run check:openapi` compares the spec against the routes registered in `src/app.ts` and fails on
+a route missing from the spec, a path in the spec that nothing serves, or a `$ref` pointing at
+nothing. It is text-only and dependency-free, so CI needs nothing extra. **Change a route and the
+spec changes in the same commit** — that is what the check is there to force.
+
+It does not check field names or types; only paths and verbs. Response shapes are still guarded by
+the `toXxxResponse()` mappers and their tests, so a mapper change that widens a response for a role
+that should not see it is a review question, not something this catches.
 
 ## Current state
 

@@ -78,5 +78,19 @@ export default tseslint.config(
     files: ['eslint.config.js'],
     extends: [tseslint.configs.disableTypeChecked],
   },
+  {
+    // Build-time tooling, run by `npm run check` on the developer's machine and
+    // in CI — never bundled into the Worker. So Node globals are legitimate
+    // here, and `console` is the only output channel a CLI has. It is outside
+    // tsconfig's `include` for the same reason, hence no type-aware linting.
+    files: ['scripts/**/*.mjs'],
+    extends: [tseslint.configs.disableTypeChecked],
+    languageOptions: {
+      globals: { console: 'readonly', process: 'readonly' },
+    },
+    rules: {
+      'no-console': 'off',
+    },
+  },
   prettier,
 );

@@ -20,11 +20,12 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "check:openapi": "node scripts/check-openapi.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "dry-run": "wrangler deploy --env production --dry-run --outdir .wrangler/dry-run",
-    "check": "npm run cf-typegen && npm run typecheck && npm run lint && npm run format:check && npm run test && npm run dry-run"
+    "check": "npm run cf-typegen && npm run typecheck && npm run lint && npm run format:check && npm run check:openapi && npm run test && npm run dry-run"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.2",
