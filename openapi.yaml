@@ -1,0 +1,1954 @@
+openapi: 3.1.0
+
+info:
+  title: Food Bank API
+  version: '1.0.0'
+  description: |
+    JSON API for running a food bank: referrals in, sessions scheduled, pick
+    lists produced, stock adjusted.
+
+    **Read `API.md` alongside this.** A schema describes shapes; it cannot
+    describe the login/refresh cycle, the fifteen-minute referral edit window,
+    or why a team lead receives fewer fields than an admin. Those are the parts
+    most likely to be got wrong.
+
+    ## Generating a client
+
+    ```
+    npx openapi-typescript openapi.yaml -o src/api/schema.d.ts
+    ```
+
+servers:
+  - url: http://127.0.0.1:8787
+    description: Local wrangler dev
+  - url: https://foodbank-server-production.workers.dev
+    description: Production
+
+tags:
+  - name: Auth
+  - name: Public
+    description: No authentication. Rate limited per client IP.
+  - name: Sessions
+  - name: Referrals
+  - name: Stock
+  - name: Parcel rules
+  - name: Pick lists
+  - name: Admin setup
+  - name: Ops
+
+security:
+  - bearerAuth: []
+
+paths:
+  # ---------------------------------------------------------------- health --
+  /health:
+    get:
+      tags: [Ops]
+      summary: Liveness
+      description: Touches nothing downstream, so it stays up while D1 is not.
+      security: []
+      responses:
+        '200':
+          description: Alive
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, enum: [ok] }
+
+  /ready:
+    get:
+      tags: [Ops]
+      summary: Readiness
+      description: Confirms the database answers.
+      security: []
+      responses:
+        '200': { description: Ready }
+        '503': { description: Database unreachable }
+
+  # ------------------------------------------------------------------ auth --
+  /api/v1/auth/dev-login:
+    post:
+      tags: [Auth]
+      summary: Development login
+      description: |
+        **Development only.** This route is not registered unless
+        `AUTH_MODE=dummy`, and the server refuses to start with that setting in
+        production — so in production it returns 404.
+
+        Any email is accepted and an unknown one is created as an admin. Google
+        will replace this and will *reject* unknown accounts.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email, maxLength: 254 }
+                displayName: { type: string, maxLength: 120 }
+                role:
+                  type: string
+                  enum: [admin, team_lead, volunteer]
+                  description: Only used when creating a new account.
+      responses:
+        '200':
+          description: Signed in
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenResponse' }
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+              description: >
+                `foodbank_refresh`, HttpOnly, Secure, SameSite=Strict, scoped to
+                `/api/v1/auth`. Not readable by JavaScript, by design.
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { description: Not registered, because AUTH_MODE is not dummy }
+
+  /api/v1/auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Exchange the refresh cookie for a new access token
+      description: |
+        Rotates the refresh token. Presenting one that has already been rotated
+        is treated as theft and **revokes the entire token family** — the user
+        is signed out everywhere. Send the cookie, never a body.
+      security: []
+      responses:
+        '200':
+          description: New token pair
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenResponse' }
+        '401':
+          description: Missing, expired, unknown, or replayed
+
+  /api/v1/auth/logout:
+    post:
+      tags: [Auth]
+      summary: Sign out
+      description: Revokes the whole family, not just the presented token.
+      security: []
+      responses:
+        '204': { description: Signed out }
+
+  /api/v1/auth/me:
+    get:
+      tags: [Auth]
+      summary: The signed-in user
+      description: For rebuilding UI state after a reload.
+      responses:
+        '200':
+          description: The current actor
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, email, role]
+                properties:
+                  id: { type: string, format: uuid }
+                  email: { type: string }
+                  role: { $ref: '#/components/schemas/Role' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ---------------------------------------------------------------- public --
+  /api/v1/public/sessions:
+    get:
+      tags: [Public]
+      summary: Sessions open to referrals
+      description: |
+        The next 14 days, excluding cancelled sessions and any that are full.
+        The window is fixed and cannot be widened by a parameter.
+
+        Deliberately narrow: no capacity, no remaining places, no status.
+        Anything listed can be referred to.
+      security: []
+      responses:
+        '200':
+          description: Available sessions, soonest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sessions]
+                properties:
+                  sessions:
+                    type: array
+                    items: { $ref: '#/components/schemas/PublicSession' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/public/referral-form:
+    get:
+      tags: [Public]
+      summary: The published referral form and reason options
+      description: |
+        Everything needed to render the form in one request: the dynamic
+        questions and the reason dropdown. Send `formDefinitionId` back? No —
+        the server resolves the published version itself.
+      security: []
+      responses:
+        '200':
+          description: The form
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PublicForm' }
+        '404': { description: No form has been published yet }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/public/referrers/check:
+    post:
+      tags: [Public]
+      summary: Is this address allowed to refer?
+      description: |
+        Call this as the referrer types their address, so they find out before
+        filling the whole form in. Authorisation is by exact address or by
+        domain; an individually deactivated address is refused even when its
+        domain is allowed.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '200':
+          description: The verdict
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [authorised, organisationName]
+                properties:
+                  authorised: { type: boolean }
+                  organisationName:
+                    type: [string, 'null']
+                    description: Present when authorised; use it to pre-fill the form.
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/public/referrals:
+    post:
+      tags: [Public]
+      summary: Submit a referral
+      description: |
+        The only unauthenticated write in the system.
+
+        **Requires a Turnstile token** in `cf-turnstile-response` whenever the
+        server is configured with a secret — always in production. Tokens are
+        single-use and expire after five minutes.
+
+        The response contains `editKey` **once and nowhere else**. Hold it in
+        memory to let the referrer amend or withdraw within fifteen minutes;
+        after that they must phone the food bank.
+      security: []
+      parameters:
+        - in: header
+          name: cf-turnstile-response
+          schema: { type: string }
+          description: Token from the Turnstile widget. Required in production.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReferralSubmission' }
+      responses:
+        '201':
+          description: Referral accepted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReferralReceipt' }
+        '400':
+          description: Validation failed, or the bot check was missing or stale
+        '403':
+          description: The referrer's address is not authorised
+        '409':
+          description: The session is full, cancelled, or already confirmed
+        '422':
+          description: The chosen reason is no longer offered
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/public/referrals/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+      - $ref: '#/components/parameters/ReferralKey'
+    get:
+      tags: [Public]
+      summary: Read your own referral during the edit window
+      security: []
+      responses:
+        '200':
+          description: The referral as the referrer submitted it
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SelfServiceReferral' }
+        '401': { description: The edit key header is missing }
+        '403': { description: The key is invalid, consumed, or for another referral }
+        '409': { description: The fifteen-minute window has closed }
+    patch:
+      tags: [Public]
+      summary: Amend your own referral
+      description: >
+        Amending does **not** extend the window — it runs from submission and
+        is absolute.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReferralSelfAmend' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SelfServiceReferral' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { description: Invalid key }
+        '409': { description: Window closed, or the referral is cancelled }
+    delete:
+      tags: [Public]
+      summary: Withdraw your own referral
+      description: Consumes the key, so it cannot be used again.
+      security: []
+      responses:
+        '204': { description: Withdrawn }
+        '403': { description: Invalid key }
+
+  # -------------------------------------------------------------- sessions --
+  /api/v1/sessions:
+    get:
+      tags: [Sessions]
+      summary: List sessions
+      parameters:
+        - { in: query, name: from, schema: { type: string, format: date } }
+        - { in: query, name: to, schema: { type: string, format: date } }
+        - in: query
+          name: status
+          schema: { type: string, enum: [planned, in_progress, confirmed, cancelled] }
+      responses:
+        '200':
+          description: Sessions, soonest first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessions:
+                    type: array
+                    items: { $ref: '#/components/schemas/Session' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Sessions]
+      summary: Create an ad hoc session
+      description: Belongs to no weekly template, so the cron never touches it. Admin only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sessionDate, startTime, durationMinutes, location]
+              properties:
+                sessionDate: { type: string, format: date }
+                startTime: { $ref: '#/components/schemas/LocalTime' }
+                durationMinutes: { type: integer, minimum: 1, maximum: 1440 }
+                location: { type: string, maxLength: 200 }
+                capacity: { type: integer, minimum: 0, maximum: 1000, default: 25 }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Session' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/v1/sessions/{id}:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    get:
+      tags: [Sessions]
+      summary: One session
+      responses:
+        '200':
+          description: The session
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Session' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Sessions]
+      summary: Re-time, re-locate or re-capacity one occurrence
+      description: |
+        Admin only. Marks the occurrence as customised; the materialisation cron
+        never overwrites an existing row, so the change survives.
+
+        `startsAtUtc` is re-derived server-side — send wall-clock time only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              properties:
+                sessionDate: { type: string, format: date }
+                startTime: { $ref: '#/components/schemas/LocalTime' }
+                durationMinutes: { type: integer, minimum: 1, maximum: 1440 }
+                location: { type: string }
+                capacity: { type: integer, minimum: 0 }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Session' }
+        '409': { description: The session has been confirmed }
+
+  /api/v1/sessions/{id}/cancel:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    post:
+      tags: [Sessions]
+      summary: Cancel a session
+      description: Admin only. Idempotent.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string, maxLength: 500 }
+      responses:
+        '200':
+          description: Cancelled
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Session' }
+        '409': { description: The session has been confirmed }
+
+  /api/v1/sessions/{sessionId}/confirm:
+    parameters: [{ $ref: '#/components/parameters/SessionId' }]
+    post:
+      tags: [Pick lists]
+      summary: Close the session
+      description: |
+        The team lead's final step. Refuses while any household is still
+        unrecorded, and says which pick numbers — a session confirmed with
+        people unaccounted for has wrong stock figures.
+      responses:
+        '200': { description: Confirmed }
+        '409':
+          description: Somebody has not been marked attended or not
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Error'
+                  - type: object
+                    properties:
+                      error:
+                        type: object
+                        properties:
+                          details:
+                            type: object
+                            properties:
+                              pendingPickNumbers:
+                                type: array
+                                items: { type: integer }
+
+  /api/v1/recurring-sessions:
+    get:
+      tags: [Sessions]
+      summary: Weekly templates
+      responses:
+        '200':
+          description: Templates
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  recurringSessions:
+                    type: array
+                    items: { $ref: '#/components/schemas/RecurringSession' }
+    post:
+      tags: [Sessions]
+      summary: Create a weekly template
+      description: |
+        Admin only. `startTime` is Europe/London wall clock and stays put across
+        the BST changeover — a 10:00 session is 10:00 all year.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, weekday, startTime, durationMinutes, location, activeFrom]
+              properties:
+                name: { type: string, maxLength: 120 }
+                weekday:
+                  type: integer
+                  minimum: 1
+                  maximum: 7
+                  description: ISO-8601, 1 = Monday.
+                startTime: { $ref: '#/components/schemas/LocalTime' }
+                durationMinutes: { type: integer, minimum: 1, maximum: 1440 }
+                location: { type: string }
+                capacity: { type: integer, default: 25 }
+                activeFrom: { type: string, format: date }
+                activeUntil: { type: [string, 'null'], format: date }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RecurringSession' }
+
+  /api/v1/recurring-sessions/{id}:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    patch:
+      tags: [Sessions]
+      summary: Amend a weekly template
+      description: >
+        Admin only. Does not retrospectively change sessions already generated.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, minProperties: 1 }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RecurringSession' }
+
+  # ------------------------------------------------------------- referrals --
+  /api/v1/referrals:
+    get:
+      tags: [Referrals]
+      summary: List referrals
+      description: |
+        **A team lead does not receive `reasonId`, `referrerEmail` or
+        `referrerPhone`.** Why someone is hungry is not picking information.
+      parameters:
+        - { in: query, name: sessionId, schema: { type: string, format: uuid } }
+        - { in: query, name: status, schema: { type: string, enum: [active, cancelled] } }
+      responses:
+        '200':
+          description: Referrals
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  referrals:
+                    type: array
+                    items: { $ref: '#/components/schemas/Referral' }
+
+  /api/v1/referrals/{id}:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    get:
+      tags: [Referrals]
+      summary: One referral
+      responses:
+        '200':
+          description: The referral
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Referral' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Referrals]
+      summary: Amend or move a referral
+      description: |
+        Admin only. Supplying `sessionId` moves it; moving into a full session
+        requires `acknowledgeOverCapacity: true`, which is the server half of
+        the warning the operator has to accept.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/ReferralSelfAmend'
+                - type: object
+                  properties:
+                    sessionId: { type: string, format: uuid }
+                    acknowledgeOverCapacity: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Referral' }
+        '409': { description: Target session is full and not acknowledged }
+
+  /api/v1/referrals/{id}/cancel:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    post:
+      tags: [Referrals]
+      summary: Cancel a referral
+      description: Admin only. Idempotent. Frees its place in the session.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string, maxLength: 500 }
+      responses:
+        '200':
+          description: Cancelled
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Referral' }
+
+  # ----------------------------------------------------------------- stock --
+  /api/v1/stock/levels:
+    get:
+      tags: [Stock]
+      summary: Stock levels, ordered by shelf
+      description: |
+        The picking and stock-take screen. Ordered so a picker walks the aisle
+        once: A1, A2, A10 — not alphabetically. Levels are derived by summing
+        the ledger; there is no stored balance.
+      parameters:
+        - { in: query, name: includeInactive, schema: { type: string, enum: ['true'] } }
+      responses:
+        '200':
+          description: Levels
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/StockLevel' }
+
+  /api/v1/stock/search:
+    get:
+      tags: [Stock]
+      summary: Autocomplete stock items
+      description: Type `sug`, get `Sugar`. Prefix match first, then infix.
+      parameters:
+        - in: query
+          name: q
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 40 }
+          description: >
+            Capped at 40 characters — the database limits pattern length, and
+            exceeding it is an error rather than an empty result.
+      responses:
+        '200':
+          description: Matches, up to 20
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/StockItem' }
+        '400': { description: Search term too long or empty }
+
+  /api/v1/stock/items:
+    get:
+      tags: [Stock]
+      summary: List stock items
+      parameters:
+        - { in: query, name: includeInactive, schema: { type: string, enum: ['true'] } }
+      responses:
+        '200':
+          description: Items, by shelf
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/StockItem' }
+    post:
+      tags: [Stock]
+      summary: Add a stock item
+      description: Admin only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, unit, shelfNumber]
+              properties:
+                name: { type: string, maxLength: 120 }
+                unit: { type: string, maxLength: 30, examples: [tin, packet, kg] }
+                shelfNumber: { type: string, maxLength: 20, examples: ['A1', '12b'] }
+                lowStockThreshold: { type: [integer, 'null'] }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StockItem' }
+        '409': { description: An item with that name already exists }
+
+  /api/v1/stock/items/{id}:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    patch:
+      tags: [Stock]
+      summary: Amend a stock item
+      description: 'Admin only. Set `isActive: false` to retire without losing history.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              properties:
+                name: { type: string }
+                unit: { type: string }
+                shelfNumber: { type: string }
+                lowStockThreshold: { type: [integer, 'null'] }
+                isActive: { type: boolean }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StockItem' }
+
+  /api/v1/stock/purchases:
+    post:
+      tags: [Stock]
+      summary: Record a shop
+      description: |
+        Admin only. Adds to existing stock rather than replacing it. If any line
+        names an unknown item, **nothing at all is written**.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [lines]
+              properties:
+                purchasedAt: { type: string, format: date-time }
+                note: { type: [string, 'null'], maxLength: 500 }
+                lines:
+                  type: array
+                  minItems: 1
+                  maxItems: 200
+                  items:
+                    type: object
+                    required: [stockItemId, quantity]
+                    properties:
+                      stockItemId: { type: string, format: uuid }
+                      quantity: { type: integer, minimum: 1 }
+      responses:
+        '201':
+          description: Recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  purchaseId: { type: string, format: uuid }
+                  lines: { type: integer }
+        '404': { description: A line names an unknown item; nothing was written }
+
+  /api/v1/stock/adjustments:
+    post:
+      tags: [Stock]
+      summary: Correct stock by hand
+      description: |
+        Admin only. Always requires a reason — this is the only unexplained
+        movement type, and it is where a mis-recorded attendance gets fixed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [stockItemId, quantityDelta, movementType, reason]
+              properties:
+                stockItemId: { type: string, format: uuid }
+                quantityDelta:
+                  type: integer
+                  description: Signed, never zero. Negative removes stock.
+                movementType:
+                  type: string
+                  enum: [donation, wastage, expiry, correction, opening_balance]
+                reason: { type: string, minLength: 1, maxLength: 300 }
+      responses:
+        '204': { description: Recorded }
+
+  /api/v1/stock/takes:
+    get:
+      tags: [Stock]
+      summary: List stock takes
+      responses:
+        '200': { description: Stock takes }
+    post:
+      tags: [Stock]
+      summary: Open a stock take
+      description: Admin only.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                note: { type: [string, 'null'], maxLength: 500 }
+      responses:
+        '201':
+          description: Opened
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string, format: uuid }
+                  status: { type: string, enum: [open] }
+
+  /api/v1/stock/takes/{id}/counts:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    post:
+      tags: [Stock]
+      summary: Record counted quantities
+      description: >
+        Admin only. Can be called repeatedly while the take is open; a later
+        count for the same item replaces the earlier one.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [counts]
+              properties:
+                counts:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    required: [stockItemId, countedQuantity]
+                    properties:
+                      stockItemId: { type: string, format: uuid }
+                      countedQuantity: { type: integer, minimum: 0 }
+      responses:
+        '204': { description: Recorded }
+        '409': { description: The stock take has already been committed }
+
+  /api/v1/stock/takes/{id}/commit:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    post:
+      tags: [Stock]
+      summary: Commit the count
+      description: |
+        Admin only. Writes an adjustment **only for items whose count differs**
+        from the derived level, so the variance is visible rather than silently
+        absorbed. The response lists exactly what moved.
+      responses:
+        '200':
+          description: Committed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string, format: uuid }
+                  status: { type: string, enum: [committed] }
+                  committedAt: { type: string, format: date-time }
+                  adjustments:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        stockItemId: { type: string, format: uuid }
+                        expected: { type: integer }
+                        counted: { type: integer }
+                        delta: { type: integer }
+        '409': { description: Already committed, or no counts recorded }
+
+  # ---------------------------------------------------------- parcel rules --
+  /api/v1/model-parcels:
+    get:
+      tags: [Parcel rules]
+      summary: List model parcels
+      responses:
+        '200':
+          description: Model parcels
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  modelParcels:
+                    type: array
+                    items: { $ref: '#/components/schemas/ModelParcel' }
+    post:
+      tags: [Parcel rules]
+      summary: Create a model parcel
+      description: |
+        Admin only. The name is the key the grid references and **cannot be
+        changed afterwards** — delete and recreate, which forces the grid to be
+        revisited. Duplicate items in `contents` are merged.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, contents]
+              properties:
+                name: { type: string, maxLength: 80 }
+                description: { type: [string, 'null'], maxLength: 300 }
+                displayOrder: { type: integer, default: 0 }
+                contents:
+                  type: array
+                  minItems: 1
+                  items: { $ref: '#/components/schemas/ParcelContentLine' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModelParcel' }
+        '409': { description: A model parcel with that name already exists }
+
+  /api/v1/model-parcels/{id}:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    patch:
+      tags: [Parcel rules]
+      summary: Amend a model parcel
+      description: |
+        Admin only. Affects **future** pick lists only — contents are copied at
+        generation, so anything already generated is untouched. The name is not
+        amendable.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              properties:
+                description: { type: [string, 'null'] }
+                displayOrder: { type: integer }
+                contents:
+                  type: array
+                  minItems: 1
+                  items: { $ref: '#/components/schemas/ParcelContentLine' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModelParcel' }
+    delete:
+      tags: [Parcel rules]
+      summary: Delete a model parcel
+      description: Admin only. Refused while the grid still points at it.
+      responses:
+        '204': { description: Deleted }
+        '409':
+          description: Still used by the grid; the response lists the cells
+
+  /api/v1/parcel-grid:
+    get:
+      tags: [Parcel rules]
+      summary: The household grid
+      description: |
+        Thirty cells: 1-5 adults by 0-5 children, keyed `adults-children`. Each
+        holds the **name** of a model parcel. `cells` lists every key that must
+        be filled, so an empty grid can still be rendered.
+      responses:
+        '200':
+          description: The grid and what is missing from it
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [grid, cells, isComplete, missingCells]
+                properties:
+                  grid:
+                    type: object
+                    additionalProperties: { type: string }
+                    examples:
+                      - { '1-0': Single parcel, '2-3': Family parcel }
+                  cells: { type: array, items: { type: string } }
+                  isComplete: { type: boolean }
+                  missingCells: { type: array, items: { type: string } }
+                  unknownParcels: { type: array, items: { type: object } }
+    put:
+      tags: [Parcel rules]
+      summary: Replace the grid
+      description: |
+        Admin only. Sent **whole**, never cell by cell — one write, no
+        half-updated state. A partly filled grid is allowed while setting up; a
+        household landing on a blank cell simply cannot be placed, which
+        generation reports.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [grid]
+              properties:
+                grid:
+                  type: object
+                  additionalProperties: { type: string }
+      responses:
+        '200': { description: Saved }
+        '422':
+          description: Names a model parcel that does not exist, or a cell that is not a real household size
+
+  /api/v1/parcel-grid/preview:
+    post:
+      tags: [Parcel rules]
+      summary: What would this household receive?
+      description: >
+        Runs the same lookup generation uses, so a preview cannot diverge from
+        what gets picked. Households larger than the grid clamp into its corner.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [adults, children]
+              properties:
+                adults: { type: integer, minimum: 0, maximum: 30 }
+                children: { type: integer, minimum: 0, maximum: 30 }
+      responses:
+        '200':
+          description: The resulting parcel
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  household:
+                    type: object
+                    properties:
+                      adults: { type: integer }
+                      children: { type: integer }
+                      size: { type: integer }
+                  modelParcelName: { type: string }
+                  lines:
+                    type: array
+                    items: { $ref: '#/components/schemas/ParcelContentLine' }
+        '422': { description: No model parcel is defined for that household size }
+
+  # ------------------------------------------------------------ pick lists --
+  /api/v1/sessions/{sessionId}/pick-list:
+    parameters: [{ $ref: '#/components/parameters/SessionId' }]
+    get:
+      tags: [Pick lists]
+      summary: The session's pick list, generating it if absent
+      description: >
+        Generates on first view, exactly as POST does. Safe to call repeatedly.
+      responses:
+        '200':
+          description: The pick list and its parcels
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pickList: { $ref: '#/components/schemas/PickList' }
+                  parcels:
+                    type: array
+                    items: { $ref: '#/components/schemas/Parcel' }
+    post:
+      tags: [Pick lists]
+      summary: Generate the pick list
+      description: |
+        Idempotent — calling again returns the existing list with
+        `parcelsCreated: 0`. Contents are **copied** from the model parcels, so
+        later rule edits cannot change this list.
+
+        `skipped` lists referrals with no model parcel for their household size;
+        the rest are still picked.
+      responses:
+        '200':
+          description: Generated, or already existed
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PickList'
+                  - type: object
+                    properties:
+                      parcelsCreated: { type: integer }
+                      linesCreated: { type: integer }
+                      skipped:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            referralId: { type: string, format: uuid }
+                            reason: { type: string }
+        '422': { description: No model parcels have been set up }
+
+  /api/v1/pick-lists/{id}:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    get:
+      tags: [Pick lists]
+      summary: A pick list with its parcels
+      responses:
+        '200':
+          description: The pick list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pickList: { $ref: '#/components/schemas/PickList' }
+                  parcels:
+                    type: array
+                    items: { $ref: '#/components/schemas/Parcel' }
+
+  /api/v1/pick-lists/{id}/print:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    get:
+      tags: [Pick lists]
+      summary: The printable payload
+      description: |
+        One sheet per parcel, lines ordered by shelf. JSON — the frontend owns
+        layout.
+
+        **Never contains the reason for referral**, and no name or address
+        unless it is a delivery. A sheet gets carried round a hall and left on
+        tables. Dietary notes *are* included: the picker is the only person who
+        can act on them.
+      responses:
+        '200':
+          description: Sheets
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pickList: { $ref: '#/components/schemas/PickList' }
+                  parcels:
+                    type: array
+                    items: { $ref: '#/components/schemas/PrintParcel' }
+    post:
+      tags: [Pick lists]
+      summary: Mark as printed
+      description: >
+        Only the first print is stamped. **Lines can still be edited after
+        printing** — the list locks on confirm, not on print.
+      responses:
+        '200':
+          description: Marked
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PickList' }
+        '409': { description: Already confirmed }
+
+  /api/v1/pick-lists/{id}/confirm:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    post:
+      tags: [Pick lists]
+      summary: Lock the pick list
+      description: |
+        Picking is finished and the list can no longer be edited.
+
+        **This does not move stock.** Stock moves when attendance is recorded,
+        because until someone turns up nothing has been given away. Idempotent.
+      responses:
+        '200':
+          description: Confirmed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PickList' }
+
+  /api/v1/pick-lists/{id}/divergence:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    get:
+      tags: [Pick lists]
+      summary: What has changed since generation
+      description: >
+        Reported, never applied automatically — a picker may already be holding
+        the printed sheet. Show it as a warning and let a human decide.
+      responses:
+        '200':
+          description: Differences
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  missingParcels:
+                    type: array
+                    items: { type: string, format: uuid }
+                    description: Referrals that arrived after generation.
+                  changedHouseholds:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        parcelId: { type: string, format: uuid }
+                        was: { type: object }
+                        now: { type: object }
+                  cancelledReferrals:
+                    type: array
+                    items: { type: string, format: uuid }
+
+  /api/v1/parcels/{id}:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    patch:
+      tags: [Pick lists]
+      summary: Set a note on a parcel
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [notes]
+              properties:
+                notes: { type: [string, 'null'], maxLength: 500 }
+      responses:
+        '200': { description: Updated }
+        '409': { description: The pick list has been confirmed }
+
+  /api/v1/parcels/{id}/lines:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    put:
+      tags: [Pick lists]
+      summary: Add an item or change its quantity
+      description: |
+        Marked as a manual change so it is distinguishable from what the model
+        parcel decided. **A quantity of 0 removes the line**, which is how a
+        picker records "we had none".
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [stockItemId, quantity]
+              properties:
+                stockItemId: { type: string, format: uuid }
+                quantity: { type: integer, minimum: 0, maximum: 1000 }
+      responses:
+        '204': { description: Applied }
+        '409': { description: The pick list has been confirmed }
+
+  /api/v1/parcels/{id}/lines/{stockItemId}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+      - { in: path, name: stockItemId, required: true, schema: { type: string, format: uuid } }
+    delete:
+      tags: [Pick lists]
+      summary: Remove an item from a parcel
+      responses:
+        '204': { description: Removed }
+        '409': { description: The pick list has been confirmed }
+
+  /api/v1/parcels/{id}/attendance:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    post:
+      tags: [Pick lists]
+      summary: Did this household turn up?
+      description: |
+        **Attended** issues the parcel and decrements stock. **No-show** moves
+        nothing — the parcel is unpacked and nothing was ever given away.
+
+        Safe to submit repeatedly: `alreadyRecorded: true` means the outcome was
+        already in place and stock did not move again. A mis-record can be
+        corrected once in each direction; a third change is refused and needs an
+        admin stock adjustment.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [attendance]
+              properties:
+                attendance: { type: string, enum: [attended, no_show] }
+      responses:
+        '200':
+          description: Recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string, format: uuid }
+                  attendance: { type: string }
+                  stockMoved: { type: boolean }
+                  alreadyRecorded: { type: boolean }
+        '409': { description: Already issued and returned once }
+
+  # ---------------------------------------------------------- admin set-up --
+  /api/v1/authorised-referrers:
+    get:
+      tags: [Admin setup]
+      summary: Who may refer
+      responses:
+        '200': { description: Authorised referrers }
+    post:
+      tags: [Admin setup]
+      summary: Authorise a referrer
+      description: |
+        Admin only. `matchType: domain` accepts `*@example.org`, `@example.org`
+        or `example.org` — all stored as the bare domain.
+
+        An exact-address entry beats a domain entry, so deactivating one address
+        blocks that person while their colleagues carry on.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [matchType, matchValue, organisationName]
+              properties:
+                matchType: { type: string, enum: [email, domain] }
+                matchValue: { type: string }
+                organisationName: { type: string, maxLength: 200 }
+                notes: { type: [string, 'null'] }
+      responses:
+        '201': { description: Authorised }
+        '409': { description: That referrer is already on the list }
+
+  /api/v1/authorised-referrers/{id}:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    patch:
+      tags: [Admin setup]
+      summary: Amend or deactivate a referrer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              properties:
+                organisationName: { type: string }
+                notes: { type: [string, 'null'] }
+                isActive: { type: boolean }
+      responses:
+        '200': { description: Updated }
+
+  /api/v1/referral-reasons:
+    get:
+      tags: [Admin setup]
+      summary: All reasons, including retired ones
+      responses:
+        '200': { description: Reasons }
+    post:
+      tags: [Admin setup]
+      summary: Add a reason
+      description: >
+        Admin only. `code` is the stable reporting key and is never renamed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, label]
+              properties:
+                code: { type: string, pattern: '^[a-z0-9_]+$', maxLength: 60 }
+                label: { type: string, maxLength: 200 }
+                displayOrder: { type: integer, default: 0 }
+      responses:
+        '201': { description: Created }
+        '409': { description: That code already exists }
+
+  /api/v1/referral-reasons/{id}:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    patch:
+      tags: [Admin setup]
+      summary: Amend or retire a reason
+      description: >
+        Set `isActive: false` to stop offering it without breaking historical
+        referrals that used it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              properties:
+                label: { type: string }
+                displayOrder: { type: integer }
+                isActive: { type: boolean }
+      responses:
+        '200': { description: Updated }
+
+  /api/v1/form-definitions:
+    get:
+      tags: [Admin setup]
+      summary: All form versions
+      responses:
+        '200': { description: Form definitions }
+    post:
+      tags: [Admin setup]
+      summary: Start a new draft form
+      description: Admin only. Version numbers are assigned automatically.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title: { type: string, maxLength: 200 }
+      responses:
+        '201': { description: Draft created }
+
+  /api/v1/form-definitions/{id}:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    get:
+      tags: [Admin setup]
+      summary: One version with its questions
+      responses:
+        '200': { description: The version }
+
+  /api/v1/form-definitions/{id}/fields:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    post:
+      tags: [Admin setup]
+      summary: Add a question to a draft
+      description: |
+        Admin only, drafts only. `key` is the stable key answers are stored
+        under and must never be reused for a different question.
+
+        `isPii` defaults to **true**: a question is treated as personal data
+        unless someone deliberately says otherwise, because it decides what a
+        retention purge strips.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key, label, type]
+              properties:
+                key: { type: string, pattern: '^[a-z][a-z0-9_]*$', maxLength: 60 }
+                label: { type: string, maxLength: 300 }
+                helpText: { type: [string, 'null'] }
+                type:
+                  type: string
+                  enum: [text, textarea, number, boolean, select, multiselect, date]
+                isRequired: { type: boolean, default: false }
+                options:
+                  type: array
+                  items: { type: string }
+                  description: Required for select and multiselect.
+                minValue: { type: [integer, 'null'] }
+                maxValue: { type: [integer, 'null'] }
+                maxLength: { type: [integer, 'null'] }
+                isPii: { type: boolean, default: true }
+                displayOrder: { type: integer, default: 0 }
+      responses:
+        '201': { description: Added }
+        '409': { description: Published form, or duplicate key }
+
+  /api/v1/form-definitions/{id}/publish:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    post:
+      tags: [Admin setup]
+      summary: Publish a draft form
+      description: >
+        Admin only. Retires the previously published version, which stays
+        readable so old referrals keep their meaning.
+      responses:
+        '200': { description: Published }
+        '409': { description: Not a draft, or it has no questions }
+
+  /api/v1/form-fields/{id}:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    patch:
+      tags: [Admin setup]
+      summary: Amend a question on a draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, minProperties: 1 }
+      responses:
+        '200': { description: Updated }
+        '409': { description: The form has been published }
+    delete:
+      tags: [Admin setup]
+      summary: Remove a question from a draft
+      responses:
+        '204': { description: Removed }
+        '409': { description: The form has been published }
+
+  # ------------------------------------------------------------------- ops --
+  /api/v1/jobs/session-materialisation/run:
+    post:
+      tags: [Ops]
+      summary: Run the scheduled jobs now
+      description: |
+        Admin only. Calls exactly what the nightly cron calls: generates six
+        weeks of sessions from the weekly templates, clears expired referral
+        edit keys, and purges old personal data if a retention period is set.
+
+        Idempotent — a second run creates nothing.
+      responses:
+        '200':
+          description: Job report
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  from: { type: string, format: date }
+                  to: { type: string, format: date }
+                  templatesConsidered: { type: integer }
+                  occurrencesPlanned: { type: integer }
+                  sessionsCreated: { type: integer }
+                  editKeysPurged: { type: integer }
+                  referralsPurged: { type: integer }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        `Authorization: Bearer <accessToken>`. Expires after 15 minutes; see the
+        refresh flow in API.md.
+    referralKey:
+      type: apiKey
+      in: header
+      name: x-referral-key
+      description: >
+        Returned once when a referral is submitted. Authorises amending or
+        withdrawing that one referral, for fifteen minutes.
+
+  parameters:
+    Id:
+      in: path
+      name: id
+      required: true
+      schema: { type: string, format: uuid }
+    SessionId:
+      in: path
+      name: sessionId
+      required: true
+      schema: { type: string, format: uuid }
+    ReferralKey:
+      in: header
+      name: x-referral-key
+      required: true
+      schema: { type: string }
+
+  responses:
+    BadRequest:
+      description: Validation failed. `details.issues` names the fields, never their values.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthorized:
+      description: Missing or expired access token. Refresh and retry.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: Signed in, but this role may not do that.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: No such thing.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    RateLimited:
+      description: Too many requests from this address. Back off and retry.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      description: >
+        Every failure has this shape. `requestId` also appears in the
+        `x-request-id` header — quote it when reporting a problem.
+      properties:
+        error:
+          type: object
+          required: [code, message, requestId]
+          properties:
+            code:
+              type: string
+              enum:
+                [
+                  BAD_REQUEST,
+                  VALIDATION_FAILED,
+                  UNAUTHORIZED,
+                  FORBIDDEN,
+                  NOT_FOUND,
+                  CONFLICT,
+                  UNPROCESSABLE,
+                  INTERNAL_ERROR,
+                ]
+            message:
+              type: string
+              description: Safe to show a user. Never contains personal data.
+            details:
+              type: object
+              description: Structured context, such as which fields failed.
+            requestId: { type: string }
+
+    Role:
+      type: string
+      enum: [admin, team_lead]
+      description: >
+        `volunteer` exists in the database but is unused. Use this to choose a
+        menu, never for access control — the server re-checks on every request.
+
+    LocalTime:
+      type: string
+      pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+      description: >
+        `HH:MM`, Europe/London wall clock. Stays put across the BST changeover.
+      examples: ['10:00']
+
+    TokenResponse:
+      type: object
+      required: [accessToken, expiresAt, user]
+      properties:
+        accessToken:
+          type: string
+          description: Hold in memory only. Never in localStorage.
+        expiresAt: { type: integer, description: Epoch seconds. }
+        user:
+          type: object
+          required: [id, email, displayName, role]
+          properties:
+            id: { type: string, format: uuid }
+            email: { type: string }
+            displayName: { type: string }
+            role: { $ref: '#/components/schemas/Role' }
+
+    PublicSession:
+      type: object
+      required: [id, sessionDate, startTime, startsAtUtc, durationMinutes, location]
+      properties:
+        id: { type: string, format: uuid }
+        sessionDate: { type: string, format: date }
+        startTime: { $ref: '#/components/schemas/LocalTime' }
+        startsAtUtc: { type: string, format: date-time }
+        durationMinutes: { type: integer }
+        location: { type: string }
+
+    Session:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        sessionDate: { type: string, format: date }
+        startTime: { $ref: '#/components/schemas/LocalTime' }
+        startsAtUtc: { type: string, format: date-time }
+        durationMinutes: { type: integer }
+        location: { type: string }
+        capacity:
+          type: integer
+          description: Counts households, not people.
+        status: { type: string, enum: [planned, in_progress, confirmed, cancelled] }
+        cancelledReason: { type: [string, 'null'] }
+        isCustomised: { type: boolean }
+        recurringSessionId: { type: [string, 'null'], format: uuid }
+        occurrenceDate: { type: [string, 'null'], format: date }
+
+    RecurringSession:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        weekday: { type: integer, minimum: 1, maximum: 7 }
+        startTime: { $ref: '#/components/schemas/LocalTime' }
+        durationMinutes: { type: integer }
+        location: { type: string }
+        capacity: { type: integer }
+        activeFrom: { type: string, format: date }
+        activeUntil: { type: [string, 'null'], format: date }
+
+    PublicForm:
+      type: object
+      required: [formDefinitionId, version, title, reasons, fields]
+      properties:
+        formDefinitionId: { type: string, format: uuid }
+        version: { type: integer }
+        title: { type: string }
+        reasons:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              code: { type: string }
+              label: { type: string }
+              displayOrder: { type: integer }
+        fields:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              key: { type: string }
+              label: { type: string }
+              helpText: { type: [string, 'null'] }
+              type: { type: string }
+              isRequired: { type: boolean }
+              options: { type: array, items: { type: string } }
+              minValue: { type: [integer, 'null'] }
+              maxValue: { type: [integer, 'null'] }
+              maxLength: { type: [integer, 'null'] }
+              displayOrder: { type: integer }
+
+    ReferralSubmission:
+      type: object
+      required:
+        [sessionId, reasonId, referrerEmail, refereeName, refereeAddress, refereePostcode, adults]
+      properties:
+        sessionId: { type: string, format: uuid }
+        reasonId: { type: string, format: uuid }
+        referrerEmail: { type: string, format: email }
+        referrerPhone: { type: string, minLength: 5, maxLength: 30 }
+        refereeName: { type: string, maxLength: 200 }
+        refereeAddress: { type: string, maxLength: 500 }
+        refereePostcode: { type: string, minLength: 2, maxLength: 12 }
+        refereePhone: { type: string, minLength: 5, maxLength: 30 }
+        adults:
+          type: integer
+          minimum: 1
+          maximum: 30
+          description: At least one, so every referral maps to a real grid cell.
+        children: { type: integer, minimum: 0, maximum: 30 }
+        isDelivery: { type: boolean, default: false }
+        deliveryAddress:
+          type: string
+          description: Only for a delivery; defaults to the referee's own address.
+        answers:
+          type: object
+          description: >
+            Keyed by the `key` of each question from `/public/referral-form`.
+            Unknown keys are ignored rather than rejected.
+          additionalProperties: true
+
+    ReferralSelfAmend:
+      type: object
+      minProperties: 1
+      description: Any subset. Amending does not extend the fifteen-minute window.
+      properties:
+        refereeName: { type: string }
+        refereeAddress: { type: string }
+        refereePostcode: { type: string }
+        refereePhone: { type: [string, 'null'] }
+        referrerPhone: { type: [string, 'null'] }
+        adults: { type: integer, minimum: 1 }
+        children: { type: integer, minimum: 0 }
+        isDelivery: { type: boolean }
+        deliveryAddress: { type: [string, 'null'] }
+        reasonId: { type: string, format: uuid }
+        answers: { type: object, additionalProperties: true }
+
+    ReferralReceipt:
+      type: object
+      required: [id, sessionId, status, adults, children, isDelivery, editKey, editKeyExpiresAt]
+      properties:
+        id: { type: string, format: uuid }
+        sessionId: { type: string, format: uuid }
+        status: { type: string }
+        adults: { type: integer }
+        children: { type: integer }
+        isDelivery: { type: boolean }
+        editKey:
+          type: string
+          description: >
+            Returned once and never again. Hold it in memory to allow amending
+            within fifteen minutes.
+        editKeyExpiresAt: { type: integer, description: Epoch seconds. }
+
+    SelfServiceReferral:
+      type: object
+      description: The referrer's own view. Never includes the edit key.
+      properties:
+        id: { type: string, format: uuid }
+        sessionId: { type: string, format: uuid }
+        status: { type: string }
+        adults: { type: integer }
+        children: { type: integer }
+        isDelivery: { type: boolean }
+        refereeName: { type: [string, 'null'] }
+        refereeAddress: { type: [string, 'null'] }
+        refereePostcode: { type: [string, 'null'] }
+        refereePhone: { type: [string, 'null'] }
+        deliveryAddress: { type: [string, 'null'] }
+        answers: { type: object, additionalProperties: true }
+
+    Referral:
+      type: object
+      description: |
+        The staff view. **The last three fields are admin-only** — a team lead
+        receives the object without them, so treat them as optional.
+      required:
+        [
+          id,
+          sessionId,
+          status,
+          referredAt,
+          adults,
+          children,
+          householdSize,
+          isDelivery,
+          referrerOrganisation,
+          answers,
+        ]
+      properties:
+        id: { type: string, format: uuid }
+        sessionId: { type: string, format: uuid }
+        status: { type: string, enum: [active, cancelled] }
+        referredAt: { type: string, format: date-time }
+        adults: { type: integer }
+        children: { type: integer }
+        householdSize: { type: integer }
+        isDelivery: { type: boolean }
+        referrerOrganisation: { type: string }
+        refereeName: { type: [string, 'null'] }
+        refereeAddress: { type: [string, 'null'] }
+        refereePostcode: { type: [string, 'null'] }
+        refereePhone: { type: [string, 'null'] }
+        deliveryAddress: { type: [string, 'null'] }
+        answers: { type: object, additionalProperties: true }
+        piiPurgedAt:
+          type: [string, 'null']
+          format: date-time
+          description: When set, the identifying fields above are null by design.
+        reasonId:
+          type: string
+          format: uuid
+          description: '**Admin only.** Absent for a team lead.'
+        referrerEmail:
+          type: [string, 'null']
+          description: '**Admin only.**'
+        referrerPhone:
+          type: [string, 'null']
+          description: '**Admin only.**'
+
+    StockItem:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        unit: { type: string }
+        shelfNumber: { type: string }
+        lowStockThreshold: { type: [integer, 'null'] }
+        isActive: { type: boolean }
+
+    StockLevel:
+      allOf:
+        - $ref: '#/components/schemas/StockItem'
+        - type: object
+          properties:
+            quantityOnHand:
+              type: integer
+              description: Derived by summing the ledger. May be negative after a correction.
+            isLow: { type: boolean }
+
+    ParcelContentLine:
+      type: object
+      required: [stockItemId, quantity]
+      properties:
+        stockItemId: { type: string, format: uuid }
+        quantity: { type: integer, minimum: 1, maximum: 1000 }
+
+    ModelParcel:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: [string, 'null'] }
+        displayOrder: { type: integer }
+        contents:
+          type: array
+          items: { $ref: '#/components/schemas/ParcelContentLine' }
+
+    PickList:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        sessionId: { type: string, format: uuid }
+        status: { type: string, enum: [draft, printed, confirmed] }
+        generatedAt: { type: string, format: date-time }
+        firstPrintedAt: { type: [string, 'null'], format: date-time }
+        confirmedAt: { type: [string, 'null'], format: date-time }
+
+    ParcelLine:
+      type: object
+      properties:
+        stockItemId: { type: string, format: uuid }
+        name: { type: string }
+        unit: { type: string }
+        shelfNumber: { type: string }
+        quantity: { type: integer }
+        source:
+          type: string
+          enum: [model, manual]
+          description: '`manual` means a human changed it after generation.'
+
+    Parcel:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        referralId: { type: string, format: uuid }
+        pickNumber:
+          type: integer
+          description: The number on the printed sheet, 1..N within the session.
+        adults: { type: integer }
+        children: { type: integer }
+        householdSize: { type: integer }
+        attendance: { type: string, enum: [pending, attended, no_show, cancelled] }
+        notes: { type: [string, 'null'] }
+        lines:
+          type: array
+          items: { $ref: '#/components/schemas/ParcelLine' }
+
+    PrintParcel:
+      type: object
+      description: >
+        Deliberately narrow. No reason for referral, ever. No name or address
+        unless it is a delivery.
+      properties:
+        pickNumber: { type: integer }
+        householdSize: { type: integer }
+        adults: { type: integer }
+        children: { type: integer }
+        isDelivery: { type: boolean }
+        deliveryName: { type: [string, 'null'] }
+        deliveryAddress: { type: [string, 'null'] }
+        dietaryNotes:
+          type: [string, 'null']
+          description: Included because the picker is the only person who can act on it.
+        notes: { type: [string, 'null'] }
+        lines:
+          type: array
+          items: { $ref: '#/components/schemas/ParcelLine' }
