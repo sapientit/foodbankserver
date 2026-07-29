@@ -1,0 +1,54 @@
+#Food Bank System
+This system is for the management of a food bank.  The food bank runs multiple sessions every week.  People from authorised organisations, or authorised people, can refer people to the food bank.  This referral includes the session they are attending, whether they need a delivery, number of adults and children, reason for referral, name, address, phone number and food preferences.
+The administrators can move people between sessions and cancel people.
+Each session generates a food pick list - one "parcel" for each person.  The parcel contents depends on the size of the household being supported.
+The pick list can then be modified before being printed.  Once printed, further changes can be made before the pick-list is confirmed as created.  
+
+#Session maintenance
+Standard sessions repeat weekly.  They have a default capacity of 25 people. It is possible for the administrator to change the time of an individual session, cancel a session or add new ad hoc session.  Fields are date, time, duration, location and capacity.   Recurring meetings or individual meetings can be created or changed.
+
+A list of available sessions for the next 2 weeks can be made without signon. A session is not available if it is at or over capacity.  A list of all sessions is available after login.
+
+#Authorised referrers
+Referrers can be authorised either by full email address or a star and domain name.(*@guildford.gov.uk).  There is no check that they are who they say they are - only that the email address they enter is valid.
+
+#referral
+The referral is currently a Google Form because it does change periodically.  Like Google forms, the questions must form a text a columns key and validation rules.  There will be some columns that are fixed, but many of the columns will have to be generic names in the database.
+
+The fixed columns are: date of referral, session id, email id of referrer, organisation of referrer, phone number of referrer, name of referee, address of referee, phone number of referee, number of adults, number of children, reason for referral.  All other columns are dynamic.
+
+There is a maximum capacity on each session, so referrals cannot be made to a full session.
+
+Note that the referral is done without authentication (other than checking the entered email address).  At that point, a secure key is returned to the client.  They can amend or delete the referral for 15 minutes by returning that key.
+
+#Referral maintenance.
+Administrators can amend or cancel referrals or move them to another session (even if that exceeds capacity with a client generated warning). 
+
+#Login
+Authentication will eventually be via a Google id.  Initial version will be a dummy signon page with no validation, but this should still generate an expiring security token, with refresh tokens etc.
+
+#Stock maintenance
+There are about 40 stock items (with a maintenance facility to amend them).  After a shop, there will be a facility to type sug and it will find sugar and autocomplete.  Then a field for how many we bought.  This will add to the existing stock.
+There will also be a list screen with items and current stock that can be maintained for a stock take.
+Stock is maintained in a certain place in the warehouse. So each stock item has a "shelf number" .  The list should be by shelf number
+
+#Picking list
+Against a session there will be an option to view picking list.  If that picking list has not been created yet, then it will be done at this point.  For each referral, the number of adults and children will result via a series of rules into a model picking list. 
+This picking list can be easily modified (add new items, change quantities).  This generates a printable picking list page per referral, with a referral number and the stock items they require and quantities.
+
+After picking is complete, modifications can be made to the list.
+
+#Model parcels and the household grid
+The "series of rules" that turns a household into a model picking list is a lookup, not a calculation.
+
+There is a table of model picking lists.  Each has a name as its key and its contents as JSON - the stock items and quantities that make up that parcel.
+
+Separately there is a grid of every possible household size.  Adults run from 1 to 5 and children from 0 to 5, so there are 30 entries.  A household larger than 5 adults counts as 5, and more than 5 children counts as 5.  Each grid entry holds just the name of the model picking list to use for that household size, so several household sizes can share one model parcel and changing that parcel updates all of them.  The grid is maintained as a whole and updated in one go, so it can be stored as a single row.
+
+A referral must have at least one adult, so every referral maps to a real grid entry.
+
+The model picking lists are not versioned.  When a picking list is created for a session, the contents of the relevant model are copied onto each referral's parcel.  From then on that parcel holds its own contents and is unaffected by any later change to the model or the grid.  The parcel does not record which model it came from - only what is in it.
+
+#Session maintenance
+After the session, each referee is marked as attended or did not show.  If they attended, the stock is updated.  Otherwise the parcel will be unpacked.
+

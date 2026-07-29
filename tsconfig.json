@@ -1,0 +1,43 @@
+{
+  "compilerOptions": {
+    /* Workers runtime. Deliberately NOT Node: `types` omits @types/node so a
+       stray `process.env` or `node:crypto` import is a compile error rather
+       than a runtime failure in production. */
+    "target": "es2024",
+    "lib": ["es2024"],
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "types": ["./worker-configuration.d.ts", "@cloudflare/vitest-pool-workers/types"],
+
+    /* Source imports carry real `.ts` specifiers; esbuild resolves them when
+       wrangler bundles, and tsc never emits. */
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
+    "isolatedModules": true,
+
+    /* Strictness: all deliberate. Do not relax per-file. */
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "useUnknownInCatchVariables": true,
+    "forceConsistentCasingInFileNames": true,
+
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": [
+    "src",
+    "test",
+    "worker-configuration.d.ts",
+    "vitest.config.ts",
+    "drizzle.config.ts",
+    "eslint.config.js"
+  ]
+}

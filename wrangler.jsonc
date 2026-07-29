@@ -1,0 +1,102 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "foodbank-server",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-07-01",
+
+  // No nodejs_compat by design. Everything uses WebCrypto and Intl, both of
+  // which workerd provides natively. Adding it would let Node-only packages
+  // creep in and quietly break the "no Node API surface" rule in CLAUDE.md.
+  "compatibility_flags": [],
+
+  "observability": {
+    "enabled": true,
+  },
+
+  "vars": {
+    "ENVIRONMENT": "development",
+    "LOG_LEVEL": "debug",
+    // Dummy auth accepts any email. config/env.ts refuses to boot if this is
+    // set while ENVIRONMENT is production.
+    "AUTH_MODE": "dummy",
+  },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "foodbank",
+      // Placeholder until `wrangler d1 create foodbank --jurisdiction=eu` is run.
+      // The EU jurisdiction is permanent and cannot be changed afterwards.
+      "database_id": "975ce6e4-3d3c-4811-bd60-feb0cbfad966",
+      "migrations_dir": "migrations",
+    },
+  ],
+
+  /*
+   * Rate limiting for the unauthenticated surface. Needs no npm dependency and
+   * no state of our own. Period must be 10 or 60 seconds — no other value is
+   * accepted.
+   *
+   * The referral limiter is deliberately tight: a real referrer submits once,
+   * so anything beyond a handful a minute from one address is a bot or a bug.
+   */
+  "ratelimits": [
+    {
+      "name": "REFERRAL_LIMITER",
+      "namespace_id": "1001",
+      "simple": { "limit": 5, "period": 60 },
+    },
+    {
+      "name": "PUBLIC_LIMITER",
+      "namespace_id": "1002",
+      "simple": { "limit": 60, "period": 60 },
+    },
+  ],
+
+  // 02:17 daily. Materialises 6 weeks of sessions, purges expired referral edit
+  // keys, and (once a retention period is set) purges referral personal data.
+  "triggers": {
+    "crons": ["17 2 * * *"],
+  },
+
+  "env": {
+    // Wrangler environments do NOT inherit top-level keys — every binding,
+    // var and trigger must be repeated in full.
+    "production": {
+      "name": "foodbank-server-production",
+      "observability": { "enabled": true },
+      "vars": {
+        "ENVIRONMENT": "production",
+        "LOG_LEVEL": "info",
+        // Intentional tripwire: config/env.ts refuses to boot on this
+        // combination, so a production deploy fails loudly on every request
+        // until real authentication exists. Change to "google" only when the
+        // Google provider is actually implemented — never to make it start.
+        "AUTH_MODE": "dummy",
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "foodbank",
+          "database_id": "975ce6e4-3d3c-4811-bd60-feb0cbfad966",
+          "migrations_dir": "migrations",
+        },
+      ],
+      "ratelimits": [
+        {
+          "name": "REFERRAL_LIMITER",
+          "namespace_id": "1001",
+          "simple": { "limit": 5, "period": 60 },
+        },
+        {
+          "name": "PUBLIC_LIMITER",
+          "namespace_id": "1002",
+          "simple": { "limit": 60, "period": 60 },
+        },
+      ],
+      "triggers": {
+        "crons": ["17 2 * * *"],
+      },
+    },
+  },
+}

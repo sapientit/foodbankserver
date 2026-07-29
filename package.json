@@ -1,0 +1,48 @@
+{
+  "name": "foodbank-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Food bank management server: referrals, sessions, pick lists and stock.",
+  "type": "module",
+  "engines": {
+    "node": ">=26"
+  },
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy --env production",
+    "cf-typegen": "wrangler types --strict-vars",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate:local": "wrangler d1 migrations apply foodbank --local",
+    "db:migrate:remote": "wrangler d1 migrations apply foodbank --remote",
+    "db:studio": "drizzle-kit studio",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "dry-run": "wrangler deploy --env production --dry-run --outdir .wrangler/dry-run",
+    "check": "npm run cf-typegen && npm run typecheck && npm run lint && npm run format:check && npm run test && npm run dry-run"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.45.2",
+    "hono": "^4.12.32",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.19.0",
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.1.2",
+    "@vitest/coverage-istanbul": "^4.1.10",
+    "drizzle-kit": "^0.31.10",
+    "eslint": "^10.8.0",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.9.6",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.65.0",
+    "vitest": "^4.1.10",
+    "wrangler": "^4.115.0"
+  }
+}

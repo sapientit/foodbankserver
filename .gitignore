@@ -1,0 +1,20 @@
+node_modules/
+dist/
+coverage/
+*.log
+
+# Secrets and local config — never commit. .env.example is the tracked template.
+.env
+.env.*
+!.env.example
+
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Wrangler
+.wrangler/
+
+# Local secrets for wrangler dev
+.dev.vars

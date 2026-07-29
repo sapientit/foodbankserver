@@ -1,0 +1,52 @@
+name: check
+
+# Every push and every pull request. The point is that nobody has to remember
+# to run `npm run check` — the two tests that matter most guard stock moving
+# exactly once and personal data staying out of logs, and both fail silently in
+# production if they regress.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A second push to the same branch cancels the first: no value in finishing a
+# run against code that has already been replaced.
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Matches the `engines` field. Tooling only — the server itself runs
+          # on workerd, which the test pool downloads as a platform package.
+          node-version: '26'
+          cache: npm
+
+      # `npm ci` installs exactly what package-lock.json pins, and fails rather
+      # than silently updating it. Never `npm install` in CI.
+      - run: npm ci
+
+      # Typegen, typecheck, lint, format check, the full suite inside real
+      # workerd, and a production deploy dry-run.
+      #
+      # No Cloudflare credentials are needed: `wrangler types` reads
+      # wrangler.jsonc locally and `--dry-run` never contacts the API. Verified
+      # against a machine with no stored auth.
+      #
+      # No `.dev.vars` either — the test bindings in vitest.config.ts supply
+      # everything the suite needs, and that is checked deliberately.
+      - run: npm run check
+        env:
+          # Wrangler phones home with anonymous usage data otherwise.
+          CLOUDFLARE_TELEMETRY_DISABLED: '1'

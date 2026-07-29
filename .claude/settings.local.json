@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm --version)",
+      "Bash(npm install *)",
+      "Bash(node *)",
+      "Bash(echo \"=== TYPECHECK EXIT: $? ===\")",
+      "Bash(npx prettier *)",
+      "Bash(npx eslint *)",
+      "Bash(echo \"=== EXIT $? ===\")",
+      "Bash(npx vitest *)",
+      "Bash(git init *)",
+      "Bash(echo \"=== CHECK EXIT: $? ===\")"
+    ]
+  }
+}

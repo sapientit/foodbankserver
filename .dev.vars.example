@@ -1,0 +1,22 @@
+# Copy to `.dev.vars` for local development. `.dev.vars` is gitignored.
+#
+# In deployed environments these are Worker secrets, set with:
+#   npx wrangler secret put AUTH_JWT_SECRET --env production
+#
+# Generate a value with:
+#   node -e "console.log(crypto.randomUUID() + crypto.randomUUID())"
+
+AUTH_JWT_SECRET=replace-me-with-at-least-32-random-characters
+
+# Optional in development. REQUIRED in production - the Worker refuses to start
+# without it, because the referral endpoint is an open write storing personal
+# data. Create a Turnstile widget in the Cloudflare dashboard to get one.
+# TURNSTILE_SECRET_KEY=
+
+# Comma-separated origins the React app is served from. Empty means
+# same-origin only.
+# ALLOWED_ORIGINS=http://localhost:5173
+
+# Unset means personal data is never purged. Set only once the charity has
+# agreed a retention period.
+# PII_RETENTION_DAYS=730
