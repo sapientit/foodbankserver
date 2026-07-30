@@ -26,6 +26,8 @@ servers:
 
 tags:
   - name: Auth
+  - name: Users
+    description: Who may sign in, and as what. Admin only.
   - name: Public
     description: No authentication. Rate limited per client IP.
   - name: Sessions
@@ -78,8 +80,10 @@ paths:
         `AUTH_MODE=dummy`, and the server refuses to start with that setting in
         production — so in production it returns 404.
 
-        Any email is accepted and an unknown one is created as an admin. Google
-        will replace this and will *reject* unknown accounts.
+        Any email is accepted — nothing is verified — but the address must
+        already have a user record, created by an admin through
+        `/api/v1/users`. An unknown address is refused, and the display name
+        and role come from that record, never from this request.
       security: []
       requestBody:
         required: true
@@ -90,11 +94,6 @@ paths:
               required: [email]
               properties:
                 email: { type: string, format: email, maxLength: 254 }
-                displayName: { type: string, maxLength: 120 }
-                role:
-                  type: string
-                  enum: [admin, team_lead, volunteer]
-                  description: Only used when creating a new account.
       responses:
         '200':
           description: Signed in
@@ -108,6 +107,8 @@ paths:
                 `foodbank_refresh`, HttpOnly, Secure, SameSite=Strict, scoped to
                 `/api/v1/auth`. Not readable by JavaScript, by design.
         '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { description: No user record for that address }
+        '403': { description: That account has been deactivated }
         '404': { description: Not registered, because AUTH_MODE is not dummy }
 
   /api/v1/auth/refresh:
@@ -118,6 +119,10 @@ paths:
         Rotates the refresh token. Presenting one that has already been rotated
         is treated as theft and **revokes the entire token family** — the user
         is signed out everywhere. Send the cookie, never a body.
+      x-assumed: >-
+        Q5 — the session lengths, and that a suspected replay signs the
+        legitimate holder out too. The spec asks for "an expiring security
+        token, with refresh tokens etc." and leaves every number to us.
       security: []
       responses:
         '200':
@@ -156,6 +161,100 @@ paths:
                   role: { $ref: '#/components/schemas/Role' }
         '401': { $ref: '#/components/responses/Unauthorized' }
 
+  # ----------------------------------------------------------------- users --
+  /api/v1/users:
+    get:
+      tags: [Users]
+      summary: List users
+      description: Admin only. Active users unless `includeInactive` is set.
+      parameters:
+        - { in: query, name: includeInactive, schema: { type: string, enum: ['true'] } }
+      responses:
+        '200':
+          description: Users, by email
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [users]
+                properties:
+                  users:
+                    type: array
+                    items: { $ref: '#/components/schemas/User' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Users]
+      summary: Add a user
+      description: |
+        Admin only. **This is the only way an account comes into existence** —
+        signing in never creates one. The address is stored lowercased, because
+        that is how every identity provider resolves an account.
+      x-assumed: >-
+        Q6 — the whole account model, including the seeded first admin. The
+        spec covers how somebody proves who they are and never says who is
+        allowed in, so invitation-only is our answer, not the charity's.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, displayName, role]
+              properties:
+                email: { type: string, format: email, maxLength: 254 }
+                displayName: { type: string, maxLength: 120 }
+                role: { $ref: '#/components/schemas/Role' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: A user with that email address already exists }
+
+  /api/v1/users/{id}:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    patch:
+      tags: [Users]
+      summary: Amend, re-role or deactivate a user
+      description: |
+        Admin only.
+
+        **Email cannot be changed.** It is the login identity and what the
+        audit trail means by "who"; repointing it would move that history onto
+        somebody else. Deactivate and create instead.
+
+        **There is no delete.** Users are named by the stock ledger, audit
+        events and attendance. `isActive: false` is the retirement path: the
+        account stops working at the next token refresh — within fifteen
+        minutes, since the access token already issued is not revoked — and the
+        history stays readable.
+
+        Two changes are refused, both of them lockouts: demoting or
+        deactivating **yourself**, and doing either to the **last active
+        admin**.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              properties:
+                displayName: { type: string, maxLength: 120 }
+                role: { $ref: '#/components/schemas/Role' }
+                isActive: { type: boolean }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: That change would leave nobody able to administer the food bank }
+
   # ---------------------------------------------------------------- public --
   /api/v1/public/sessions:
     get:
@@ -182,22 +281,32 @@ paths:
                     items: { $ref: '#/components/schemas/PublicSession' }
         '429': { $ref: '#/components/responses/RateLimited' }
 
-  /api/v1/public/referral-form:
+  /api/v1/public/referral-reasons:
     get:
       tags: [Public]
-      summary: The published referral form and reason options
+      summary: The reason-for-referral options
       description: |
-        Everything needed to render the form in one request: the dynamic
-        questions and the reason dropdown. Send `formDefinitionId` back? No —
-        the server resolves the published version itself.
+        Active options only, in display order, for the dropdown on the referral
+        form.
+
+        **The questions on the form are not served here.** The referral form is
+        client configuration: it ships with the application, is seen in the test
+        system first, and goes live when a new version of the client does. The
+        reason list stays on the server because it is a maintained lookup the
+        referral points at by `reasonId`.
       security: []
       responses:
         '200':
-          description: The form
+          description: The options
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/PublicForm' }
-        '404': { description: No form has been published yet }
+              schema:
+                type: object
+                required: [referralReasons]
+                properties:
+                  referralReasons:
+                    type: array
+                    items: { $ref: '#/components/schemas/ReferralReason' }
         '429': { $ref: '#/components/responses/RateLimited' }
 
   /api/v1/public/referrers/check:
@@ -340,6 +449,7 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [sessions]
                 properties:
                   sessions:
                     type: array
@@ -442,6 +552,9 @@ paths:
         The team lead's final step. Refuses while any household is still
         unrecorded, and says which pick numbers — a session confirmed with
         people unaccounted for has wrong stock figures.
+      x-assumed: >-
+        Q9 — that confirming is blocked rather than warned about. The spec has
+        no session-close step at all; this is ours.
       responses:
         '200': { description: Confirmed }
         '409':
@@ -474,6 +587,7 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [recurringSessions]
                 properties:
                   recurringSessions:
                     type: array
@@ -548,6 +662,7 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [referrals]
                 properties:
                   referrals:
                     type: array
@@ -629,6 +744,7 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [items]
                 properties:
                   items:
                     type: array
@@ -654,6 +770,7 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [items]
                 properties:
                   items:
                     type: array
@@ -673,6 +790,7 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [items]
                 properties:
                   items:
                     type: array
@@ -681,6 +799,9 @@ paths:
       tags: [Stock]
       summary: Add a stock item
       description: Admin only.
+      x-assumed: >-
+        Q7 — `lowStockThreshold` and the `isLow` flag derived from it are a
+        feature nobody asked for. The spec has no notion of running low.
       requestBody:
         required: true
         content:
@@ -732,8 +853,9 @@ paths:
       tags: [Stock]
       summary: Record a shop
       description: |
-        Admin only. Adds to existing stock rather than replacing it. If any line
-        names an unknown item, **nothing at all is written**.
+        Admin or team lead — shopping is a warehouse job. Adds to existing stock
+        rather than replacing it. If any line names an unknown item, **nothing
+        at all is written**.
       requestBody:
         required: true
         content:
@@ -771,8 +893,12 @@ paths:
       tags: [Stock]
       summary: Correct stock by hand
       description: |
-        Admin only. Always requires a reason — this is the only unexplained
-        movement type, and it is where a mis-recorded attendance gets fixed.
+        Admin or team lead. Always requires a reason — this is the only
+        unexplained movement type, and it is where a mis-recorded attendance
+        gets fixed, which is the team lead's own mistake to correct.
+      x-assumed: >-
+        Q8 — the movement-type list. The spec never mentions donations,
+        wastage or expiry; these are guesses at how stock actually leaves.
       requestBody:
         required: true
         content:
@@ -797,11 +923,21 @@ paths:
       tags: [Stock]
       summary: List stock takes
       responses:
-        '200': { description: Stock takes }
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [stockTakes]
+                properties:
+                  stockTakes:
+                    type: array
+                    items: { $ref: '#/components/schemas/StockTake' }
     post:
       tags: [Stock]
       summary: Open a stock take
-      description: Admin only.
+      description: Admin or team lead.
       requestBody:
         content:
           application/json:
@@ -826,8 +962,8 @@ paths:
       tags: [Stock]
       summary: Record counted quantities
       description: >
-        Admin only. Can be called repeatedly while the take is open; a later
-        count for the same item replaces the earlier one.
+        Admin or team lead. Can be called repeatedly while the take is open; a
+        later count for the same item replaces the earlier one.
       requestBody:
         required: true
         content:
@@ -855,9 +991,9 @@ paths:
       tags: [Stock]
       summary: Commit the count
       description: |
-        Admin only. Writes an adjustment **only for items whose count differs**
-        from the derived level, so the variance is visible rather than silently
-        absorbed. The response lists exactly what moved.
+        Admin or team lead. Writes an adjustment **only for items whose count
+        differs** from the derived level, so the variance is visible rather than
+        silently absorbed. The response lists exactly what moved.
       responses:
         '200':
           description: Committed
@@ -892,6 +1028,7 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [modelParcels]
                 properties:
                   modelParcels:
                     type: array
@@ -1066,6 +1203,7 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [pickList, parcels]
                 properties:
                   pickList: { $ref: '#/components/schemas/PickList' }
                   parcels:
@@ -1114,6 +1252,7 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [pickList, parcels]
                 properties:
                   pickList: { $ref: '#/components/schemas/PickList' }
                   parcels:
@@ -1140,6 +1279,7 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [pickList, parcels]
                 properties:
                   pickList: { $ref: '#/components/schemas/PickList' }
                   parcels:
@@ -1223,7 +1363,16 @@ paths:
               properties:
                 notes: { type: [string, 'null'], maxLength: 500 }
       responses:
-        '200': { description: Updated }
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, isActive]
+                properties:
+                  id: { type: string, format: uuid }
+                  isActive: { type: boolean }
         '409': { description: The pick list has been confirmed }
 
   /api/v1/parcels/{id}/lines:
@@ -1271,8 +1420,11 @@ paths:
 
         Safe to submit repeatedly: `alreadyRecorded: true` means the outcome was
         already in place and stock did not move again. A mis-record can be
-        corrected once in each direction; a third change is refused and needs an
-        admin stock adjustment.
+        corrected once in each direction; a third change is refused and needs a
+        stock adjustment.
+      x-assumed: >-
+        Q3 — the twice-then-refuse correction limit is ours. The spec says only
+        that attendance moves stock; it sets no limit on fixing a mis-tap.
       requestBody:
         required: true
         content:
@@ -1302,7 +1454,17 @@ paths:
       tags: [Admin setup]
       summary: Who may refer
       responses:
-        '200': { description: Authorised referrers }
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [authorisedReferrers]
+                properties:
+                  authorisedReferrers:
+                    type: array
+                    items: { $ref: '#/components/schemas/AuthorisedReferrer' }
     post:
       tags: [Admin setup]
       summary: Authorise a referrer
@@ -1325,7 +1487,16 @@ paths:
                 organisationName: { type: string, maxLength: 200 }
                 notes: { type: [string, 'null'] }
       responses:
-        '201': { description: Authorised }
+        '201':
+          description: Authorised
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, matchValue]
+                properties:
+                  id: { type: string, format: uuid }
+                  matchValue: { type: string }
         '409': { description: That referrer is already on the list }
 
   /api/v1/authorised-referrers/{id}:
@@ -1345,14 +1516,33 @@ paths:
                 notes: { type: [string, 'null'] }
                 isActive: { type: boolean }
       responses:
-        '200': { description: Updated }
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, isActive]
+                properties:
+                  id: { type: string, format: uuid }
+                  isActive: { type: boolean }
 
   /api/v1/referral-reasons:
     get:
       tags: [Admin setup]
       summary: All reasons, including retired ones
       responses:
-        '200': { description: Reasons }
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [referralReasons]
+                properties:
+                  referralReasons:
+                    type: array
+                    items: { $ref: '#/components/schemas/AdminReferralReason' }
     post:
       tags: [Admin setup]
       summary: Add a reason
@@ -1370,7 +1560,11 @@ paths:
                 label: { type: string, maxLength: 200 }
                 displayOrder: { type: integer, default: 0 }
       responses:
-        '201': { description: Created }
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminReferralReason' }
         '409': { description: That code already exists }
 
   /api/v1/referral-reasons/{id}:
@@ -1393,109 +1587,11 @@ paths:
                 displayOrder: { type: integer }
                 isActive: { type: boolean }
       responses:
-        '200': { description: Updated }
-
-  /api/v1/form-definitions:
-    get:
-      tags: [Admin setup]
-      summary: All form versions
-      responses:
-        '200': { description: Form definitions }
-    post:
-      tags: [Admin setup]
-      summary: Start a new draft form
-      description: Admin only. Version numbers are assigned automatically.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [title]
-              properties:
-                title: { type: string, maxLength: 200 }
-      responses:
-        '201': { description: Draft created }
-
-  /api/v1/form-definitions/{id}:
-    parameters: [{ $ref: '#/components/parameters/Id' }]
-    get:
-      tags: [Admin setup]
-      summary: One version with its questions
-      responses:
-        '200': { description: The version }
-
-  /api/v1/form-definitions/{id}/fields:
-    parameters: [{ $ref: '#/components/parameters/Id' }]
-    post:
-      tags: [Admin setup]
-      summary: Add a question to a draft
-      description: |
-        Admin only, drafts only. `key` is the stable key answers are stored
-        under and must never be reused for a different question.
-
-        `isPii` defaults to **true**: a question is treated as personal data
-        unless someone deliberately says otherwise, because it decides what a
-        retention purge strips.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [key, label, type]
-              properties:
-                key: { type: string, pattern: '^[a-z][a-z0-9_]*$', maxLength: 60 }
-                label: { type: string, maxLength: 300 }
-                helpText: { type: [string, 'null'] }
-                type:
-                  type: string
-                  enum: [text, textarea, number, boolean, select, multiselect, date]
-                isRequired: { type: boolean, default: false }
-                options:
-                  type: array
-                  items: { type: string }
-                  description: Required for select and multiselect.
-                minValue: { type: [integer, 'null'] }
-                maxValue: { type: [integer, 'null'] }
-                maxLength: { type: [integer, 'null'] }
-                isPii: { type: boolean, default: true }
-                displayOrder: { type: integer, default: 0 }
-      responses:
-        '201': { description: Added }
-        '409': { description: Published form, or duplicate key }
-
-  /api/v1/form-definitions/{id}/publish:
-    parameters: [{ $ref: '#/components/parameters/Id' }]
-    post:
-      tags: [Admin setup]
-      summary: Publish a draft form
-      description: >
-        Admin only. Retires the previously published version, which stays
-        readable so old referrals keep their meaning.
-      responses:
-        '200': { description: Published }
-        '409': { description: Not a draft, or it has no questions }
-
-  /api/v1/form-fields/{id}:
-    parameters: [{ $ref: '#/components/parameters/Id' }]
-    patch:
-      tags: [Admin setup]
-      summary: Amend a question on a draft
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { type: object, minProperties: 1 }
-      responses:
-        '200': { description: Updated }
-        '409': { description: The form has been published }
-    delete:
-      tags: [Admin setup]
-      summary: Remove a question from a draft
-      responses:
-        '204': { description: Removed }
-        '409': { description: The form has been published }
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminReferralReason' }
 
   # ------------------------------------------------------------------- ops --
   /api/v1/jobs/session-materialisation/run:
@@ -1506,6 +1602,9 @@ paths:
         Admin only. Calls exactly what the nightly cron calls: generates six
         weeks of sessions from the weekly templates, clears expired referral
         edit keys, and purges old personal data if a retention period is set.
+      x-assumed: >-
+        Q10 — six weeks. The spec fixes the *public* window at two weeks but
+        says nothing about how far ahead staff should be able to plan.
 
         Idempotent — a second run creates nothing.
       responses:
@@ -1622,8 +1721,22 @@ components:
       type: string
       enum: [admin, team_lead]
       description: >
-        `volunteer` exists in the database but is unused. Use this to choose a
-        menu, never for access control — the server re-checks on every request.
+        `volunteer` exists in the database but is unused, and is not assignable.
+        Use this to choose a menu, never for access control — the server
+        re-checks on every request.
+
+    User:
+      type: object
+      required: [id, email, displayName, role, isActive, lastLoginAt, createdAt]
+      description: A staff account. Not a referee — no personal data of the people fed.
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, description: Lowercased. The login identity. }
+        displayName: { type: string }
+        role: { $ref: '#/components/schemas/Role' }
+        isActive: { type: boolean }
+        lastLoginAt: { type: [string, 'null'], format: date-time }
+        createdAt: { type: string, format: date-time }
 
     LocalTime:
       type: string
@@ -1662,6 +1775,26 @@ components:
 
     Session:
       type: object
+      # The response mapper is an exhaustive allowlist and emits every one of
+      # these unconditionally, so they are all required. Without this a
+      # generated client marks them optional and the contract stops being
+      # enforced by the compiler.
+      required:
+        [
+          id,
+          sessionDate,
+          startTime,
+          startsAtUtc,
+          durationMinutes,
+          location,
+          capacity,
+          booked,
+          status,
+          cancelledReason,
+          isCustomised,
+          recurringSessionId,
+          occurrenceDate,
+        ]
       properties:
         id: { type: string, format: uuid }
         sessionDate: { type: string, format: date }
@@ -1671,7 +1804,17 @@ components:
         location: { type: string }
         capacity:
           type: integer
-          description: Counts households, not people.
+          description: >-
+            Counts households, not people. A session of capacity 25 takes 25
+            referrals however large the households are.
+        booked:
+          type: integer
+          description: >
+            Active referrals on this session — households, so directly
+            comparable with `capacity`. Derived by summing referrals, never
+            stored. Cancelled referrals do not occupy a place. An admin may
+            deliberately exceed capacity when moving someone, so this can be
+            greater than `capacity`.
         status: { type: string, enum: [planned, in_progress, confirmed, cancelled] }
         cancelledReason: { type: [string, 'null'] }
         isCustomised: { type: boolean }
@@ -1680,6 +1823,8 @@ components:
 
     RecurringSession:
       type: object
+      required:
+        [id, name, weekday, startTime, durationMinutes, location, capacity, activeFrom, activeUntil]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
@@ -1690,39 +1835,6 @@ components:
         capacity: { type: integer }
         activeFrom: { type: string, format: date }
         activeUntil: { type: [string, 'null'], format: date }
-
-    PublicForm:
-      type: object
-      required: [formDefinitionId, version, title, reasons, fields]
-      properties:
-        formDefinitionId: { type: string, format: uuid }
-        version: { type: integer }
-        title: { type: string }
-        reasons:
-          type: array
-          items:
-            type: object
-            properties:
-              id: { type: string, format: uuid }
-              code: { type: string }
-              label: { type: string }
-              displayOrder: { type: integer }
-        fields:
-          type: array
-          items:
-            type: object
-            properties:
-              id: { type: string, format: uuid }
-              key: { type: string }
-              label: { type: string }
-              helpText: { type: [string, 'null'] }
-              type: { type: string }
-              isRequired: { type: boolean }
-              options: { type: array, items: { type: string } }
-              minValue: { type: [integer, 'null'] }
-              maxValue: { type: [integer, 'null'] }
-              maxLength: { type: [integer, 'null'] }
-              displayOrder: { type: integer }
 
     ReferralSubmission:
       type: object
@@ -1743,15 +1855,25 @@ components:
           maximum: 30
           description: At least one, so every referral maps to a real grid cell.
         children: { type: integer, minimum: 0, maximum: 30 }
-        isDelivery: { type: boolean, default: false }
-        deliveryAddress:
-          type: string
-          description: Only for a delivery; defaults to the referee's own address.
+        isDelivery:
+          type: boolean
+          default: false
+          description: >-
+            Delivered rather than collected. A delivery goes to
+            `refereeAddress`; there is no separate delivery address to send.
         answers:
           type: object
           description: >
-            Keyed by the `key` of each question from `/public/referral-form`.
-            Unknown keys are ignored rather than rejected.
+            The dynamic answers, keyed by the question keys in **your** form
+            configuration. The server holds no form definition and does not
+            validate these against anything — it stores what you send and
+            returns it unchanged, so the keys and their meaning are yours to
+            keep stable.
+
+            Bounded only for storage safety, because this is an unauthenticated
+            write: at most 100 keys, keys at most 60 characters, and at most
+            16KB once serialised. Exceeding any of those is a `400`.
+          maxProperties: 100
           additionalProperties: true
 
     ReferralSelfAmend:
@@ -1767,7 +1889,6 @@ components:
         adults: { type: integer, minimum: 1 }
         children: { type: integer, minimum: 0 }
         isDelivery: { type: boolean }
-        deliveryAddress: { type: [string, 'null'] }
         reasonId: { type: string, format: uuid }
         answers: { type: object, additionalProperties: true }
 
@@ -1791,6 +1912,20 @@ components:
     SelfServiceReferral:
       type: object
       description: The referrer's own view. Never includes the edit key.
+      required:
+        [
+          id,
+          sessionId,
+          status,
+          adults,
+          children,
+          isDelivery,
+          refereeName,
+          refereeAddress,
+          refereePostcode,
+          refereePhone,
+          answers,
+        ]
       properties:
         id: { type: string, format: uuid }
         sessionId: { type: string, format: uuid }
@@ -1802,7 +1937,6 @@ components:
         refereeAddress: { type: [string, 'null'] }
         refereePostcode: { type: [string, 'null'] }
         refereePhone: { type: [string, 'null'] }
-        deliveryAddress: { type: [string, 'null'] }
         answers: { type: object, additionalProperties: true }
 
     Referral:
@@ -1810,6 +1944,9 @@ components:
       description: |
         The staff view. **The last three fields are admin-only** — a team lead
         receives the object without them, so treat them as optional.
+      # The referee fields and piiPurgedAt are always emitted (they are in the
+      # mapper's `base` object, nullable rather than absent). Only the three
+      # admin-only fields below are conditional, so only those stay optional.
       required:
         [
           id,
@@ -1821,7 +1958,12 @@ components:
           householdSize,
           isDelivery,
           referrerOrganisation,
+          refereeName,
+          refereeAddress,
+          refereePostcode,
+          refereePhone,
           answers,
+          piiPurgedAt,
         ]
       properties:
         id: { type: string, format: uuid }
@@ -1837,12 +1979,24 @@ components:
         refereeAddress: { type: [string, 'null'] }
         refereePostcode: { type: [string, 'null'] }
         refereePhone: { type: [string, 'null'] }
-        deliveryAddress: { type: [string, 'null'] }
-        answers: { type: object, additionalProperties: true }
+        answers:
+          type: object
+          description: >
+            Exactly what was submitted. Empty once `piiPurgedAt` is set — see
+            below.
+          additionalProperties: true
         piiPurgedAt:
           type: [string, 'null']
           format: date-time
-          description: When set, the identifying fields above are null by design.
+          description: >
+            When set, the identifying fields above are null by design, and
+            `answers` is empty.
+          x-assumed: >-
+            Q12 — that a purge drops the dynamic answers whole. The server no
+            longer holds a form definition, so it cannot tell a personal answer
+            from a harmless one, and an answer it cannot classify has to be
+            assumed personal. Whether the charity needs any answers to survive
+            for reporting is still open.
         reasonId:
           type: string
           format: uuid
@@ -1856,6 +2010,7 @@ components:
 
     StockItem:
       type: object
+      required: [id, name, unit, shelfNumber, lowStockThreshold, isActive]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
@@ -1868,6 +2023,7 @@ components:
       allOf:
         - $ref: '#/components/schemas/StockItem'
         - type: object
+          required: [quantityOnHand, isLow]
           properties:
             quantityOnHand:
               type: integer
@@ -1883,6 +2039,7 @@ components:
 
     ModelParcel:
       type: object
+      required: [id, name, description, displayOrder, contents]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
@@ -1894,6 +2051,7 @@ components:
 
     PickList:
       type: object
+      required: [id, sessionId, status, generatedAt, firstPrintedAt, confirmedAt]
       properties:
         id: { type: string, format: uuid }
         sessionId: { type: string, format: uuid }
@@ -1904,6 +2062,7 @@ components:
 
     ParcelLine:
       type: object
+      required: [stockItemId, name, unit, shelfNumber, quantity, source]
       properties:
         stockItemId: { type: string, format: uuid }
         name: { type: string }
@@ -1917,6 +2076,8 @@ components:
 
     Parcel:
       type: object
+      required:
+        [id, referralId, pickNumber, adults, children, householdSize, attendance, notes, lines]
       properties:
         id: { type: string, format: uuid }
         referralId: { type: string, format: uuid }
@@ -1937,6 +2098,19 @@ components:
       description: >
         Deliberately narrow. No reason for referral, ever. No name or address
         unless it is a delivery.
+      required:
+        [
+          pickNumber,
+          householdSize,
+          adults,
+          children,
+          isDelivery,
+          deliveryName,
+          deliveryAddress,
+          dietaryNotes,
+          notes,
+          lines,
+        ]
       properties:
         pickNumber: { type: integer }
         householdSize: { type: integer }
@@ -1944,7 +2118,11 @@ components:
         children: { type: integer }
         isDelivery: { type: boolean }
         deliveryName: { type: [string, 'null'] }
-        deliveryAddress: { type: [string, 'null'] }
+        deliveryAddress:
+          type: [string, 'null']
+          description: >-
+            Where to drive to. This is the referee's own address — a delivery
+            never goes anywhere else — and is null for a collection.
         dietaryNotes:
           type: [string, 'null']
           description: Included because the picker is the only person who can act on it.
@@ -1952,3 +2130,64 @@ components:
         lines:
           type: array
           items: { $ref: '#/components/schemas/ParcelLine' }
+
+    # ---- Admin setup: referrers and reasons ----
+    # All mapped by exhaustive object literals, so every field is required.
+
+    AuthorisedReferrer:
+      type: object
+      description: >
+        Who may refer. `matchValue` for a domain is stored bare
+        (`guildford.gov.uk`) — the `*@` a UI shows is stripped on the way in and
+        must be re-added on the way out if you want to display it.
+      required: [id, matchType, matchValue, organisationName, isActive, notes]
+      properties:
+        id: { type: string, format: uuid }
+        matchType: { type: string, enum: [email, domain] }
+        matchValue: { type: string }
+        organisationName: { type: string }
+        isActive:
+          type: boolean
+          description: >
+            An inactive exact-email row still beats an active domain row, so it
+            is a block rather than dead data. Never filter these out.
+        notes: { type: [string, 'null'] }
+
+    ReferralReason:
+      type: object
+      description: The public view of the dropdown. No `isActive`.
+      required: [id, code, label, displayOrder]
+      properties:
+        id: { type: string, format: uuid }
+        code:
+          type: string
+          description: Stable machine key. Never renamed once referrals point at it.
+        label: { type: string }
+        displayOrder: { type: integer }
+
+    AdminReferralReason:
+      allOf:
+        - $ref: '#/components/schemas/ReferralReason'
+        - type: object
+          required: [isActive]
+          properties:
+            isActive:
+              type: boolean
+              description: >
+                Retires an option without breaking historical referrals. Retired
+                reasons are absent from the public list but visible here.
+
+    StockTake:
+      type: object
+      required: [id, countedAt, status, note, committedAt]
+      properties:
+        id: { type: string, format: uuid }
+        countedAt: { type: string, format: date-time }
+        status:
+          type: string
+          enum: [open, committed, abandoned]
+          description: >
+            `abandoned` exists in the database but no route produces it — there
+            is no way to discard a take once opened.
+        note: { type: [string, 'null'] }
+        committedAt: { type: [string, 'null'], format: date-time }

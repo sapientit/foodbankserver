@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { MAX_ANSWERS, MAX_ANSWERS_BYTES, MAX_ANSWER_KEY_LENGTH } from '../../config/constants.ts';
 
 /**
  * Required-ness for personal data lives **here**, not in the DDL.
@@ -13,6 +14,23 @@ const name = z.string().trim().min(1).max(200);
 const address = z.string().trim().min(1).max(500);
 const postcode = z.string().trim().min(2).max(12);
 const phone = z.string().trim().min(5).max(30);
+
+/**
+ * The dynamic answers, stored exactly as sent.
+ *
+ * The referral form is client configuration, so the server holds no definition
+ * to validate against and does not try to — it takes what it is given. The
+ * only checks here are on **size**, because this arrives on an unauthenticated
+ * write and an unbounded blob is a storage vector rather than a referral.
+ * These are limits on the request, not rules about the form.
+ */
+const answers = z
+  .record(z.string().max(MAX_ANSWER_KEY_LENGTH), z.unknown())
+  .refine((value) => Object.keys(value).length <= MAX_ANSWERS, 'too many answers')
+  .refine(
+    (value) => JSON.stringify(value).length <= MAX_ANSWERS_BYTES,
+    'the answers are too large to store',
+  );
 
 export const referralSubmissionSchema = z.object({
   sessionId: z.uuid(),
@@ -33,12 +51,10 @@ export const referralSubmissionSchema = z.object({
   adults: z.number().int().min(1).max(30),
   children: z.number().int().min(0).max(30),
 
+  /** A delivery goes to `refereeAddress`; there is no second address. */
   isDelivery: z.boolean().default(false),
-  /** Only meaningful for a delivery; defaults to the referee's own address. */
-  deliveryAddress: address.optional(),
 
-  /** Dynamic answers, validated separately against the published form version. */
-  answers: z.record(z.string(), z.unknown()).default({}),
+  answers: answers.default({}),
 });
 
 export type ReferralSubmission = z.infer<typeof referralSubmissionSchema>;
@@ -54,9 +70,9 @@ export const referralSelfAmendSchema = z
     adults: z.number().int().min(1).max(30),
     children: z.number().int().min(0).max(30),
     isDelivery: z.boolean(),
-    deliveryAddress: address.nullable(),
     reasonId: z.uuid(),
-    answers: z.record(z.string(), z.unknown()),
+    /** Replaces the stored set outright; it is not merged into it. */
+    answers,
   })
   .partial()
   .refine((value) => Object.keys(value).length > 0, 'at least one field must be supplied');

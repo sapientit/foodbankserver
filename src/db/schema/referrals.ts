@@ -1,6 +1,5 @@
 import { relations, sql } from 'drizzle-orm';
 import { check, index, integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
-import { formDefinitions } from './forms.ts';
 import { authorisedReferrers, referralReasons } from './referrers.ts';
 import { sessions } from './sessions.ts';
 import { users } from './users.ts';
@@ -41,10 +40,6 @@ export const referrals = sqliteTable(
     sessionId: text('session_id')
       .notNull()
       .references(() => sessions.id),
-    /** Which form version captured this, so old answers stay interpretable. */
-    formDefinitionId: text('form_definition_id')
-      .notNull()
-      .references(() => formDefinitions.id),
     status: text('status').$type<ReferralStatus>().notNull().default('active'),
     referredAt: text('referred_at').notNull(),
     cancelledAt: text('cancelled_at'),
@@ -57,6 +52,11 @@ export const referrals = sqliteTable(
     // --- Retained after a purge: statistics, once nobody is identifiable. ---
     adults: integer('adults').notNull(),
     children: integer('children').notNull(),
+    /**
+     * Delivered rather than collected. There is no second address: a delivery
+     * goes to the referee's own address, so `refereeAddress` is the one the
+     * driver uses.
+     */
     isDelivery: integer('is_delivery').notNull().default(0),
     reasonId: text('reason_id')
       .notNull()
@@ -71,9 +71,14 @@ export const referrals = sqliteTable(
     refereeAddress: text('referee_address'),
     refereePostcode: text('referee_postcode'),
     refereePhone: text('referee_phone'),
-    /** Only when the parcel goes somewhere other than the referee's address. */
-    deliveryAddress: text('delivery_address'),
-    /** Dynamic answers. May contain anything the form asks for. */
+    /**
+     * Dynamic answers, stored exactly as the client sent them.
+     *
+     * The referral form is client configuration, so the server holds no
+     * definition to interpret these against and does not try to. The blob is
+     * self-describing — a key and the answer given — which is what keeps a
+     * referral captured under an older form readable.
+     */
     answersJson: text('answers_json'),
     // =====================================================
 

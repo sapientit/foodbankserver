@@ -4,8 +4,6 @@ import type { Actor } from '../../core/actor.ts';
 import { requireAuth, requireRole } from '../../http/middleware/require-auth.ts';
 import { parseJsonBody, parseOptionalJsonBody, parseOrThrow } from '../../http/validate.ts';
 import type { AppEnv } from '../../http/types.ts';
-import { createFormsRepository } from '../forms/forms.repository.ts';
-import { createFormsService } from '../forms/forms.service.ts';
 import { createReferrersRepository } from '../referrers/referrers.repository.ts';
 import { createReferrersService } from '../referrers/referrers.service.ts';
 import { createSessionsRepository } from '../sessions/sessions.repository.ts';
@@ -107,6 +105,5 @@ function serviceFor(c: Context<AppEnv>) {
     sessions: createSessionsRepository(db),
     referrers,
     referrersService: createReferrersService({ repository: referrers, clock }),
-    forms: createFormsService({ db, repository: createFormsRepository(db), clock }),
   });
 }

@@ -53,7 +53,7 @@ export function sessionRoutes(): Hono<AppEnv> {
   });
 
   routes.get('/sessions/:id', ...readers, async (c) => {
-    const session = await serviceFor(c).getSession(c.req.param('id'));
+    const session = await serviceFor(c).getSessionWithBooked(c.req.param('id'));
     return c.json(toSessionResponse(session));
   });
 
@@ -61,7 +61,7 @@ export function sessionRoutes(): Hono<AppEnv> {
     const input = await parseJsonBody(c, adHocSessionSchema);
     const session = await serviceFor(c).createAdHoc(input);
 
-    c.get('logger').info('created ad hoc session', { sessionId: session.id });
+    c.get('logger').info('created ad hoc session', { sessionId: session.session.id });
     return c.json(toSessionResponse(session), 201);
   });
 
@@ -69,7 +69,7 @@ export function sessionRoutes(): Hono<AppEnv> {
     const patch = await parseJsonBody(c, sessionPatchSchema);
     const session = await serviceFor(c).updateSession(c.req.param('id'), patch);
 
-    c.get('logger').info('updated session', { sessionId: session.id });
+    c.get('logger').info('updated session', { sessionId: session.session.id });
     return c.json(toSessionResponse(session));
   });
 
@@ -77,7 +77,7 @@ export function sessionRoutes(): Hono<AppEnv> {
     const { reason } = await parseOptionalJsonBody(c, cancelSessionSchema);
     const session = await serviceFor(c).cancelSession(c.req.param('id'), reason ?? null);
 
-    c.get('logger').info('cancelled session', { sessionId: session.id });
+    c.get('logger').info('cancelled session', { sessionId: session.session.id });
     return c.json(toSessionResponse(session));
   });
 

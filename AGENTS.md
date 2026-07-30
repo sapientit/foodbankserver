@@ -9,7 +9,7 @@ The spec is still being expanded. If code and spec disagree, ask rather than gue
 
 **When the user settles a requirement the spec does not cover, write it into `INITIAL_SPEC1.txt` in
 the same change** — in the spec's own voice, as what the charity wants, not as what the code does.
-Every requirement answered only in code or in `CLAUDE.md` is one the next reader has to re-derive,
+Every requirement answered only in code or in `AGENTS.md` is one the next reader has to re-derive,
 and re-derivation is how the stock roles came out wrong. If the answer changes an existing spec
 statement, edit that statement; do not append a contradicting one. A requirement decided in
 conversation and not written down did not happen.

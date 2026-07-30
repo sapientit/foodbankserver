@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fixedClock } from '../src/core/clock.ts';
 import { loadConfig } from '../src/config/env.ts';
 import { createDatabase } from '../src/db/client.ts';
-import { formDefinitions, formFields } from '../src/db/schema/forms.ts';
 import { parcelLines, parcels, pickLists } from '../src/db/schema/pick-lists.ts';
 import { auditEvents, referralEditKeys, referrals } from '../src/db/schema/referrals.ts';
 import { authorisedReferrers, referralReasons } from '../src/db/schema/referrers.ts';
@@ -30,8 +29,6 @@ beforeEach(async () => {
   await db.delete(auditEvents);
   await db.delete(referralEditKeys);
   await db.delete(referrals);
-  await db.delete(formFields);
-  await db.delete(formDefinitions);
   await db.delete(referralReasons);
   await db.delete(authorisedReferrers);
   await db.delete(stockItems);
@@ -284,14 +281,15 @@ describe('purging personal data', () => {
     expect(row?.sessionId).toEqual(expect.any(String));
   });
 
-  it('keeps non-personal answers and drops the rest', async () => {
-    // The fixture marks dietary_needs as isPii: false.
+  it('drops the dynamic answers whole, because nothing can classify them', async () => {
     const { id } = await seedOldReferral();
 
     await purgeReferralPii(deps(365));
     const [row] = await db.select().from(referrals).where(eq(referrals.id, id));
 
-    expect(row?.answersJson).toContain('no pork');
+    // The form is client configuration, so the server has no `isPii` flag to
+    // consult and cannot keep a key on the grounds that it looks harmless.
+    expect(row?.answersJson).toBeNull();
   });
 
   it('leaves a referral inside the retention period untouched', async () => {

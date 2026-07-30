@@ -3,7 +3,6 @@ import { eq } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { fixedClock } from '../src/core/clock.ts';
 import { createDatabase } from '../src/db/client.ts';
-import { formDefinitions, formFields } from '../src/db/schema/forms.ts';
 import { auditEvents, referralEditKeys, referrals } from '../src/db/schema/referrals.ts';
 import { authorisedReferrers, referralReasons } from '../src/db/schema/referrers.ts';
 import { recurringSessions, sessions } from '../src/db/schema/sessions.ts';
@@ -34,8 +33,6 @@ beforeEach(async () => {
   await db.delete(auditEvents);
   await db.delete(referralEditKeys);
   await db.delete(referrals);
-  await db.delete(formFields);
-  await db.delete(formDefinitions);
   await db.delete(referralReasons);
   await db.delete(authorisedReferrers);
   await db.delete(sessions);
@@ -88,6 +85,26 @@ describe('public referral submission', () => {
     });
   });
 
+  it('counts capacity in households, not people', async () => {
+    const { testApp, token, world: w } = await world({ capacity: 2 });
+
+    // Two of the largest households the grid allows — twenty people through the
+    // door, and still only two of the twenty-five places used.
+    const big = { adults: 5, children: 5 };
+    expect((await submitReferral(testApp, w, big)).status).toBe(201);
+    expect((await submitReferral(testApp, w, big)).status).toBe(201);
+
+    const listed = await testApp.request('/api/v1/sessions', { headers: authHeaders(token) });
+    const body: { sessions: { id: string; capacity: number; booked: number }[] } =
+      await listed.json();
+    expect(body.sessions.find((listing) => listing.id === w.sessionId)).toMatchObject({
+      capacity: 2,
+      booked: 2,
+    });
+
+    expect((await submitReferral(testApp, w, big)).status).toBe(409);
+  });
+
   it('does not count a cancelled referral against capacity', async () => {
     const { testApp, token, world: w } = await world({ capacity: 1 });
     const first = await submitReferral(testApp, w);
@@ -130,27 +147,50 @@ describe('public referral submission', () => {
     expect(response.status).toBe(400);
   });
 
-  it('records which form version captured it', async () => {
+  it('stores dynamic answers as given, without a form to validate them against', async () => {
     const { testApp, world: w } = await world();
-    const { id } = await submitReferral(testApp, w);
 
+    // Keys this build has never heard of, and a value type nothing declared.
+    // The form lives in the client, so none of that is the server's business.
+    const answers = {
+      dietary_needs: 'no pork',
+      a_question_added_last_tuesday: true,
+      household_pets: ['cat', 'dog'],
+    };
+    const { status, id } = await submitReferral(testApp, w, { answers });
+
+    expect(status).toBe(201);
     const [stored] = await db.select().from(referrals).where(eq(referrals.id, id));
-    expect(stored?.formDefinitionId).toBe(w.formDefinitionId);
+    expect(JSON.parse(stored?.answersJson ?? 'null')).toEqual(answers);
   });
 
-  it('validates dynamic answers against the published form', async () => {
+  it('returns the answers it was given', async () => {
+    const { testApp, token, world: w } = await world();
+    const answers = { dietary_needs: 'gluten free', delivered_before: false };
+    const { id } = await submitReferral(testApp, w, { answers });
+
+    const response = await testApp.request(`/api/v1/referrals/${id}`, {
+      headers: authHeaders(token),
+    });
+
+    expect(response.status).toBe(200);
+    const body: { answers: unknown } = await response.json();
+    expect(body.answers).toEqual(answers);
+  });
+
+  it('refuses answers too large to be a referral', async () => {
     const { testApp, world: w } = await world();
 
     const response = await testApp.request('/api/v1/public/referrals', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(submission(w, { answers: { dietary_needs: 'x'.repeat(5000) } })),
+      body: JSON.stringify(submission(w, { answers: { notes: 'x'.repeat(20_000) } })),
     });
 
+    // Not form validation — a bound on an unauthenticated write. The offending
+    // answer must still never be echoed back.
     expect(response.status).toBe(400);
-    const body = await response.text();
-    // The offending answer must not be echoed back.
-    expect(body).not.toContain('xxxxx');
+    expect(await response.text()).not.toContain('xxxxx');
   });
 
   it('creates the referral, its edit key and an audit entry together', async () => {
@@ -161,6 +201,30 @@ describe('public referral submission', () => {
     const audit = await db.select().from(auditEvents).where(eq(auditEvents.entityId, id));
     expect(audit[0]?.action).toBe('created');
     expect(audit[0]?.actorKind).toBe('anonymous');
+  });
+
+  it('does not persist a delivery address, because a delivery goes to the referee', async () => {
+    const { testApp, token, world: w } = await world();
+
+    // A client built against the old contract, or an attempt to have a parcel
+    // delivered somewhere the charity never agreed to. Either way it is dropped.
+    const { status, id } = await submitReferral(testApp, w, {
+      isDelivery: true,
+      deliveryAddress: '4 Riverside Flats',
+    });
+    expect(status).toBe(201);
+
+    const [stored] = await db.select().from(referrals).where(eq(referrals.id, id));
+    expect(stored?.isDelivery).toBe(1);
+    expect(stored?.refereeAddress).toBe('12 Bramble Cottages');
+    expect(JSON.stringify(stored)).not.toContain('Riverside');
+
+    const response = await testApp.request(`/api/v1/referrals/${id}`, {
+      headers: authHeaders(token),
+    });
+    const text = await response.text();
+    expect(text).not.toContain('deliveryAddress');
+    expect(text).not.toContain('Riverside');
   });
 
   it('stores only a hash of the edit key', async () => {

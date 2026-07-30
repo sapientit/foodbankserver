@@ -1,0 +1,23 @@
+-- A delivery goes to the referee's own address. There is never a second one,
+-- so `referrals.delivery_address` goes.
+--
+-- ## Why this is one line, when 0008 needed a whole rebuild
+--
+-- SQLite refuses `ALTER TABLE ... DROP COLUMN` for a column named in an index,
+-- a `CHECK`, a `FOREIGN KEY`, a generated column or the primary key.
+-- `delivery_address` is in none of them: it is a plain nullable text column in
+-- the PII block, and the two indexes on this table cover `session_id, status`
+-- and `referred_at`. So the rebuild dance in 0008 — park the rows, drop, rename,
+-- then insert them back so the deferred foreign-key counter settles before the
+-- commit — is not needed here, and doing it anyway would pay that migration's
+-- accepted loss (`DROP TABLE referrals` cascades `referral_edit_keys` away) for
+-- nothing.
+--
+-- If a later change does have to drop a *constrained* column from this table,
+-- read 0008 first rather than trusting what drizzle-kit generates: it wraps a
+-- rebuild in `PRAGMA foreign_keys=OFF`, which is a silent no-op on D1.
+--
+-- The addresses in the column are lost, which is the point — they are personal
+-- data the charity has decided it never wanted. No column becomes NOT NULL, so
+-- the PII block stays purgeable.
+ALTER TABLE `referrals` DROP COLUMN `delivery_address`;

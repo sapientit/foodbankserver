@@ -39,3 +39,16 @@ export const DEFAULT_SESSION_CAPACITY = 25;
 
 /** How far ahead the unauthenticated session list looks. Not client-controllable. */
 export const PUBLIC_SESSION_WINDOW_DAYS = 14;
+
+/**
+ * Bounds on a referral's dynamic answers.
+ *
+ * The referral form lives in the client, so the server has nothing to validate
+ * the answers against and stores them as given. These are the only limits that
+ * remain, and they exist because the submission is unauthenticated: without
+ * them an open write accepts an arbitrarily large blob. They are generous
+ * enough that no real form comes close.
+ */
+export const MAX_ANSWERS = 100;
+export const MAX_ANSWER_KEY_LENGTH = 60;
+export const MAX_ANSWERS_BYTES = 16 * 1024;

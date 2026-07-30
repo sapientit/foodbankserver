@@ -1,11 +1,15 @@
 import { expect } from 'vitest';
 import { authHeaders, type TestApp } from './app.ts';
 
-/** Shared setup for the referral tests: a session, a form, a reason, a referrer. */
+/**
+ * Shared setup for the referral tests: a session, a reason, a referrer.
+ *
+ * There is no form to set up. The referral form is client configuration, so the
+ * server has nothing to publish and nothing to validate answers against.
+ */
 export interface ReferralWorld {
   readonly sessionId: string;
   readonly reasonId: string;
-  readonly formDefinitionId: string;
 }
 
 function json(token: string): Record<string, string> {
@@ -31,28 +35,6 @@ export async function setUpReferralWorld(
   expect(session.status).toBe(201);
   const { id: sessionId }: { id: string } = await session.json();
 
-  const draft = await testApp.request('/api/v1/form-definitions', {
-    method: 'POST',
-    headers: json(token),
-    body: JSON.stringify({ title: 'Referral form' }),
-  });
-  const { id: formDefinitionId }: { id: string } = await draft.json();
-
-  await testApp.request(`/api/v1/form-definitions/${formDefinitionId}/fields`, {
-    method: 'POST',
-    headers: json(token),
-    body: JSON.stringify({
-      key: 'dietary_needs',
-      label: 'Dietary needs',
-      type: 'text',
-      isPii: false,
-    }),
-  });
-  await testApp.request(`/api/v1/form-definitions/${formDefinitionId}/publish`, {
-    method: 'POST',
-    headers: authHeaders(token),
-  });
-
   const reason = await testApp.request('/api/v1/referral-reasons', {
     method: 'POST',
     headers: json(token),
@@ -70,7 +52,7 @@ export async function setUpReferralWorld(
     }),
   });
 
-  return { sessionId, reasonId, formDefinitionId };
+  return { sessionId, reasonId };
 }
 
 /** A realistic submission body. Values here are asserted against in PII tests. */

@@ -31,17 +31,18 @@ interface StockLevelResponse extends StockItemResponse {
 }
 
 /**
- * Team leads read stock — they pick from it. Admins maintain it: adding items,
- * recording a shop, and committing stock takes are all decisions with an
- * auditable financial trail.
+ * Team leads handle the stock itself: they read it, shop for it, count it and
+ * correct it, because they are the people in the warehouse. Only an admin
+ * changes what the stock *list* is — adding a line or moving a shelf number
+ * reshapes every pick list and every stock take that follows.
  */
 export function stockRoutes(): Hono<AppEnv> {
   const routes = new Hono<AppEnv>();
-  const readers = [requireAuth, requireRole('admin', 'team_lead')] as const;
+  const staff = [requireAuth, requireRole('admin', 'team_lead')] as const;
   const admins = [requireAuth, requireRole('admin')] as const;
 
   /** The stock-take and picking list, ordered by shelf so a picker walks once. */
-  routes.get('/stock/levels', ...readers, async (c) => {
+  routes.get('/stock/levels', ...staff, async (c) => {
     const includeInactive = c.req.query('includeInactive') === 'true';
     const levels = await serviceFor(c).listLevels(!includeInactive);
 
@@ -49,14 +50,14 @@ export function stockRoutes(): Hono<AppEnv> {
   });
 
   /** Autocomplete: type "sug", get "Sugar". */
-  routes.get('/stock/search', ...readers, async (c) => {
+  routes.get('/stock/search', ...staff, async (c) => {
     const { q } = parseOrThrow(stockSearchSchema, { q: c.req.query('q') });
     const items = await serviceFor(c).searchItems(q);
 
     return c.json<{ items: StockItemResponse[] }>({ items: items.map(toItemResponse) });
   });
 
-  routes.get('/stock/items', ...readers, async (c) => {
+  routes.get('/stock/items', ...staff, async (c) => {
     const items = await serviceFor(c).listItems(c.req.query('includeInactive') !== 'true');
     return c.json<{ items: StockItemResponse[] }>({ items: items.map(toItemResponse) });
   });
@@ -80,14 +81,14 @@ export function stockRoutes(): Hono<AppEnv> {
   });
 
   /** Recording a shop. */
-  routes.post('/stock/purchases', ...admins, async (c) => {
+  routes.post('/stock/purchases', ...staff, async (c) => {
     const input = await parseJsonBody(c, purchaseInputSchema);
     const result = await serviceFor(c).recordPurchase(input, actorOf(c));
 
     return c.json(result, 201);
   });
 
-  routes.post('/stock/adjustments', ...admins, async (c) => {
+  routes.post('/stock/adjustments', ...staff, async (c) => {
     const input = await parseJsonBody(c, stockAdjustmentSchema);
     await serviceFor(c).adjust(input, actorOf(c));
 
@@ -96,7 +97,7 @@ export function stockRoutes(): Hono<AppEnv> {
 
   // ---- Stock takes ----
 
-  routes.get('/stock/takes', ...readers, async (c) => {
+  routes.get('/stock/takes', ...staff, async (c) => {
     const takes = await serviceFor(c).listStockTakes();
     return c.json({
       stockTakes: takes.map((take) => ({
@@ -109,21 +110,21 @@ export function stockRoutes(): Hono<AppEnv> {
     });
   });
 
-  routes.post('/stock/takes', ...admins, async (c) => {
+  routes.post('/stock/takes', ...staff, async (c) => {
     const { note } = await parseJsonBody(c, stockTakeInputSchema);
     const created = await serviceFor(c).openStockTake(note, actorOf(c));
 
     return c.json({ id: created.id, status: created.status }, 201);
   });
 
-  routes.post('/stock/takes/:id/counts', ...admins, async (c) => {
+  routes.post('/stock/takes/:id/counts', ...staff, async (c) => {
     const { counts } = await parseJsonBody(c, stockTakeCountsSchema);
     await serviceFor(c).recordCounts(c.req.param('id'), counts);
 
     return c.body(null, 204);
   });
 
-  routes.post('/stock/takes/:id/commit', ...admins, async (c) => {
+  routes.post('/stock/takes/:id/commit', ...staff, async (c) => {
     const result = await serviceFor(c).commitStockTake(c.req.param('id'), actorOf(c));
 
     return c.json({

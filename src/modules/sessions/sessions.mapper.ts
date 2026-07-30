@@ -1,4 +1,5 @@
 import type { RecurringSession, Session } from '../../db/schema/sessions.ts';
+import type { SessionWithBooked } from './sessions.repository.ts';
 
 /**
  * Response mappers are the output allowlist.
@@ -17,6 +18,11 @@ export interface SessionResponse {
   readonly durationMinutes: number;
   readonly location: string;
   readonly capacity: number;
+  /**
+   * Active referrals on this session — households, not people, so it is
+   * directly comparable with `capacity`. Derived, never stored.
+   */
+  readonly booked: number;
   readonly status: string;
   readonly cancelledReason: string | null;
   readonly isCustomised: boolean;
@@ -24,7 +30,12 @@ export interface SessionResponse {
   readonly occurrenceDate: string | null;
 }
 
-export function toSessionResponse(session: Session): SessionResponse {
+/**
+ * Takes the pair rather than a bare `Session` on purpose: `booked` has no
+ * sensible default, and an optional parameter would let a call site quietly
+ * omit it and report every session as empty.
+ */
+export function toSessionResponse({ session, booked }: SessionWithBooked): SessionResponse {
   return {
     id: session.id,
     sessionDate: session.sessionDate,
@@ -33,6 +44,7 @@ export function toSessionResponse(session: Session): SessionResponse {
     durationMinutes: session.durationMinutes,
     location: session.location,
     capacity: session.capacity,
+    booked,
     status: session.status,
     cancelledReason: session.cancelledReason,
     isCustomised: session.isCustomised === 1,

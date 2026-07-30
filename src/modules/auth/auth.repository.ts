@@ -4,7 +4,6 @@ import { expectAtMostOne } from '../../db/expect.ts';
 import {
   refreshTokens,
   users,
-  type NewUser,
   type RefreshTokenRow,
   type RevokedReason,
   type User,
@@ -41,15 +40,6 @@ export function createAuthRepository(db: Database) {
     async findUserById(id: string): Promise<User | undefined> {
       const rows = await db.select().from(users).where(eq(users.id, id)).limit(1);
       return expectAtMostOne(rows);
-    },
-
-    async insertUser(user: NewUser): Promise<User> {
-      const rows = await db.insert(users).values(user).returning();
-      const inserted = rows[0];
-      if (inserted === undefined) {
-        throw new Error('Failed to insert user');
-      }
-      return inserted;
     },
 
     async findRefreshTokenByHash(tokenHash: string): Promise<RefreshTokenRow | undefined> {

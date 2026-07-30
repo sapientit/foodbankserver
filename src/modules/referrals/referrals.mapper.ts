@@ -29,7 +29,6 @@ export interface ReferralResponse {
   readonly refereeAddress: string | null;
   readonly refereePostcode: string | null;
   readonly refereePhone: string | null;
-  readonly deliveryAddress: string | null;
   readonly answers: Record<string, unknown>;
   readonly piiPurgedAt: string | null;
   /** Present only for an admin. */
@@ -53,7 +52,6 @@ export function toReferralResponse(referral: Referral, actor: Actor): ReferralRe
     refereeAddress: referral.refereeAddress,
     refereePostcode: referral.refereePostcode,
     refereePhone: referral.refereePhone,
-    deliveryAddress: referral.deliveryAddress,
     answers: parseAnswers(referral.answersJson),
     piiPurgedAt: referral.piiPurgedAt,
   };
@@ -115,7 +113,6 @@ export interface SelfServiceReferralResponse {
   readonly refereeAddress: string | null;
   readonly refereePostcode: string | null;
   readonly refereePhone: string | null;
-  readonly deliveryAddress: string | null;
   readonly answers: Record<string, unknown>;
 }
 
@@ -131,7 +128,6 @@ export function toSelfServiceResponse(referral: Referral): SelfServiceReferralRe
     refereeAddress: referral.refereeAddress,
     refereePostcode: referral.refereePostcode,
     refereePhone: referral.refereePhone,
-    deliveryAddress: referral.deliveryAddress,
     answers: parseAnswers(referral.answersJson),
   };
 }

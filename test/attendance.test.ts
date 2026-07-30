@@ -3,7 +3,6 @@ import { eq } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { fixedClock } from '../src/core/clock.ts';
 import { createDatabase } from '../src/db/client.ts';
-import { formDefinitions, formFields } from '../src/db/schema/forms.ts';
 import { parcelLines, parcels, pickLists } from '../src/db/schema/pick-lists.ts';
 import { auditEvents, referralEditKeys, referrals } from '../src/db/schema/referrals.ts';
 import { authorisedReferrers, referralReasons } from '../src/db/schema/referrers.ts';
@@ -100,8 +99,6 @@ beforeEach(async () => {
   await db.delete(auditEvents);
   await db.delete(referralEditKeys);
   await db.delete(referrals);
-  await db.delete(formFields);
-  await db.delete(formDefinitions);
   await db.delete(referralReasons);
   await db.delete(authorisedReferrers);
   // Purchases and stock takes reference stock items, so they go first or the

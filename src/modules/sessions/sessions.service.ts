@@ -3,7 +3,11 @@ import type { Patch } from '../../core/types.ts';
 import { ConflictError, NotFoundError } from '../../core/errors.ts';
 import { londonWallClockToInstant } from '../../core/time/london.ts';
 import type { RecurringSession, Session } from '../../db/schema/sessions.ts';
-import type { SessionListFilter, SessionsRepository } from './sessions.repository.ts';
+import type {
+  SessionListFilter,
+  SessionsRepository,
+  SessionWithBooked,
+} from './sessions.repository.ts';
 import type { AdHocSessionInput, RecurringSessionInput, SessionPatch } from './sessions.schema.ts';
 
 export interface SessionsServiceDeps {
@@ -18,6 +22,16 @@ export function createSessionsService({ repository, clock }: SessionsServiceDeps
       throw new NotFoundError('Session not found');
     }
     return session;
+  }
+
+  /**
+   * The same session, with its booked count attached for a response.
+   *
+   * A second query rather than a join, because this is one row: the join shape
+   * exists for the list, where query count would otherwise scale with results.
+   */
+  async function withBooked(session: Session): Promise<SessionWithBooked> {
+    return { session, booked: await repository.bookedFor(session.id) };
   }
 
   async function createRecurring(input: RecurringSessionInput): Promise<RecurringSession> {
@@ -118,14 +132,23 @@ export function createSessionsService({ repository, clock }: SessionsServiceDeps
   }
 
   return {
+    /** The raw row, for callers that need the record rather than a response. */
     getSession,
+    getSessionWithBooked: async (id: string) => withBooked(await getSession(id)),
     listSessions: (filter: SessionListFilter) => repository.list(filter),
     listRecurring: () => repository.listRecurring(),
     createRecurring,
     updateRecurring,
-    createAdHoc,
-    updateSession,
-    cancelSession,
+    // A session that has just been created can have no referrals yet, so this
+    // is the one path where the count is known without asking.
+    createAdHoc: async (input: AdHocSessionInput): Promise<SessionWithBooked> => ({
+      session: await createAdHoc(input),
+      booked: 0,
+    }),
+    updateSession: async (id: string, patch: SessionPatch) =>
+      withBooked(await updateSession(id, patch)),
+    cancelSession: async (id: string, reason: string | null) =>
+      withBooked(await cancelSession(id, reason)),
   };
 }
 

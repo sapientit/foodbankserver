@@ -20,6 +20,18 @@ export interface SessionListFilter {
   readonly status?: SessionStatus | undefined;
 }
 
+/**
+ * A session plus how many households are booked onto it.
+ *
+ * Carried as a pair rather than folded into `Session`, because `Session` is the
+ * table row and `booked` is derived. Keeping them apart is what stops a derived
+ * count being written back by accident.
+ */
+export interface SessionWithBooked {
+  readonly session: Session;
+  readonly booked: number;
+}
+
 export function createSessionsRepository(db: Database) {
   return {
     async listRecurring(): Promise<RecurringSession[]> {
@@ -79,17 +91,45 @@ export function createSessionsRepository(db: Database) {
       return expectAtMostOne(rows);
     },
 
-    async list(filter: SessionListFilter): Promise<Session[]> {
+    /**
+     * Sessions in a date window, each with its booked count.
+     *
+     * **One query, whatever the session count.** This route is unpaginated, so
+     * counting referrals per session would scale query count with result size
+     * and blow the per-invocation query limit on a wide window. The left join
+     * plus `GROUP BY` is the same shape `listPubliclyAvailable` uses below,
+     * minus the `HAVING` — an admin needs to see full sessions, not have them
+     * filtered out.
+     *
+     * Cancelled referrals do not occupy a place, hence the status condition
+     * inside the join rather than in the `WHERE`: putting it outside would drop
+     * sessions whose only referrals are cancelled.
+     */
+    async list(filter: SessionListFilter): Promise<SessionWithBooked[]> {
       const conditions: SQL[] = [];
       if (filter.from !== undefined) conditions.push(gte(sessions.sessionDate, filter.from));
       if (filter.to !== undefined) conditions.push(lte(sessions.sessionDate, filter.to));
       if (filter.status !== undefined) conditions.push(eq(sessions.status, filter.status));
 
       return db
-        .select()
+        .select({ session: sessions, booked: count(referrals.id) })
         .from(sessions)
+        .leftJoin(
+          referrals,
+          and(eq(referrals.sessionId, sessions.id), eq(referrals.status, 'active')),
+        )
         .where(conditions.length === 0 ? undefined : and(...conditions))
+        .groupBy(sessions.id)
         .orderBy(asc(sessions.startsAtUtc));
+    },
+
+    /** Households booked onto one session. For single-resource responses. */
+    async bookedFor(sessionId: string): Promise<number> {
+      const rows = await db
+        .select({ booked: count() })
+        .from(referrals)
+        .where(and(eq(referrals.sessionId, sessionId), eq(referrals.status, 'active')));
+      return rows[0]?.booked ?? 0;
     },
 
     /**

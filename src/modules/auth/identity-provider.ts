@@ -1,5 +1,4 @@
 import type { AppConfig } from '../../config/env.ts';
-import type { UserRole } from '../../db/schema/users.ts';
 
 /**
  * What an identity provider tells us about whoever just authenticated.
@@ -17,25 +16,17 @@ export interface IdentityClaim {
   readonly email: string;
   readonly emailVerified: boolean;
   readonly displayName: string;
-  /**
-   * Role to give a newly provisioned user. Consulted **only** when the
-   * provider auto-provisions, and ignored entirely for an existing user —
-   * whose role lives in the database and is an admin's decision, not a
-   * login-time claim.
-   */
-  readonly provisionRole?: UserRole;
 }
 
 export interface IdentityProvider {
   readonly name: 'dummy' | 'google';
   /**
-   * Whether an unknown email may be turned into a new user.
+   * Turns whatever the provider was given into a claim.
    *
-   * True only for the dummy provider, where the point is to be able to log in
-   * as anyone without seeding. Google must be false: a verified Google account
-   * proves who someone is, not that this food bank has given them access.
+   * A claim is only an assertion of identity. **No provider may create an
+   * account**: the role, and access at all, come from the `users` table, which
+   * only an admin writes. See `resolveUser` in `auth.service.ts`.
    */
-  readonly autoProvisions: boolean;
   authenticate(input: unknown): Promise<IdentityClaim>;
 }
 

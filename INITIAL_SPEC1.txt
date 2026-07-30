@@ -5,7 +5,9 @@ Each session generates a food pick list - one "parcel" for each person.  The par
 The pick list can then be modified before being printed.  Once printed, further changes can be made before the pick-list is confirmed as created.  
 
 #Session maintenance
-Standard sessions repeat weekly.  They have a default capacity of 25 people. It is possible for the administrator to change the time of an individual session, cancel a session or add new ad hoc session.  Fields are date, time, duration, location and capacity.   Recurring meetings or individual meetings can be created or changed.
+Standard sessions repeat weekly.  They have a default capacity of 25.  It is possible for the administrator to change the time of an individual session, cancel a session or add new ad hoc session.  Fields are date, time, duration, location and capacity.   Recurring meetings or individual meetings can be created or changed.
+
+Capacity counts households, not people.  A session of capacity 25 takes 25 referrals however large the households are, so it may well feed a hundred people.  A referral occupies one place whether it is a single person or a family of six, because it is one parcel to pick and one person coming to collect it.  A cancelled referral gives its place back.
 
 A list of available sessions for the next 2 weeks can be made without signon. A session is not available if it is at or over capacity.  A list of all sessions is available after login.
 
@@ -13,9 +15,15 @@ A list of available sessions for the next 2 weeks can be made without signon. A 
 Referrers can be authorised either by full email address or a star and domain name.(*@guildford.gov.uk).  There is no check that they are who they say they are - only that the email address they enter is valid.
 
 #referral
-The referral is currently a Google Form because it does change periodically.  Like Google forms, the questions must form a text a columns key and validation rules.  There will be some columns that are fixed, but many of the columns will have to be generic names in the database.
+The referral is currently a Google Form because it does change periodically.  Like Google forms, the questions have a column key and validation rules.  There will be some columns that are fixed, but many of the columns will have to be generic names in the database.
 
-The fixed columns are: date of referral, session id, email id of referrer, organisation of referrer, phone number of referrer, name of referee, address of referee, phone number of referee, number of adults, number of children, reason for referral.  All other columns are dynamic.
+The form is held as a configuration file belonging to the referral application, not in the server and not in the database.  A change to the questions is made in that configuration, seen and tried in the test system first, and goes live when the new version of the application does.  That is the publishing mechanism, so there is no draft and publish step to build and no form maintenance screen.
+
+The server does not hold the questions and does not check the answers against them.  It stores the dynamic answers exactly as they are given and hands them back the same way, so a referral captured under an older version of the form stays readable - each answer arrives with the key it was asked under.  The fixed columns below are the only part of a referral the server has an opinion about.
+
+The fixed columns are: date of referral, session id, email id of referrer, organisation of referrer, phone number of referrer, name of referee, address of referee, phone number of referee, number of adults, number of children, whether a delivery is needed, reason for referral.  All other columns are dynamic.
+
+A delivery goes to the referee's own address.  There is no separate delivery address, and none is wanted - the one address held on the referral is both where the referee lives and where a delivery is taken.  So the referral asks only whether a delivery is needed, and the driver's round is made up from the addresses already on the referrals.
 
 There is a maximum capacity on each session, so referrals cannot be made to a full session.
 
@@ -27,10 +35,20 @@ Administrators can amend or cancel referrals or move them to another session (ev
 #Login
 Authentication will eventually be via a Google id.  Initial version will be a dummy signon page with no validation, but this should still generate an expiring security token, with refresh tokens etc.
 
+#Roles
+There are two roles, administrator and team leader.
+
+Team leaders run the sessions.  That means the picking list, printing it, and marking who attended.  It also means the stock itself - recording a shop, doing a stock take, and correcting stock by hand - because the team leader is the person standing in the warehouse.  They do not see why anyone was referred.
+
+Administrators do everything a team leader does, and additionally maintain the list of stock items, the authorised referrers, the reasons for referral, the model parcels and household grid, the user accounts, and amendments to sessions and referrals.  The referral form itself is not on that list: it is application configuration rather than data, so it changes with a release rather than on a maintenance screen.
+
+The stock item list is the one part of stock that is administrator only.  Adding an item or changing its shelf number changes every picking list and every stock take that follows, so it is a maintenance decision rather than a warehouse one.
+
 #Stock maintenance
 There are about 40 stock items (with a maintenance facility to amend them).  After a shop, there will be a facility to type sug and it will find sugar and autocomplete.  Then a field for how many we bought.  This will add to the existing stock.
 There will also be a list screen with items and current stock that can be maintained for a stock take.
 Stock is maintained in a certain place in the warehouse. So each stock item has a "shelf number" .  The list should be by shelf number
+The shop and the stock take are both done by a team leader.  Amending the item list itself is administrator only.
 
 #Picking list
 Against a session there will be an option to view picking list.  If that picking list has not been created yet, then it will be done at this point.  For each referral, the number of adults and children will result via a series of rules into a model picking list. 

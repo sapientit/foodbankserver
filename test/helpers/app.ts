@@ -1,8 +1,11 @@
 import { env } from 'cloudflare:workers';
+import { eq } from 'drizzle-orm';
 import type { Hono } from 'hono';
 import { buildApp } from '../../src/app.ts';
 import { loadConfig } from '../../src/config/env.ts';
 import type { Clock } from '../../src/core/clock.ts';
+import { createDatabase } from '../../src/db/client.ts';
+import { users, type UserRole } from '../../src/db/schema/users.ts';
 import type { AppEnv, Bindings } from '../../src/http/types.ts';
 
 export interface TestAppOptions {
@@ -61,15 +64,60 @@ function toHeaderRecord(headers: RequestInit['headers']): Record<string, string>
   return Object.fromEntries(new Headers(headers).entries());
 }
 
-/** Logs in through the dummy provider and returns the tokens plus the cookie. */
+/**
+ * Ensures a user exists, and returns their id.
+ *
+ * Accounts are created by an admin, never by logging in, so a test that wants
+ * to be somebody has to say who that is first. Written straight to the
+ * database rather than through `POST /users`: it is fixture setup, and going
+ * through the API would need an admin token, which needs a user.
+ */
+export async function seedUser(user: {
+  email: string;
+  role?: UserRole;
+  displayName?: string;
+  isActive?: 0 | 1;
+}): Promise<string> {
+  const db = createDatabase(env.DB);
+  const email = user.email.trim().toLowerCase();
+
+  const [existing] = await db.select().from(users).where(eq(users.email, email)).limit(1);
+  if (existing !== undefined) return existing.id;
+
+  const now = new Date().toISOString();
+  const [inserted] = await db
+    .insert(users)
+    .values({
+      id: crypto.randomUUID(),
+      email,
+      displayName: user.displayName ?? email,
+      role: user.role ?? 'admin',
+      googleSubject: null,
+      isActive: user.isActive ?? 1,
+      lastLoginAt: null,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .returning();
+
+  if (inserted === undefined) throw new Error(`Failed to seed user`);
+  return inserted.id;
+}
+
+/**
+ * Seeds the account if it is not there yet, then logs in through the dummy
+ * provider and returns the tokens plus the cookie.
+ */
 export async function devLogin(
   testApp: TestApp,
-  body: { email: string; displayName?: string; role?: string },
+  body: { email: string; displayName?: string; role?: UserRole },
 ): Promise<{ accessToken: string; refreshCookie: string; userId: string }> {
+  await seedUser(body);
+
   const response = await testApp.request('/api/v1/auth/dev-login', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ email: body.email }),
   });
 
   if (response.status !== 200) {

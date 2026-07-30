@@ -42,6 +42,15 @@ async function createItem(
   return id;
 }
 
+async function teamLeadApp(): Promise<{ lead: TestApp; accessToken: string }> {
+  const lead = buildTestApp();
+  const { accessToken } = await devLogin(lead, {
+    email: 'lead@foodbank.org',
+    role: 'team_lead',
+  });
+  return { lead, accessToken };
+}
+
 async function levels(testApp: TestApp, token: string) {
   const response = await testApp.request('/api/v1/stock/levels', { headers: authHeaders(token) });
   const body: { items: { id: string; name: string; quantityOnHand: number; isLow: boolean }[] } =
@@ -476,26 +485,78 @@ describe('autocomplete', () => {
 });
 
 describe('stock authorisation', () => {
-  it('lets a team lead read levels but not change them', async () => {
+  it('lets a team lead shop, count and correct stock', async () => {
     const { testApp, token } = await adminApp();
     const sugar = await createItem(testApp, token, 'Sugar', 'A1');
 
-    const lead = buildTestApp();
-    const { accessToken } = await devLogin(lead, {
-      email: 'lead@foodbank.org',
-      role: 'team_lead',
-    });
-
-    expect(
-      (await lead.request('/api/v1/stock/levels', { headers: authHeaders(accessToken) })).status,
-    ).toBe(200);
+    const { lead, accessToken } = await teamLeadApp();
 
     const purchase = await lead.request('/api/v1/stock/purchases', {
       method: 'POST',
       headers: json(accessToken),
       body: JSON.stringify({ lines: [{ stockItemId: sugar, quantity: 5 }] }),
     });
-    expect(purchase.status).toBe(403);
+    expect(purchase.status).toBe(201);
+
+    const opened = await lead.request('/api/v1/stock/takes', {
+      method: 'POST',
+      headers: json(accessToken),
+      body: JSON.stringify({ note: 'Saturday count' }),
+    });
+    expect(opened.status).toBe(201);
+    const { id: takeId }: { id: string } = await opened.json();
+
+    const counts = await lead.request(`/api/v1/stock/takes/${takeId}/counts`, {
+      method: 'POST',
+      headers: json(accessToken),
+      body: JSON.stringify({ counts: [{ stockItemId: sugar, countedQuantity: 4 }] }),
+    });
+    expect(counts.status).toBe(204);
+
+    const committed = await lead.request(`/api/v1/stock/takes/${takeId}/commit`, {
+      method: 'POST',
+      headers: json(accessToken),
+    });
+    expect(committed.status).toBe(200);
+
+    const adjustment = await lead.request('/api/v1/stock/adjustments', {
+      method: 'POST',
+      headers: json(accessToken),
+      body: JSON.stringify({
+        stockItemId: sugar,
+        quantityDelta: -1,
+        movementType: 'wastage',
+        reason: 'Split bag',
+      }),
+    });
+    expect(adjustment.status).toBe(204);
+
+    expect((await levels(testApp, token))[0]?.quantityOnHand).toBe(3);
+  });
+
+  it('refuses a team lead the stock item list itself', async () => {
+    const { testApp, token } = await adminApp();
+    const sugar = await createItem(testApp, token, 'Sugar', 'A1');
+
+    const { lead, accessToken } = await teamLeadApp();
+
+    expect(
+      (await lead.request('/api/v1/stock/levels', { headers: authHeaders(accessToken) })).status,
+    ).toBe(200);
+
+    const created = await lead.request('/api/v1/stock/items', {
+      method: 'POST',
+      headers: json(accessToken),
+      body: JSON.stringify({ name: 'Beans', unit: 'tin', shelfNumber: 'B2' }),
+    });
+    expect(created.status).toBe(403);
+
+    const amended = await lead.request(`/api/v1/stock/items/${sugar}`, {
+      method: 'PATCH',
+      headers: json(accessToken),
+      body: JSON.stringify({ shelfNumber: 'Z9' }),
+    });
+    expect(amended.status).toBe(403);
   });
 
   it('refuses a duplicate item name', async () => {

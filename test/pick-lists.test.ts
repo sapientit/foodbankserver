@@ -3,7 +3,6 @@ import { eq } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { fixedClock } from '../src/core/clock.ts';
 import { createDatabase } from '../src/db/client.ts';
-import { formDefinitions, formFields } from '../src/db/schema/forms.ts';
 import { parcelLines, parcels, pickLists } from '../src/db/schema/pick-lists.ts';
 import { auditEvents, referralEditKeys, referrals } from '../src/db/schema/referrals.ts';
 import { authorisedReferrers, referralReasons } from '../src/db/schema/referrers.ts';
@@ -43,8 +42,6 @@ beforeEach(async () => {
   await db.delete(auditEvents);
   await db.delete(referralEditKeys);
   await db.delete(referrals);
-  await db.delete(formFields);
-  await db.delete(formDefinitions);
   await db.delete(referralReasons);
   await db.delete(authorisedReferrers);
   await db.delete(stockLedger);
@@ -457,14 +454,9 @@ describe('the printed sheet', () => {
     expect(text).not.toContain('12 Bramble Cottages');
   });
 
-  it('includes the address for a delivery, because that is the point', async () => {
+  it("gives the picker the referee's own address for a delivery", async () => {
     const { testApp, token, world: w } = await world();
-    await submitReferral(testApp, w, {
-      adults: 1,
-      children: 0,
-      isDelivery: true,
-      deliveryAddress: '4 Riverside Flats',
-    });
+    await submitReferral(testApp, w, { adults: 1, children: 0, isDelivery: true });
     const { id } = await generatePickList(testApp, token, w.sessionId);
 
     const response = await testApp.request(`/api/v1/pick-lists/${id}/print`, {
@@ -478,9 +470,31 @@ describe('the printed sheet', () => {
       }[];
     } = await response.json();
 
+    // A delivery goes to the referee's own address, so a driver must never be
+    // handed a sheet with no address on it.
     expect(body.parcels[0]?.isDelivery).toBe(true);
     expect(body.parcels[0]?.deliveryName).toBe('Alice Wintergreen');
-    expect(body.parcels[0]?.deliveryAddress).toBe('4 Riverside Flats');
+    expect(body.parcels[0]?.deliveryAddress).toBe('12 Bramble Cottages');
+  });
+
+  it('ignores a delivery address a client sends, rather than driving there', async () => {
+    const { testApp, token, world: w } = await world();
+    await submitReferral(testApp, w, {
+      adults: 1,
+      children: 0,
+      isDelivery: true,
+      deliveryAddress: '4 Riverside Flats',
+    });
+    const { id } = await generatePickList(testApp, token, w.sessionId);
+
+    const response = await testApp.request(`/api/v1/pick-lists/${id}/print`, {
+      headers: authHeaders(token),
+    });
+    const text = await response.text();
+    const body = JSON.parse(text) as { parcels: { deliveryAddress: string | null }[] };
+
+    expect(body.parcels[0]?.deliveryAddress).toBe('12 Bramble Cottages');
+    expect(text).not.toContain('4 Riverside Flats');
   });
 
   it('surfaces dietary needs, which only the picker can act on', async () => {

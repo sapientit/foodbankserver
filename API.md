@@ -29,6 +29,12 @@ POST /api/v1/auth/dev-login   { "email": "pete@foodbank.org" }
 The `role` in that response is what you choose the menu from — `admin` or
 `team_lead`.
 
+**The email must already have a user record.** Signing in never creates an
+account; an admin does, through `/api/v1/users`. An unknown address gets `401`
+with the same message as any other failed login, and a deactivated one gets
+`403`. The display name and role come from that record — sending them here
+changes nothing.
+
 **Two rules about the tokens.**
 
 Hold the access token **in memory only**. Not `localStorage`, not a cookie you
@@ -59,14 +65,48 @@ second presents a token the first already rotated, and the server treats that as
 theft: it **revokes the entire family** and signs the user out everywhere. Queue
 concurrent 401s behind a single in-flight refresh.
 
-On reload, call `GET /api/v1/auth/me` to rebuild UI state from the cookie.
+On reload, call `POST /api/v1/auth/refresh` to rebuild UI state from the cookie —
+not `/auth/me`. `/me` sits behind `requireAuth`, and after a reload there is no
+access token in memory, so it can only 401. You would then refresh anyway, and
+the refresh response already carries the user — including `displayName`, which
+`/me` does not return. So `/me` costs an extra round trip to learn less.
+
+`/me` is for re-reading the current actor mid-session, not for booting.
 
 ### What changes when Google auth arrives
 
-The response shape does not. What changes is that **an unknown email is
-rejected** rather than silently creating an admin, which is what the development
-login does today. Build against the rejection: a valid Google identity that is
-not a known user gets `401`, with the same message as a bad credential.
+The response shape does not, and neither does the rejection: a valid Google
+identity that is not a known user gets the same `401` the development login
+gives today. What changes is only how the email is established — asserted by
+the caller now, proved by Google then.
+
+### Managing who may sign in
+
+Admin only.
+
+```
+GET   /api/v1/users?includeInactive=true
+POST  /api/v1/users          { email, displayName, role }   → 201
+PATCH /api/v1/users/{id}     { displayName?, role?, isActive? }
+```
+
+Three things to build around:
+
+**Email is not amendable.** It is the login identity and what the audit trail
+means by "who". To correct one, deactivate the account and create the right one.
+
+**There is no delete.** Users are named by the stock ledger, audit events and
+attendance records. `isActive: false` is the retirement path; the account stops
+working at the next refresh.
+
+**A change is refused with `409` if it would lock everyone out** — demoting or
+deactivating yourself, or doing either to the last active admin. Show the
+message; it says which.
+
+A role change takes effect on the user's **next refresh**, so up to fifteen
+minutes later. Deactivation is the same: their current access token keeps
+working until it expires. If someone must be locked out immediately, that is a
+gap — say so rather than assuming this closes it.
 
 ---
 
@@ -78,10 +118,12 @@ Two roles. Use them for menus; **never for access control.**
 | ----------------------------------------------- | ------- | ----------- |
 | Run a session: pick lists, printing, attendance | ✅      | ✅          |
 | Read sessions, stock, referrals, model parcels  | ✅      | ✅          |
+| Shops, stock takes, stock corrections           | ✅      | ✅          |
 | Create or amend sessions and referrals          | ✅      | ❌          |
-| Stock maintenance, shops, stock takes           | ✅      | ❌          |
+| Maintain the stock item list                    | ✅      | ❌          |
 | Model parcels and the household grid            | ✅      | ❌          |
-| Referrers, reasons, form definitions            | ✅      | ❌          |
+| Referrers and reasons for referral              | ✅      | ❌          |
+| User maintenance                                | ✅      | ❌          |
 | **See why someone was referred**                | ✅      | ❌          |
 
 The server re-checks the role on every request from the signed token. If someone
@@ -105,17 +147,42 @@ household size, not that.
 Unauthenticated, and the only open write in the system. Rate limited per IP.
 
 ```
-1  GET  /api/v1/public/sessions          which sessions have space
-2  POST /api/v1/public/referrers/check   is this address allowed to refer?
-3  GET  /api/v1/public/referral-form     the questions and reason options
-4  POST /api/v1/public/referrals         submit  → returns editKey ONCE
+1  GET  /api/v1/public/sessions           which sessions have space
+2  POST /api/v1/public/referrers/check    is this address allowed to refer?
+3  GET  /api/v1/public/referral-reasons   the reason dropdown
+4  POST /api/v1/public/referrals          submit  → returns editKey ONCE
 ```
 
 Call step 2 as the referrer types their address, so an unauthorised one is
 caught before they fill in a whole form.
 
-Step 3 returns the questions as data — render them dynamically. The form changes
-periodically and the answers you send back are keyed by each question's `key`.
+### The form itself is yours
+
+**The server does not hold the referral form.** The questions are configuration
+in your application: you change them, see them in the test system, and publish
+them by releasing a new version of the client. There is no draft, no publish
+call, and no form-maintenance screen to build.
+
+What the server does with `answers` is store it and give it back:
+
+- It is **not validated** against anything. Required, max length, option lists,
+  and which questions are shown at all are your rules to enforce, before you
+  submit.
+- Keys are yours and must stay stable. A referral captured last year comes back
+  with the keys it was captured under, so **never reuse a key for a different
+  question** — that is what silently changes the meaning of old referrals.
+- Unknown keys are stored, not dropped. Nothing on the server has a list to
+  compare them against.
+- Size is the only limit: at most 100 keys, keys at most 60 characters, 16KB
+  serialised. That is a bound on an unauthenticated write, not form validation,
+  and no real form comes near it.
+
+The reason dropdown (step 3) is the exception that stays server-side: it is a
+maintained lookup, admin-editable, and the referral points at one by `reasonId`.
+
+**After a retention purge, `answers` comes back empty** along with the
+identifying fields — the server cannot tell which answers were personal, so it
+drops all of them.
 
 ### Turnstile
 
@@ -216,8 +283,9 @@ that state and stock did not move again. You do not need to disable the button,
 though doing so is kinder.
 
 A mistake can be corrected **once in each direction** — attended → no-show
-returns the stock. A third change is refused with `409` and needs an admin stock
-adjustment. Surface that message rather than swallowing it.
+returns the stock. A third change is refused with `409` and needs a stock
+adjustment (`POST /stock/adjustments`, which a team lead may also do). Surface
+that message rather than swallowing it.
 
 `POST /sessions/{sessionId}/confirm` refuses while anyone is still `pending`, and
 returns `details.pendingPickNumbers` — show those numbers so the team lead knows
@@ -236,7 +304,9 @@ What is deliberately **not** on a sheet:
 - **The reason for referral.** Never, not even for an admin. Sheets get carried
   round halls and left on tables.
 - **Name and address**, unless `isDelivery` is true — where the address is the
-  entire point.
+  entire point. `deliveryAddress` on a print sheet is the referee's own address:
+  a delivery never goes anywhere else, so there is no second address to send on
+  a referral or to display on a form.
 
 What **is** there: `dietaryNotes`, because the picker is the only person who can
 act on them, and the alternative is a parcel that cannot be eaten. Show them
@@ -291,7 +361,11 @@ and filter on that, display the wall clock. Never send `startsAtUtc`; the server
 derives it.
 
 **Capacity counts households, not people.** A session of 25 takes 25 referrals
-whatever their sizes.
+whatever their sizes. A staff `Session` carries `booked` alongside `capacity`, so
+`booked / capacity` is the occupancy — and **`booked` can exceed `capacity`**,
+because an admin may deliberately overfill a session when moving someone. Do not
+render that as an error. The public list omits both fields and simply excludes
+anything full.
 
 **A referral needs at least one adult.** The household grid starts at one adult,
 so `adults: 0` is rejected.

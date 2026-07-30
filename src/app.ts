@@ -4,9 +4,9 @@ import { requestContext, securityHeaders, type ContextOptions } from './http/con
 import { cors } from './http/cors.ts';
 import { errorHandler, notFoundHandler } from './http/error-handler.ts';
 import { authRoutes } from './modules/auth/auth.routes.ts';
-import { referralAdminRoutes } from './modules/forms/admin.routes.ts';
-import { publicFormRoutes } from './modules/forms/public.routes.ts';
 import { healthRoutes } from './modules/health/health.routes.ts';
+import { referrerAdminRoutes } from './modules/referrers/admin.routes.ts';
+import { publicReferrerRoutes } from './modules/referrers/public.routes.ts';
 import { publicReferralRoutes } from './modules/referrals/public.routes.ts';
 import { referralRoutes } from './modules/referrals/referrals.routes.ts';
 import { pickListRoutes } from './modules/pick-lists/pick-lists.routes.ts';
@@ -14,6 +14,7 @@ import { ruleRoutes } from './modules/rules/rules.routes.ts';
 import { publicSessionRoutes } from './modules/sessions/public.routes.ts';
 import { stockRoutes } from './modules/stock/stock.routes.ts';
 import { sessionRoutes } from './modules/sessions/sessions.routes.ts';
+import { userRoutes } from './modules/users/users.routes.ts';
 import type { AppEnv } from './http/types.ts';
 
 export const API_PREFIX = '/api/v1';
@@ -43,14 +44,15 @@ export function buildApp(config: AppConfig, options: ContextOptions = {}): Hono<
 
   app.route(`${API_PREFIX}/auth`, authRoutes(config));
   app.route(`${API_PREFIX}/public`, publicSessionRoutes());
-  app.route(`${API_PREFIX}/public`, publicFormRoutes());
+  app.route(`${API_PREFIX}/public`, publicReferrerRoutes());
   app.route(`${API_PREFIX}/public`, publicReferralRoutes());
   app.route(API_PREFIX, sessionRoutes());
-  app.route(API_PREFIX, referralAdminRoutes());
+  app.route(API_PREFIX, referrerAdminRoutes());
   app.route(API_PREFIX, referralRoutes());
   app.route(API_PREFIX, stockRoutes());
   app.route(API_PREFIX, ruleRoutes());
   app.route(API_PREFIX, pickListRoutes());
+  app.route(API_PREFIX, userRoutes());
 
   return app;
 }

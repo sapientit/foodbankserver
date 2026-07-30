@@ -5,7 +5,7 @@ import { ForbiddenError, UnauthorizedError } from '../../core/errors.ts';
 import { mintSecret, sha256Hex } from '../../core/crypto/tokens.ts';
 import type { Logger } from '../../core/log.ts';
 import type { Database } from '../../db/client.ts';
-import type { User, UserRole } from '../../db/schema/users.ts';
+import type { User } from '../../db/schema/users.ts';
 import type { AuthRepository } from './auth.repository.ts';
 import type { IdentityClaim, IdentityProvider } from './identity-provider.ts';
 import { signAccessToken } from './token.service.ts';
@@ -34,40 +34,28 @@ export function createAuthService(deps: AuthServiceDeps) {
    *
    * Match on the provider subject first, then on email — that second step is
    * account linking, and it back-fills `googleSubject` so subsequent logins
-   * take the fast path. An unknown email is rejected unless the provider
-   * auto-provisions, which only the dummy one does.
+   * take the fast path.
+   *
+   * **Logging in never creates an account.** Authenticating proves who somebody
+   * is; the `users` table is what says this food bank has given them access,
+   * and only an admin writes to it. An address that is not in it is refused,
+   * whichever provider vouched for it.
    */
-  async function resolveUser(claim: IdentityClaim, provider: IdentityProvider): Promise<User> {
+  async function resolveUser(claim: IdentityClaim): Promise<User> {
     if (claim.provider === 'google') {
       const bySubject = await repository.findUserByGoogleSubject(claim.subject);
       if (bySubject !== undefined) return assertActive(bySubject);
     }
 
     const byEmail = await repository.findUserByEmail(claim.email);
-    if (byEmail !== undefined) return assertActive(byEmail);
-
-    if (!provider.autoProvisions) {
+    if (byEmail === undefined) {
       // Deliberately the same error as a bad credential: whether an address is
       // registered here is not something an unauthenticated caller should learn.
       logger.warn('rejected login for unknown account');
       throw new UnauthorizedError('Authentication failed');
     }
 
-    const now = clock.nowIso();
-    const created = await repository.insertUser({
-      id: crypto.randomUUID(),
-      email: claim.email,
-      displayName: claim.displayName,
-      role: defaultRoleFor(claim),
-      googleSubject: null,
-      isActive: 1,
-      lastLoginAt: null,
-      createdAt: now,
-      updatedAt: now,
-    });
-
-    logger.info('auto-provisioned user', { userId: created.id, actorRole: created.role });
-    return created;
+    return assertActive(byEmail);
   }
 
   /** Signs an access token and stores a fresh refresh-token family. */
@@ -164,7 +152,7 @@ export function createAuthService(deps: AuthServiceDeps) {
 
   async function login(input: unknown, provider: IdentityProvider): Promise<IssuedTokens> {
     const claim = await provider.authenticate(input);
-    const user = await resolveUser(claim, provider);
+    const user = await resolveUser(claim);
     return issueTokens(user);
   }
 
@@ -178,18 +166,6 @@ function assertActive(user: User): User {
     throw new ForbiddenError('This account has been deactivated');
   }
   return user;
-}
-
-/**
- * Auto-provisioned users default to admin.
- *
- * Only the dummy provider provisions, and a developer stub that could not
- * reach the admin surface would be useless. `provisionRole` lets a developer
- * ask for a team lead instead, to exercise role boundaries. Real users are
- * created by an admin, with an explicit role.
- */
-function defaultRoleFor(claim: IdentityClaim): UserRole {
-  return claim.provisionRole ?? 'admin';
 }
 
 export function toActor(user: User): Actor {

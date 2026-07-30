@@ -7,6 +7,9 @@ import type { IdentityClaim, IdentityProvider } from '../identity-provider.ts';
  * Per the spec, there is no validation: submit any email address and you are
  * that person. This is a stub to be replaced by Google OIDC.
  *
+ * It is not, however, a way in: the address must already have a `users` row,
+ * created by an admin. Logging in as somebody who does not work here fails.
+ *
  * Two structural controls keep it from becoming a production incident, and
  * neither is enforced here — that is the point:
  *
@@ -22,7 +25,6 @@ import type { IdentityClaim, IdentityProvider } from '../identity-provider.ts';
 export function createDummyProvider(): IdentityProvider {
   return {
     name: 'dummy',
-    autoProvisions: true,
 
     authenticate(input: unknown): Promise<IdentityClaim> {
       const parsed = devLoginSchema.parse(input);
@@ -35,9 +37,7 @@ export function createDummyProvider(): IdentityProvider {
         // Honest: nothing was verified. The flag exists so the Google provider
         // can set it truthfully and account linking can depend on it.
         emailVerified: false,
-        displayName: parsed.displayName ?? email,
-        // Lets a developer provision a team lead to exercise role boundaries.
-        ...(parsed.role === undefined ? {} : { provisionRole: parsed.role }),
+        displayName: email,
       });
     },
   };

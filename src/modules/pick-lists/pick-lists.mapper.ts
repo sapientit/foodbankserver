@@ -77,7 +77,9 @@ export function toParcelResponse({ parcel, lines }: ParcelWithLines): ParcelResp
  *   carried round a hall and left on tables. Why someone is hungry is not
  *   picking information.
  * - **No referee name or address unless it is a delivery**, where the address
- *   is the whole point.
+ *   is the whole point. A delivery goes to the referee's own address — there is
+ *   no other one — so `deliveryAddress` here is `refereeAddress`, named for what
+ *   the driver uses it for.
  * - **Dietary needs are included** when the form captured them, because the
  *   picker is the only person who can act on them, and the alternative is a
  *   parcel that cannot be eaten.
@@ -113,8 +115,7 @@ export function toPrintParcelResponse(
     isDelivery: delivery !== undefined,
     // Only a delivery needs a name and address on the sheet.
     deliveryName: delivery?.refereeName ?? null,
-    deliveryAddress:
-      delivery === undefined ? null : (delivery.deliveryAddress ?? delivery.refereeAddress),
+    deliveryAddress: delivery?.refereeAddress ?? null,
     dietaryNotes: dietaryNotesOf(referral),
     notes: entry.parcel.notes,
     lines: toParcelResponse(entry).lines,
@@ -124,9 +125,9 @@ export function toPrintParcelResponse(
 /**
  * Pulls dietary information out of the dynamic answers.
  *
- * The form is admin-editable, so the key is not fixed — several plausible
- * names are checked rather than assuming one. Anything found is passed
- * through verbatim; the picker needs the actual words.
+ * The form belongs to the client, so the key is not ours to fix — several
+ * plausible names are checked rather than assuming one. Anything found is
+ * passed through verbatim; the picker needs the actual words.
  */
 function dietaryNotesOf(referral: Referral | undefined): string | null {
   if (referral?.answersJson == null) return null;

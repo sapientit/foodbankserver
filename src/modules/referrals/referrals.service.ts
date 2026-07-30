@@ -13,8 +13,6 @@ import type { Logger } from '../../core/log.ts';
 import type { Patch } from '../../core/types.ts';
 import type { Database } from '../../db/client.ts';
 import type { NewReferral, Referral } from '../../db/schema/referrals.ts';
-import { validateAnswers, type AnswerValue } from '../forms/answers.ts';
-import { toFieldSpecs, type FormsService } from '../forms/forms.service.ts';
 import type { ReferrersRepository } from '../referrers/referrers.repository.ts';
 import type { ReferrersService } from '../referrers/referrers.service.ts';
 import type { SessionsRepository } from '../sessions/sessions.repository.ts';
@@ -34,13 +32,12 @@ export interface ReferralsServiceDeps {
   readonly sessions: SessionsRepository;
   readonly referrers: ReferrersRepository;
   readonly referrersService: ReferrersService;
-  readonly forms: FormsService;
   readonly clock: Clock;
   readonly logger: Logger;
 }
 
 export function createReferralsService(deps: ReferralsServiceDeps) {
-  const { db, repository, sessions, referrers, referrersService, forms, clock, logger } = deps;
+  const { db, repository, sessions, referrers, referrersService, clock, logger } = deps;
 
   async function getReferral(id: string): Promise<Referral> {
     const referral = await repository.findById(id);
@@ -88,29 +85,16 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     }
   }
 
-  async function resolveAnswers(
-    formDefinitionId: string,
-    submitted: Record<string, unknown>,
-  ): Promise<Record<string, AnswerValue>> {
-    const { fields } = await forms.getDefinitionWithFields(formDefinitionId);
-    const result = validateAnswers(toFieldSpecs(fields), submitted);
-
-    if (!result.ok) {
-      // Issues carry field keys and rules only — never the answers, which may
-      // hold health or immigration detail.
-      throw new BadRequestError('Some answers need attention', {
-        details: { issues: result.issues },
-      });
-    }
-    return result.answers;
-  }
-
   /**
    * Submits a referral. Unauthenticated.
    *
-   * Four gates, in the order that fails cheapest first: the referrer must be
-   * authorised, the session must be open and not full, the reason must still
-   * be offered, and the dynamic answers must satisfy the published form.
+   * Three gates, in the order that fails cheapest first: the referrer must be
+   * authorised, the session must be open and not full, and the reason must
+   * still be offered.
+   *
+   * The dynamic answers are **not** a fourth gate. The referral form is client
+   * configuration, so the server holds no definition to check them against and
+   * stores what it is given.
    */
   async function submit(input: ReferralSubmission): Promise<SubmittedReferral> {
     const authorisation = await referrersService.checkAuthorisation(input.referrerEmail);
@@ -128,9 +112,6 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
       throw new UnprocessableError('That reason for referral is no longer offered');
     }
 
-    const { definition } = await forms.getPublished();
-    const answers = await resolveAnswers(definition.id, input.answers);
-
     const now = clock.nowIso();
     const issuedAt = clock.nowEpochSeconds();
     const expiresAt = issuedAt + REFERRAL_EDIT_KEY_TTL_SECONDS;
@@ -140,7 +121,6 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     const referral: NewReferral = {
       id: referralId,
       sessionId: input.sessionId,
-      formDefinitionId: definition.id,
       status: 'active',
       referredAt: now,
       cancelledAt: null,
@@ -157,8 +137,7 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
       refereeAddress: input.refereeAddress,
       refereePostcode: input.refereePostcode,
       refereePhone: input.refereePhone ?? null,
-      deliveryAddress: input.isDelivery ? (input.deliveryAddress ?? null) : null,
-      answersJson: JSON.stringify(answers),
+      answersJson: JSON.stringify(input.answers),
       piiPurgedAt: null,
       createdByUserId: null,
       createdAt: now,
@@ -245,7 +224,6 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
       'refereePostcode',
       'refereePhone',
       'referrerPhone',
-      'deliveryAddress',
       'adults',
       'children',
     ] as const) {
@@ -259,7 +237,6 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     if (input.isDelivery !== undefined) {
       patch.isDelivery = input.isDelivery ? 1 : 0;
       changed.push('isDelivery');
-      if (!input.isDelivery) patch.deliveryAddress = null;
     }
 
     if (input.reasonId !== undefined) {
@@ -272,9 +249,9 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     }
 
     if (input.answers !== undefined) {
-      patch.answersJson = JSON.stringify(
-        await resolveAnswers(referral.formDefinitionId, input.answers),
-      );
+      // Replaced wholesale, not merged: the client holds the form and sends
+      // the complete set of answers, so a key it omits has been removed.
+      patch.answersJson = JSON.stringify(input.answers);
       changed.push('answers');
     }
 

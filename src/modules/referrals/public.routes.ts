@@ -5,8 +5,6 @@ import type { AppEnv } from '../../http/types.ts';
 import { parseJsonBody, parseOptionalJsonBody } from '../../http/validate.ts';
 import { rateLimit } from '../../http/middleware/rate-limit.ts';
 import { requireTurnstile, TURNSTILE_HEADER } from '../security/turnstile.ts';
-import { createFormsRepository } from '../forms/forms.repository.ts';
-import { createFormsService } from '../forms/forms.service.ts';
 import { createReferrersRepository } from '../referrers/referrers.repository.ts';
 import { createReferrersService } from '../referrers/referrers.service.ts';
 import { createSessionsRepository } from '../sessions/sessions.repository.ts';
@@ -115,6 +113,5 @@ function serviceFor(c: Context<AppEnv>) {
     sessions: createSessionsRepository(db),
     referrers,
     referrersService: createReferrersService({ repository: referrers, clock }),
-    forms: createFormsService({ db, repository: createFormsRepository(db), clock }),
   });
 }

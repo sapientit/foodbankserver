@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createDatabase } from '../src/db/client.ts';
 import { refreshTokens, users } from '../src/db/schema/users.ts';
-import { authHeaders, buildTestApp, cookieHeader, devLogin } from './helpers/app.ts';
+import { authHeaders, buildTestApp, cookieHeader, devLogin, seedUser } from './helpers/app.ts';
 
 const db = createDatabase(env.DB);
 
@@ -14,17 +14,48 @@ describe('auth flow', () => {
     await db.delete(users);
   });
 
-  it('auto-provisions an admin on first dev login', async () => {
+  it('signs in an existing user with the role from their record', async () => {
     const testApp = buildTestApp();
+    const userId = await seedUser({ email: 'pete@example.org', role: 'team_lead' });
 
-    const { accessToken, userId } = await devLogin(testApp, { email: 'Pete@Example.org' });
+    const { accessToken } = await devLogin(testApp, { email: 'Pete@Example.org' });
 
     const me = await testApp.request('/api/v1/auth/me', { headers: authHeaders(accessToken) });
     expect(await me.json()).toEqual({
       id: userId,
       email: 'pete@example.org', // normalised to lowercase
-      role: 'admin',
+      role: 'team_lead',
     });
+  });
+
+  it('refuses a login for an email address with no user record', async () => {
+    const testApp = buildTestApp();
+
+    const response = await testApp.request('/api/v1/auth/dev-login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: 'stranger@example.org' }),
+    });
+
+    expect(response.status).toBe(401);
+    // Same answer as any other failed login: whether an address is registered
+    // here is not something an unauthenticated caller should learn.
+    expect(await response.json()).toMatchObject({ error: { code: 'UNAUTHORIZED' } });
+    expect(await db.select().from(users)).toHaveLength(0);
+  });
+
+  it('refuses a login for a deactivated user', async () => {
+    const testApp = buildTestApp();
+    await seedUser({ email: 'gone@example.org', isActive: 0 });
+
+    const response = await testApp.request('/api/v1/auth/dev-login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: 'gone@example.org' }),
+    });
+
+    expect(response.status).toBe(403);
+    expect(await db.select().from(refreshTokens)).toHaveLength(0);
   });
 
   it('reuses the existing user on a second login rather than duplicating', async () => {
@@ -35,6 +66,19 @@ describe('auth flow', () => {
 
     expect(second.userId).toBe(first.userId);
     expect(await db.select().from(users)).toHaveLength(1);
+  });
+
+  it('ignores a role sent in the login body — the record decides', async () => {
+    const testApp = buildTestApp();
+    await seedUser({ email: 'lead@example.org', role: 'team_lead' });
+
+    const response = await testApp.request('/api/v1/auth/dev-login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: 'lead@example.org', role: 'admin' }),
+    });
+
+    expect(await response.json()).toMatchObject({ user: { role: 'team_lead' } });
   });
 
   it('does not register the dev-login route when AUTH_MODE is google', async () => {
@@ -52,6 +96,7 @@ describe('auth flow', () => {
 
   it('never returns the refresh token in the body, only as an HttpOnly cookie', async () => {
     const testApp = buildTestApp();
+    await seedUser({ email: 'pete@example.org' });
 
     const response = await testApp.request('/api/v1/auth/dev-login', {
       method: 'POST',
@@ -204,7 +249,7 @@ describe('route protection', () => {
     }
   });
 
-  it('lets a developer log in as a team lead to exercise role boundaries', async () => {
+  it('carries the team lead role into the access token', async () => {
     const testApp = buildTestApp();
     const { accessToken } = await devLogin(testApp, {
       email: 'lead@example.org',
