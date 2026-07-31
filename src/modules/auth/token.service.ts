@@ -64,13 +64,22 @@ async function importSigningKey(secret: string): Promise<CryptoKey> {
   );
 }
 
+/**
+ * Signs an access token, never outliving the sign-in it belongs to.
+ *
+ * `signInExpiresAt` is required rather than optional because forgetting it
+ * would quietly turn the eight-hour cap into eight hours and a bit: without it
+ * the final token of a sign-in stays valid for its full fifteen minutes past
+ * the point the user should have been asked to sign in again.
+ */
 export async function signAccessToken(
   subject: AccessTokenSubject,
   secret: string,
   clock: Clock,
+  signInExpiresAt: number,
 ): Promise<{ token: string; expiresAt: number }> {
   const issuedAt = clock.nowEpochSeconds();
-  const expiresAt = issuedAt + ACCESS_TOKEN_TTL_SECONDS;
+  const expiresAt = Math.min(issuedAt + ACCESS_TOKEN_TTL_SECONDS, signInExpiresAt);
 
   const claims: AccessTokenClaims = {
     iss: JWT_ISSUER,

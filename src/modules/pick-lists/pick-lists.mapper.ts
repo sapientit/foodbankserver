@@ -28,7 +28,6 @@ export function toPickListResponse(pickList: PickList): PickListResponse {
 export interface ParcelLineResponse {
   readonly stockItemId: string;
   readonly name: string;
-  readonly unit: string;
   readonly shelfNumber: string;
   readonly quantity: number;
   readonly source: string;
@@ -59,7 +58,6 @@ export function toParcelResponse({ parcel, lines }: ParcelWithLines): ParcelResp
     lines: lines.map((line) => ({
       stockItemId: line.stockItemId,
       name: line.item.name,
-      unit: line.item.unit,
       shelfNumber: line.item.shelfNumber,
       quantity: line.quantity,
       source: line.source,

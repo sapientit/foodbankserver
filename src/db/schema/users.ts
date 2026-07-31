@@ -13,6 +13,12 @@ import { sql } from 'drizzle-orm';
 export const USER_ROLES = ['admin', 'team_lead', 'volunteer'] as const;
 export type UserRole = (typeof USER_ROLES)[number];
 
+/**
+ * `replay_detected` is no longer written: a token presented after it was
+ * rotated is refused without touching the rest of the family. It stays in the
+ * list because it stays in the CHECK constraint — dropping a value costs a
+ * table rebuild — and because rows written before that changed still carry it.
+ */
 export const REVOKED_REASONS = [
   'rotated',
   'logout',
@@ -52,10 +58,13 @@ export const users = sqliteTable(
  *
  * Only the SHA-256 hash is stored, so a database dump yields nothing usable.
  * Every use rotates: the old row is revoked and a new one issued in the same
- * `familyId`. Presenting an already-revoked token means the token was either
- * stolen or replayed, and the response is to revoke the whole family — the
- * OAuth 2.0 Security BCP defence, and the only meaningful theft protection
- * available without a server-side session store.
+ * `familyId`, inheriting its `expiresAt`. That inherited expiry is the
+ * eight-hour sign-in cap — the row says when the sign-in ends, not when this
+ * particular token would have, so rotation cannot extend it.
+ *
+ * Presenting an already-revoked token is refused and nothing else. The family
+ * is only revoked wholesale by a logout or a deactivation, both of which are
+ * somebody's decision rather than an inference from a repeated request.
  */
 export const refreshTokens = sqliteTable(
   'refresh_tokens',

@@ -4,7 +4,12 @@ import { ConflictError, NotFoundError } from '../../core/errors.ts';
 import type { Logger } from '../../core/log.ts';
 import type { Patch } from '../../core/types.ts';
 import type { Database } from '../../db/client.ts';
-import type { NewStockItem, StockItem, StockTake } from '../../db/schema/stock.ts';
+import type {
+  NewStockItem,
+  StockItem,
+  StockMovementType,
+  StockTake,
+} from '../../db/schema/stock.ts';
 import { isUniqueViolation } from '../../db/unique-violation.ts';
 import { shelfSortKey } from './shelf-sort.ts';
 import type { StockLevel, StockRepository } from './stock.repository.ts';
@@ -35,12 +40,7 @@ export function createStockService({ db, repository, clock, logger }: StockServi
     return item;
   }
 
-  async function createItem(input: {
-    name: string;
-    unit: string;
-    shelfNumber: string;
-    lowStockThreshold: number | null;
-  }): Promise<StockItem> {
+  async function createItem(input: { name: string; shelfNumber: string }): Promise<StockItem> {
     const now = clock.nowIso();
 
     try {
@@ -48,10 +48,8 @@ export function createStockService({ db, repository, clock, logger }: StockServi
         id: crypto.randomUUID(),
         name: input.name,
         nameNormalised: input.name.trim().toLowerCase(),
-        unit: input.unit,
         shelfNumber: input.shelfNumber,
         shelfSortKey: shelfSortKey(input.shelfNumber),
-        lowStockThreshold: input.lowStockThreshold,
         isActive: 1,
         createdAt: now,
         updatedAt: now,
@@ -190,6 +188,13 @@ export function createStockService({ db, repository, clock, logger }: StockServi
    * whose count differs from the derived level**. Same screen for the user,
    * auditable arithmetic, and the discrepancy stays visible rather than being
    * silently absorbed.
+   *
+   * The variance is written as `correction`, which is the only one of the six
+   * movement types it can be — there is no longer a `stock_take_adjustment`.
+   * Those rows are still identifiable by their non-null `stockTakeId`, but the
+   * movement type no longer distinguishes "we counted and were short" from "a
+   * team lead fixed a mis-tap". Whether the charity wants that distinction is
+   * **Q13** in `OPEN-QUESTIONS.md`, and unanswered.
    */
   async function commitStockTake(stockTakeId: string, actor: Actor): Promise<CommittedStockTake> {
     const stockTake = await requireOpenStockTake(stockTakeId);
@@ -228,7 +233,7 @@ export function createStockService({ db, repository, clock, logger }: StockServi
           id: crypto.randomUUID(),
           stockItemId: adjustment.stockItemId,
           quantityDelta: adjustment.delta,
-          movementType: 'stock_take_adjustment',
+          movementType: 'correction',
           parcelId: null,
           sessionId: null,
           purchaseId: null,
@@ -258,7 +263,7 @@ export function createStockService({ db, repository, clock, logger }: StockServi
     input: {
       stockItemId: string;
       quantityDelta: number;
-      movementType: 'donation' | 'wastage' | 'expiry' | 'correction' | 'opening_balance';
+      movementType: StockMovementType;
       reason: string;
     },
     actor: Actor,

@@ -8,6 +8,10 @@ import type { AppConfig } from '../../config/env.ts';
  * came from the dummy provider or from Google. That is the whole point: adding
  * Google means adding one file that produces one of these, not touching the
  * auth flow.
+ *
+ * One thing that is not in this file has to be done in the same change: the
+ * seeded first admin in `migrations/0007_bootstrap-admin.sql` is a stand-in
+ * address and is replaced when Google arrives.
  */
 export interface IdentityClaim {
   readonly provider: 'dummy' | 'google';

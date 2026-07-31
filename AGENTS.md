@@ -116,7 +116,17 @@ table rebuild. Two consequences, both deliberate and both easy to "tidy up" by m
 
 - **Every PII column is nullable in SQL and required in Zod.** Requiredness lives in the schema
   module, not the DDL. Write `NOT NULL` on a PII column and it can never be purged.
-- **Enums are CHECK constraints enumerated generously**, including values unused today.
+- **Enums are CHECK constraints.** They were once enumerated generously, on the reasoning that
+  adding a value later is expensive. `stock_ledger.movement_type` shipped with nine guessed values
+  and 0011 rebuilt the table to get to the six the charity actually wanted, so generosity bought a
+  rebuild rather than avoiding one. Ask instead.
+
+**Dropping a column is usually not a rebuild.** SQLite refuses `ALTER TABLE ... DROP COLUMN` only
+for a column named in an index, a `CHECK`, a `FOREIGN KEY`, a generated column or the primary key —
+0009 and 0010 are both one-liners for that reason. drizzle-kit generates a drop-and-recreate anyway
+and will justify it with "the table is empty", which is true of a fresh database and of the test run
+and of nothing else. On a foreign-key parent that is the difference between a migration and a data
+loss. Read 0008 before accepting a generated rebuild.
 
 **Time Travel is the backup** — 30 days on paid, whole-database restore only. You cannot restore one
 table.
@@ -143,6 +153,15 @@ Use these words in code, tests and API paths. Do not invent synonyms.
   exceed capacity when moving someone.
 - **Sessions are materialised**, not computed. A cron generates real session rows 6 weeks ahead.
   Each is independently editable.
+- **Three session windows, and they are not the same number.** The cron materialises **6 weeks**.
+  `GET /sessions` shows an admin all of it and a **team lead 6 days** — today through today+6 in
+  `Europe/London` — because a team lead runs the shift in front of them and the far calendar is an
+  admin's planning tool. The unauthenticated list stays at **14 days**, which is deliberately
+  _longer_ than the team lead's: a referrer booking a slot needs notice, a team lead does not.
+  The horizon is applied in `sessions.service.listSessions` from the `Actor`, never from the
+  request — a `to` past it is clamped, so no query parameter widens it. It caps looking forward
+  only; past sessions are untouched. It applies to the **list alone**: fetching one session by id
+  and the pick-list routes are uncapped, which is **Q14**.
 - **Roles are `admin` and `team_lead` only.** Team leads run sessions (pick lists, printing,
   attendance) and handle the stock itself — the shop, the stock take, hand corrections — because
   they are the people in the warehouse. Admins additionally manage referrers, reasons, rules,
@@ -185,7 +204,7 @@ Use these words in code, tests and API paths. Do not invent synonyms.
 ```
 Referral:  created → scheduled(session) → moved(session) | cancelled
 Pick list: draft → printed → confirmed        (confirmed = picking finished, list locked)
-Parcel:    pending → attended | no_show
+Parcel:    pending → attended | no_show      (both terminal: no correction)
 Session:   planned → confirmed | cancelled
 ```
 
@@ -200,6 +219,19 @@ Session:   planned → confirmed | cancelled
   violation and treats it as success. Use
   `isUniqueViolation(error, 'stock_ledger.parcel_id', 'stock_ledger.stock_item_id',
 'stock_ledger.movement_type')` — see the rules below, which are not what you would guess.
+- **A recorded outcome is final.** Once a collection or delivery is confirmed it cannot be undone,
+  so the _contradicting_ outcome is a `ConflictError` and a mis-tap is put right through the
+  audited stock-adjustment path. `parcel_returned` is gone from the CHECK constraint as of 0011, so
+  a reversal cannot be recorded even by hand.
+- **Stock moves six ways and no more**: `opening_balance`, `purchase`, `donation`, `parcel_issued`,
+  `wastage`, `correction`. That list is the charity's, not ours, and it is deliberately short rather
+  than generous — a seventh costs a rebuild of the whole ledger, so it is a question for Pete, not a
+  line to add. `POST /stock/adjustments` offers all six. A stock take's variance is written as
+  `correction` and identified by its `stock_take_id`; whether that distinction is wanted is **Q13**
+  and unanswered, so do not build reporting that assumes either way.
+- **A session cannot be closed while anybody is unmarked.** `POST /sessions/:id/confirm` refuses
+  with the outstanding pick numbers. There is no override and no defaulting to no-show — a session
+  closed with people unaccounted for has wrong stock figures.
 - **The stock ledger is append-only.** Never `UPDATE` or `DELETE` a ledger row. The current level is
   `SUM(quantity_delta)`. A stock take records a _count_ and writes an adjustment row for the
   variance — it never overwrites a level.
@@ -374,12 +406,23 @@ Security-relevant packages (auth, crypto, session handling) need explicit sign-o
 
 ## Authentication
 
+- **A sign-in lasts eight hours and nothing extends it.** `SIGN_IN_TTL_SECONDS`. The first refresh
+  token of a family carries the instant the sign-in ends, and every rotation **copies that value**
+  rather than computing a new one — that inheritance is the whole mechanism, so a rotation that
+  writes `now + TTL` silently turns the cap into an idle timeout. Access tokens are capped at the
+  same instant (`signAccessToken` takes it as a required argument), so the last token of a sign-in
+  is a short one instead of one that outlives the cap by up to fifteen minutes. It is an **absolute**
+  cap, not an inactivity timeout: working through the day does not push it back.
 - **Access tokens are stateless HS256 JWTs**, 15 minutes, verified with WebCrypto in
   `modules/auth/token.service.ts` (pure — no database, no HTTP). Verification costs zero queries,
   which is the point: the free plan gives 50 per invocation.
-- **Refresh tokens are opaque, rotating and replay-detecting.** Only the SHA-256 hash is stored.
-  Every use rotates within a `familyId`; presenting an already-revoked token revokes **the whole
-  family**, including the legitimate holder's. That is deliberate — a replay means the token leaked.
+- **Refresh tokens are opaque and rotating.** Only the SHA-256 hash is stored. Every use rotates
+  within a `familyId`. Presenting an already-rotated token is **refused and nothing more** — it is
+  logged (by user id) and the sign-in carries on. Revoking the whole family on a repeated request
+  signed the legitimate holder out everywhere, and the charity decided that costs more than the
+  replay does. `revokeFamily` now belongs to logout and deactivation only, both of which are
+  somebody's decision rather than an inference. `replay_detected` survives in `REVOKED_REASONS` and
+  the CHECK constraint because dropping a value costs a rebuild and old rows still carry it.
 - Refresh token travels in an `HttpOnly; Secure; SameSite=Strict` cookie scoped to
   `/api/v1/auth`, so it is never attached to a domain request. The access token goes in the
   response body for the frontend to hold **in memory only**.
@@ -406,6 +449,9 @@ Security-relevant packages (auth, crypto, session handling) need explicit sign-o
   database where logging in cannot create an account otherwise has nobody who can create one. It is
   `ON CONFLICT DO NOTHING`, so a re-run never resurrects an account somebody has since deactivated.
   Data, not schema, so it is hand-written and its drizzle snapshot is a copy of the previous one.
+  **`pete@x.com` is a stand-in and is replaced when Google auth lands** — that is Pete's answer, not
+  an assumption, and it is written down in the migration and in `identity-provider.ts` so whoever
+  does the Google work meets it.
 - Use `requireAuth` then `requireRole('admin')`. Name roles explicitly per route; do not invent a
   hierarchy where `team_lead` is "a lesser admin".
 
@@ -440,12 +486,13 @@ that should not see it is a review question, not something this catches.
 Vitest pool with self-testing migrations, health and readiness routes, error handling, and the core
 primitives above.
 
-**Slice 1 — auth.** `users` and `refresh_tokens`, dev login, rotation with family replay detection,
-`requireAuth` / `requireRole`, `GET /api/v1/auth/me`.
+**Slice 1 — auth.** `users` and `refresh_tokens`, dev login, the eight-hour sign-in with rotation
+that inherits its expiry, `requireAuth` / `requireRole`, `GET /api/v1/auth/me`.
 
 **Slice 2 — sessions.** `recurring_sessions` and `sessions`, the pure occurrence planner, the
 materialisation cron (wired to the real `scheduled` handler and to an admin trigger route), admin
-CRUD including ad hoc sessions and cancellation, and the unauthenticated 14-day public list.
+CRUD including ad hoc sessions and cancellation, the role-dependent staff list (6 weeks for an
+admin, 6 days for a team lead) and the unauthenticated 14-day public list.
 
 **Slice 3 — referrers and reasons.** `authorised_referrers` with email/domain precedence and
 `referral_reasons` (the admin-maintained dropdown), in `modules/referrers`. Pure matching module.
@@ -475,9 +522,10 @@ five reads and one native D1 batch whatever the referral count, editable while d
 printing, locked on confirm. Print payload ordered by shelf.
 
 **Slice 8 — attendance.** `POST /parcels/:id/attendance` issues or withholds a parcel, and
-`POST /sessions/:sessionId/confirm` closes the session once everyone is ticked off. **This is where
-the stock ledger guard does its job** — see the rule above, and `test/attendance.test.ts`, whose
-concurrency test is the one that actually proves the index.
+`POST /sessions/:sessionId/confirm` closes the session once everyone is ticked off — refused, with
+no override, while anybody is unmarked. **This is where the stock ledger guard does its job** — see
+the rule above, and `test/attendance.test.ts`, whose concurrency test is the one that actually
+proves the index.
 
 The domain flow is now complete end to end: referral → session → pick list → attendance → stock.
 
@@ -523,9 +571,6 @@ and the cron wiring are already in place.
   JWTs exist here to avoid — or a revocation list. Neither is worth it until someone asks.
 - A pick list reports divergence from its referrals but has no "sync" that adds parcels for
   referrals which arrived afterwards — an admin currently has to handle those manually.
-- Attendance can be corrected once in each direction. A third flip is refused, pointing at the
-  audited stock-adjustment path, rather than inventing compensating entries that cannot be told
-  apart from real ones.
 - Model parcels cannot express **exclusions** (no pork, gluten free). Dietary needs are a dynamic
   answer surfaced on the parcel for the picker to substitute manually — and since the client owns
   the form, `pick-lists.mapper.ts` matches several plausible keys rather than one agreed name.

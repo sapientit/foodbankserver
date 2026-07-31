@@ -1,4 +1,4 @@
-import { REFRESH_TOKEN_TTL_SECONDS } from '../../config/constants.ts';
+import { SIGN_IN_TTL_SECONDS } from '../../config/constants.ts';
 import type { Actor } from '../../core/actor.ts';
 import type { Clock } from '../../core/clock.ts';
 import { ForbiddenError, UnauthorizedError } from '../../core/errors.ts';
@@ -15,6 +15,11 @@ export interface IssuedTokens {
   readonly accessTokenExpiresAt: number;
   /** Plaintext, returned to the client once. Only its hash is stored. */
   readonly refreshToken: string;
+  /**
+   * Epoch seconds at which this sign-in ends and the user must sign in again.
+   * Rotation carries it forward unchanged — it never moves.
+   */
+  readonly signInExpiresAt: number;
   readonly user: User;
 }
 
@@ -58,15 +63,23 @@ export function createAuthService(deps: AuthServiceDeps) {
     return assertActive(byEmail);
   }
 
-  /** Signs an access token and stores a fresh refresh-token family. */
+  /**
+   * Signs an access token and stores a fresh refresh-token family.
+   *
+   * This is the only place the eight hours are measured from: the first
+   * refresh token of a family carries the moment the sign-in ends, and every
+   * rotation after it copies that value rather than recomputing one.
+   */
   async function issueTokens(user: User): Promise<IssuedTokens> {
     const issuedAt = clock.nowEpochSeconds();
+    const signInExpiresAt = issuedAt + SIGN_IN_TTL_SECONDS;
     const refreshToken = mintSecret();
 
     const { token: accessToken, expiresAt } = await signAccessToken(
       { userId: user.id, email: user.email, role: user.role },
       jwtSecret,
       clock,
+      signInExpiresAt,
     );
 
     await db.batch([
@@ -76,21 +89,26 @@ export function createAuthService(deps: AuthServiceDeps) {
         tokenHash: await sha256Hex(refreshToken),
         familyId: crypto.randomUUID(),
         issuedAt,
-        expiresAt: issuedAt + REFRESH_TOKEN_TTL_SECONDS,
+        expiresAt: signInExpiresAt,
       }),
       repository.buildTouchLastLogin(user.id, clock.nowIso()),
     ]);
 
-    return { accessToken, accessTokenExpiresAt: expiresAt, refreshToken, user };
+    return { accessToken, accessTokenExpiresAt: expiresAt, refreshToken, signInExpiresAt, user };
   }
 
   /**
    * Exchanges a refresh token for a new pair, rotating it.
    *
-   * Presenting a token that has already been revoked means it was either
-   * stolen and replayed, or the client is buggy. Either way the whole family
-   * is revoked — the OAuth 2.0 Security BCP defence, and the only meaningful
-   * theft protection available without a server-side session store.
+   * The replacement inherits the presented token's expiry rather than getting a
+   * fresh one, which is what makes the eight hours a cap on the sign-in instead
+   * of an idle timeout that slides forward while somebody keeps working.
+   *
+   * A token that has already been rotated is refused, and only refused. It is
+   * far more often a client that retried or refreshed twice at once than a
+   * stolen token, and signing the legitimate holder out of every device on that
+   * evidence costs the charity more than the replay does. The detection is
+   * still logged, by user id — never by address.
    */
   async function rotate(presented: string): Promise<IssuedTokens> {
     const now = clock.nowEpochSeconds();
@@ -101,12 +119,12 @@ export function createAuthService(deps: AuthServiceDeps) {
     }
 
     if (existing.revokedAt !== null) {
-      logger.warn('refresh token replay detected; revoking family', { userId: existing.userId });
-      await repository.revokeFamily(existing.familyId, 'replay_detected', now);
+      logger.warn('refresh token presented after it was rotated', { userId: existing.userId });
       throw new UnauthorizedError('Invalid refresh token');
     }
 
-    if (existing.expiresAt <= now) {
+    const signInExpiresAt = existing.expiresAt;
+    if (signInExpiresAt <= now) {
       throw new UnauthorizedError('Invalid refresh token');
     }
 
@@ -123,6 +141,7 @@ export function createAuthService(deps: AuthServiceDeps) {
       { userId: user.id, email: user.email, role: user.role },
       jwtSecret,
       clock,
+      signInExpiresAt,
     );
 
     // Revoke-then-insert as one batch. There is no transaction to fall back
@@ -135,11 +154,17 @@ export function createAuthService(deps: AuthServiceDeps) {
         tokenHash: await sha256Hex(nextToken),
         familyId: existing.familyId,
         issuedAt: now,
-        expiresAt: now + REFRESH_TOKEN_TTL_SECONDS,
+        expiresAt: signInExpiresAt,
       }),
     ]);
 
-    return { accessToken, accessTokenExpiresAt: expiresAt, refreshToken: nextToken, user };
+    return {
+      accessToken,
+      accessTokenExpiresAt: expiresAt,
+      refreshToken: nextToken,
+      signInExpiresAt,
+      user,
+    };
   }
 
   /** Ends the session by revoking the whole family, not just the presented token. */

@@ -23,7 +23,7 @@ async function createStockItem(testApp: TestApp, token: string, name: string): P
   const response = await testApp.request('/api/v1/stock/items', {
     method: 'POST',
     headers: json(token),
-    body: JSON.stringify({ name, unit: 'tin', shelfNumber: 'A1' }),
+    body: JSON.stringify({ name, shelfNumber: 'A1' }),
   });
   const { id }: { id: string } = await response.json();
   return id;

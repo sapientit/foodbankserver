@@ -260,81 +260,105 @@ describe('recording attendance', () => {
     await markAttendance(testApp, token, parcelId, 'attended');
     const before = await db.select().from(stockLedger);
 
-    await markAttendance(testApp, token, parcelId, 'no_show');
-    const after = await db.select().from(stockLedger);
+    // The outcome is final, so the refused contradiction must leave the
+    // append-only ledger exactly as it was.
+    expect((await markAttendance(testApp, token, parcelId, 'no_show')).status).toBe(409);
 
-    // The issue entry is untouched; a compensating one was appended.
-    expect(after.length).toBe(before.length + 1);
-    for (const row of before) {
-      expect(after.find((candidate) => candidate.id === row.id)).toEqual(row);
-    }
+    expect(await db.select().from(stockLedger)).toEqual(before);
+  });
+
+  it('records the outcome without reissuing when the parcel is already in the ledger', async () => {
+    // The ledger row landed without its attendance update — the one state the
+    // guard has to repair rather than refuse, since otherwise no request could
+    // ever record this parcel.
+    const { testApp, token, parcelId, world: w } = await oneParcel();
+    const now = new Date().toISOString();
+
+    await db.insert(stockLedger).values({
+      id: crypto.randomUUID(),
+      stockItemId: w.stockItems.Beans,
+      quantityDelta: -2,
+      movementType: 'parcel_issued',
+      parcelId,
+      sessionId: w.sessionId,
+      purchaseId: null,
+      stockTakeId: null,
+      reason: null,
+      actorUserId: null,
+      occurredAt: now,
+      createdAt: now,
+    });
+
+    const result = await markAttendance(testApp, token, parcelId, 'attended');
+
+    expect(result.status).toBe(200);
+    expect(result.attendance).toBe('attended');
+    expect(result.stockMoved).toBe(false);
+    expect(
+      await db.select().from(stockLedger).where(eq(stockLedger.movementType, 'parcel_issued')),
+    ).toHaveLength(1);
+    expect((await levels(testApp, token)).Beans).toBe(98);
   });
 });
 
-describe('correcting a mis-recorded attendance', () => {
-  it('returns the stock when attended is corrected to a no-show', async () => {
+describe('a recorded outcome is final', () => {
+  it('refuses a no-show once the household has been recorded as attending', async () => {
     const { testApp, token, parcelId } = await oneParcel();
 
     await markAttendance(testApp, token, parcelId, 'attended');
+    const contradiction = await markAttendance(testApp, token, parcelId, 'no_show');
+
+    expect(contradiction.status).toBe(409);
+    // The parcel keeps the outcome it was given, and so does the stock.
     expect((await levels(testApp, token)).Beans).toBe(98);
-
-    const corrected = await markAttendance(testApp, token, parcelId, 'no_show');
-
-    expect(corrected.status).toBe(200);
-    expect(corrected.stockMoved).toBe(true);
-    expect((await levels(testApp, token)).Beans).toBe(100);
-
-    const returned = await db
-      .select()
-      .from(stockLedger)
-      .where(eq(stockLedger.movementType, 'parcel_returned'));
-    expect(returned[0]?.quantityDelta).toBe(2);
   });
 
-  it('issues the stock when a no-show is corrected to attended', async () => {
+  it('refuses attendance once the household has been recorded as a no-show', async () => {
     const { testApp, token, parcelId } = await oneParcel();
 
     await markAttendance(testApp, token, parcelId, 'no_show');
-    const corrected = await markAttendance(testApp, token, parcelId, 'attended');
+    const contradiction = await markAttendance(testApp, token, parcelId, 'attended');
 
-    expect(corrected.status).toBe(200);
-    expect((await levels(testApp, token)).Beans).toBe(98);
+    expect(contradiction.status).toBe(409);
+    expect(
+      await db.select().from(stockLedger).where(eq(stockLedger.movementType, 'parcel_issued')),
+    ).toHaveLength(0);
+    expect((await levels(testApp, token)).Beans).toBe(100);
   });
 
-  it('refuses a third flip rather than letting the ledger drift', async () => {
+  it('points the team lead at correcting the stock instead', async () => {
     const { testApp, token, parcelId } = await oneParcel();
-
     await markAttendance(testApp, token, parcelId, 'attended');
-    await markAttendance(testApp, token, parcelId, 'no_show');
 
-    // Both movement slots for this parcel are now spent. Rather than invent a
-    // compensating entry indistinguishable from a real one, refuse and point
-    // at the audited adjustment path.
-    const third = await markAttendance(testApp, token, parcelId, 'attended');
+    const response = await testApp.request(`/api/v1/parcels/${parcelId}/attendance`, {
+      method: 'POST',
+      headers: json(token),
+      body: JSON.stringify({ attendance: 'no_show' }),
+    });
+    const body: { error: { code: string; message: string } } = await response.json();
 
-    expect(third.status).toBe(409);
-    expect((await levels(testApp, token)).Beans).toBe(100);
+    expect(body.error.code).toBe('CONFLICT');
+    expect(body.error.message).toMatch(/correct the stock/i);
   });
 
-  it('the correction is still visible in the ledger', async () => {
+  it('never writes a second movement against a parcel', async () => {
+    // Nothing may undo an issue. The reversal path is gone and so is the
+    // `parcel_returned` movement type it used to write — 0011 took it out of
+    // the CHECK constraint, so a reversal could not be recorded even by hand.
     const { testApp, token, parcelId } = await oneParcel();
 
     await markAttendance(testApp, token, parcelId, 'attended');
     await markAttendance(testApp, token, parcelId, 'no_show');
 
     const entries = await db.select().from(stockLedger);
-    const parcelEntries = entries.filter((row) => row.parcelId === parcelId);
-
-    // Issue then return: the mistake and its correction are both on the record.
-    expect(parcelEntries.map((row) => row.movementType).sort()).toEqual([
-      'parcel_issued',
-      'parcel_returned',
-    ]);
+    expect(
+      entries.filter((row) => row.parcelId === parcelId).map((row) => row.movementType),
+    ).toEqual(['parcel_issued']);
   });
 });
 
 describe('confirming the session', () => {
-  it('refuses while anyone is still unrecorded', async () => {
+  it('cannot be closed while anyone is unmarked', async () => {
     const { testApp, token, world: w } = await world();
     await stockUp(testApp, token, w);
     await submitReferral(testApp, w, { adults: 1, children: 0 });

@@ -1,7 +1,10 @@
+import { TEAM_LEAD_SESSION_HORIZON_DAYS } from '../../config/constants.ts';
+import { isAdmin, type Actor } from '../../core/actor.ts';
 import type { Clock } from '../../core/clock.ts';
 import type { Patch } from '../../core/types.ts';
 import { ConflictError, NotFoundError } from '../../core/errors.ts';
-import { londonWallClockToInstant } from '../../core/time/london.ts';
+import { instantToLondonWallClock, londonWallClockToInstant } from '../../core/time/london.ts';
+import { addDays, comparePlainDates, type PlainDate } from '../../core/time/plain-date.ts';
 import type { RecurringSession, Session } from '../../db/schema/sessions.ts';
 import type {
   SessionListFilter,
@@ -110,6 +113,36 @@ export function createSessionsService({ repository, clock }: SessionsServiceDeps
     return updated;
   }
 
+  /**
+   * The staff session list, narrowed to what the caller's role may see.
+   *
+   * An admin gets the whole materialised six weeks, because rearranging the
+   * calendar that far ahead is their job. A team lead gets today through today
+   * plus six days: they run the session in front of them.
+   *
+   * The cap comes from the clock and the `Actor`, never from the request — a
+   * `to` beyond the horizon is clamped back to it rather than obeyed, so the
+   * window cannot be widened with a query parameter. Only the far end is
+   * capped: "six days in advance" is a limit on looking forward, and a team
+   * lead still needs the session just gone.
+   */
+  async function listSessions(
+    actor: Actor,
+    filter: SessionListFilter,
+  ): Promise<SessionWithBooked[]> {
+    if (isAdmin(actor)) return repository.list(filter);
+
+    // London's date, not UTC's: at 00:30 on a summer morning they differ, and
+    // taking the wrong one moves the whole horizon by a day.
+    const today = instantToLondonWallClock(clock.nowIso()).date;
+    const horizonEnd = addDays(today, TEAM_LEAD_SESSION_HORIZON_DAYS);
+
+    return repository.list({
+      ...filter,
+      to: filter.to === undefined ? horizonEnd : earlierOf(filter.to, horizonEnd),
+    });
+  }
+
   async function cancelSession(id: string, reason: string | null): Promise<Session> {
     const existing = await getSession(id);
     if (existing.status === 'cancelled') {
@@ -135,7 +168,7 @@ export function createSessionsService({ repository, clock }: SessionsServiceDeps
     /** The raw row, for callers that need the record rather than a response. */
     getSession,
     getSessionWithBooked: async (id: string) => withBooked(await getSession(id)),
-    listSessions: (filter: SessionListFilter) => repository.list(filter),
+    listSessions,
     listRecurring: () => repository.listRecurring(),
     createRecurring,
     updateRecurring,
@@ -150,6 +183,10 @@ export function createSessionsService({ repository, clock }: SessionsServiceDeps
     cancelSession: async (id: string, reason: string | null) =>
       withBooked(await cancelSession(id, reason)),
   };
+}
+
+function earlierOf(a: PlainDate, b: PlainDate): PlainDate {
+  return comparePlainDates(a, b) <= 0 ? a : b;
 }
 
 export type SessionsService = ReturnType<typeof createSessionsService>;

@@ -1,0 +1,32 @@
+-- A stock item is a name and a shelf number. The charity does not maintain a
+-- unit per item and does not want low-stock warnings, so `stock_items.unit` and
+-- `stock_items.low_stock_threshold` go.
+--
+-- ## Why this is two lines and not the rebuild drizzle-kit generated
+--
+-- drizzle-kit emits `DROP TABLE stock_items` followed by a fresh `CREATE`, on
+-- the reasoning that the table is empty. It is empty in a fresh database and in
+-- the test run, and it stops being empty the moment somebody types the forty
+-- items in. `stock_items` is a foreign-key parent to `stock_ledger`,
+-- `purchase_lines`, `stock_take_lines` and `parcel_lines`, so on a database with
+-- data that drop takes the whole item list with it and leaves every one of those
+-- children — including the append-only ledger — referring to rows that no longer
+-- exist. All four references are `ON DELETE no action`, so nothing tidies up
+-- after it either: the implicit `DELETE FROM stock_items` inside `DROP TABLE`
+-- raises the deferred foreign-key counter and the migration rolls back, which is
+-- the good outcome. The bad one is that it passes on the empty database it was
+-- tested against and is only wrong in production.
+--
+-- Neither column needs a rebuild anyway. SQLite refuses
+-- `ALTER TABLE ... DROP COLUMN` only for a column named in an index, a `CHECK`,
+-- a `FOREIGN KEY`, a generated column or the primary key. The indexes here cover
+-- `name_normalised` and `shelf_sort_key`, the single `CHECK` covers `is_active`,
+-- and the table has no foreign keys of its own — so both columns come out in
+-- place, with every row and every child reference untouched.
+--
+-- Same reasoning as 0009 applied to `referrals.delivery_address`. Read 0008
+-- before assuming a rebuild is needed: it costs a `DROP TABLE` on a parent, and
+-- what drizzle-kit wraps that in (`PRAGMA foreign_keys=OFF`) is a silent no-op
+-- on D1.
+ALTER TABLE `stock_items` DROP COLUMN `unit`;--> statement-breakpoint
+ALTER TABLE `stock_items` DROP COLUMN `low_stock_threshold`;

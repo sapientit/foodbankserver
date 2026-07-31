@@ -41,7 +41,7 @@ export async function setUpPickingWorld(
     const response = await testApp.request('/api/v1/stock/items', {
       method: 'POST',
       headers: json(token),
-      body: JSON.stringify({ name, unit: 'tin', shelfNumber: shelf }),
+      body: JSON.stringify({ name, shelfNumber: shelf }),
     });
     const { id }: { id: string } = await response.json();
     created[name] = id;

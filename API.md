@@ -38,8 +38,9 @@ changes nothing.
 **Two rules about the tokens.**
 
 Hold the access token **in memory only**. Not `localStorage`, not a cookie you
-set yourself. It lasts fifteen minutes; losing it on a page reload is fine
-because refresh recovers it.
+set yourself. It lasts fifteen minutes — or until the sign-in ends, if that is
+sooner, so the last one of a sign-in may be a short one. Losing it on a page
+reload is fine because refresh recovers it.
 
 Never touch the refresh cookie. It is `HttpOnly`, so JavaScript cannot read it,
 and it is scoped to `/api/v1/auth` so it is not attached to any other request.
@@ -59,11 +60,21 @@ POST /api/v1/auth/refresh        (no body — the cookie carries it)
 
 Do this in one place — an interceptor or fetch wrapper — not per call site.
 
+**A sign-in lasts eight hours, counted from when the user signed in.** Refresh
+keeps the access token alive within that window but never extends it: the
+replacement refresh token carries the same expiry as the one it replaced. So a
+`401` from `/auth/refresh` means the eight hours are up (or the cookie is gone)
+and the user genuinely has to sign in again. There is no idle timeout — a
+sign-in ends eight hours in whether they were working or not. Do not build a
+"keep me signed in" affordance; there is nothing behind it.
+
 **Refresh exactly once per failure, and never in parallel.** Each refresh
-rotates the token. If two requests 401 at the same moment and both refresh, the
-second presents a token the first already rotated, and the server treats that as
-theft: it **revokes the entire family** and signs the user out everywhere. Queue
-concurrent 401s behind a single in-flight refresh.
+rotates the token, and a rotated token is spent: presenting it again gets a
+`401`. If two requests 401 at the same moment and both refresh, the second gets
+that `401` — but the sign-in is untouched and the cookie the first refresh set
+is still good, so **do not sign the user out on it**. Retry instead. Queueing
+concurrent 401s behind a single in-flight refresh avoids the situation
+altogether and is still the right shape.
 
 On reload, call `POST /api/v1/auth/refresh` to rebuild UI state from the cookie —
 not `/auth/me`. `/me` sits behind `requireAuth`, and after a reload there is no
@@ -90,7 +101,12 @@ POST  /api/v1/users          { email, displayName, role }   → 201
 PATCH /api/v1/users/{id}     { displayName?, role?, isActive? }
 ```
 
-Three things to build around:
+Four things to build around:
+
+**There is no signup screen to build.** Accounts are invitation-only: an admin
+creates one here and nothing else ever does. A fresh deployment arrives with a
+single admin account already seeded, which is how the first real one gets made
+— so there is no "first run" flow either.
 
 **Email is not amendable.** It is the login identity and what the audit trail
 means by "who". To correct one, deactivate the account and create the right one.
@@ -118,6 +134,7 @@ Two roles. Use them for menus; **never for access control.**
 | ----------------------------------------------- | ------- | ----------- |
 | Run a session: pick lists, printing, attendance | ✅      | ✅          |
 | Read sessions, stock, referrals, model parcels  | ✅      | ✅          |
+| See the session list more than six days ahead   | ✅      | ❌          |
 | Shops, stock takes, stock corrections           | ✅      | ✅          |
 | Create or amend sessions and referrals          | ✅      | ❌          |
 | Maintain the stock item list                    | ✅      | ❌          |
@@ -139,6 +156,38 @@ types — `openapi-typescript` already will.
 Why: the reason for referral is the most sensitive thing in the system. It can
 mean financial hardship, domestic abuse, or immigration status. A picker needs
 household size, not that.
+
+### How far ahead each role sees
+
+`GET /api/v1/sessions` returns a different window depending on who asks:
+
+| Caller                      | Window                                            |
+| --------------------------- | ------------------------------------------------- |
+| `admin`                     | everything materialised — six weeks               |
+| `team_lead`                 | today → today + 6 days, inclusive                 |
+| nobody (`/public/sessions`) | today → today + 14 days, and only if it has space |
+
+Counted in `Europe/London`, so the window turns over at London midnight, not at
+`00:00Z`.
+
+The cap comes off the access token, so **`from` and `to` cannot widen it.** A
+`to` past a team lead's horizon is clamped back to it — you get a shorter list,
+not a `403`. A `from` past it returns `{ "sessions": [] }`. A narrower `to`
+still narrows. Only the far end is capped: a team lead can still list the
+sessions just gone.
+
+Do not build a team lead's calendar as "six weeks, some of it empty" — from
+their token there is nothing beyond day six to fetch. An admin's planning view
+and a team lead's shift view are different screens.
+
+The public window being **longer** than the team lead's is deliberate, not a
+bug: a referrer needs notice to book somebody in, a team lead needs the shift
+in front of them.
+
+**Not capped:** `GET /api/v1/sessions/{id}` and every pick-list route. A team
+lead holding a session id can still open it and its pick list however far out
+it is. That is Q14 in `OPEN-QUESTIONS.md` and unsettled — do not build a
+screen that relies on either reading.
 
 ---
 
@@ -278,18 +327,52 @@ POST /api/v1/parcels/{id}/attendance   { "attendance": "attended" }
 - `attended` issues the parcel and decrements stock.
 - `no_show` moves nothing — the parcel is unpacked and nothing was given away.
 
+A delivery uses the same two values. _Delivered_ is `attended` and _not in_ is
+`no_show`; label them for the driver if that reads better on the screen, but do
+not expect a third or fourth state.
+
 **Submitting twice is safe.** `alreadyRecorded: true` means it was already in
 that state and stock did not move again. You do not need to disable the button,
 though doing so is kinder.
 
-A mistake can be corrected **once in each direction** — attended → no-show
-returns the stock. A third change is refused with `409` and needs a stock
-adjustment (`POST /stock/adjustments`, which a team lead may also do). Surface
-that message rather than swallowing it.
+**The outcome is final.** Submitting the _other_ value afterwards is refused with
+`409` — a confirmed collection or delivery cannot be undone. Putting a mis-tap
+right is a stock adjustment (`POST /stock/adjustments`, which a team lead may
+also do). Surface that message rather than swallowing it, and confirm before
+sending in the first place: this is the one tap in the app that cannot be taken
+back.
 
-`POST /sessions/{sessionId}/confirm` refuses while anyone is still `pending`, and
-returns `details.pendingPickNumbers` — show those numbers so the team lead knows
-who is missing.
+`POST /sessions/{sessionId}/confirm` closes the session, and refuses while anyone
+is still `pending`, returning `details.pendingPickNumbers` — show those numbers
+so the team lead knows who is missing. There is no override: everybody is marked
+one way or the other before the session closes.
+
+### How stock moves
+
+Six `movementType` values, and there will not quietly be a seventh — they are a
+`CHECK` constraint on a table that cannot be altered without a rebuild.
+
+| Value             | Written by                                               |
+| ----------------- | -------------------------------------------------------- |
+| `opening_balance` | a hand adjustment, when an item first goes on the list   |
+| `purchase`        | `POST /stock/purchases` — a shop                         |
+| `donation`        | a hand adjustment                                        |
+| `parcel_issued`   | attendance, when a household attends or a delivery lands |
+| `wastage`         | a hand adjustment — anything thrown away, for any reason |
+| `correction`      | a hand adjustment, and a stock take's variance           |
+
+`POST /stock/adjustments` accepts **all six**, not just the hand-typed four:
+stock arriving without a recorded shop, or a parcel handed over outside a
+session, both happen in a warehouse. Every adjustment requires a `reason`.
+
+Two things worth knowing when you build a report:
+
+- **Nothing is ever returned to stock.** There is no reversal movement. A parcel
+  that has been issued stays issued and a mistake becomes a `correction`.
+- **A stock take's variance is a `correction`** carrying that stock take's id, so
+  you can still find it — but the movement type alone will not separate it from a
+  team lead's hand correction. Whether it should is **Q13** in
+  `OPEN-QUESTIONS.md`, so do not build a report that depends on the answer yet.
 
 ---
 

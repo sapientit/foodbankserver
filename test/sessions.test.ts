@@ -400,6 +400,180 @@ describe('session occupancy', () => {
   });
 });
 
+/**
+ * How far ahead each role sees.
+ *
+ * The clock is deliberately 23:30 UTC on 21 October 2026 — 00:30 the following
+ * morning in London, which is still on BST. So "today" is 22 October in London
+ * and 21 October in UTC, and every boundary below moves by a day if the wrong
+ * one is taken. The six-day window also spans the 25 October changeover back to
+ * GMT, so a horizon built out of instants rather than calendar dates drifts.
+ */
+describe('staff session horizon', () => {
+  const LATE_EVENING_UTC = '2026-10-21T23:30:00.000Z'; // 00:30 on 22 October, London
+
+  const TODAY = '2026-10-22';
+  const TOMORROW = '2026-10-23';
+  const SIX_DAYS_OUT = '2026-10-28'; // the last day a team lead may see
+  const SEVEN_DAYS_OUT = '2026-10-29';
+  const FIVE_WEEKS_OUT = '2026-11-26';
+  const YESTERDAY = '2026-10-21';
+
+  const ALL_DATES = [
+    YESTERDAY,
+    TODAY,
+    TOMORROW,
+    SIX_DAYS_OUT,
+    SEVEN_DAYS_OUT,
+    FIVE_WEEKS_OUT,
+  ] as const;
+
+  beforeEach(async () => {
+    await db.delete(sessions);
+    await db.delete(recurringSessions);
+    await db.delete(systemJobs);
+    await db.delete(refreshTokens);
+    await db.delete(users);
+  });
+
+  /** One ad hoc session on each date above, created by an admin. */
+  async function seedCalendar(): Promise<{ testApp: TestApp; adminToken: string }> {
+    const testApp = buildTestApp({ clock: fixedClock(LATE_EVENING_UTC) });
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+
+    for (const sessionDate of ALL_DATES) {
+      const created = await testApp.request('/api/v1/sessions', {
+        method: 'POST',
+        headers: { ...authHeaders(accessToken), 'content-type': 'application/json' },
+        body: JSON.stringify({
+          sessionDate,
+          startTime: '10:00',
+          durationMinutes: 120,
+          location: 'Church Hall',
+        }),
+      });
+      expect(created.status).toBe(201);
+    }
+
+    return { testApp, adminToken: accessToken };
+  }
+
+  async function listDates(testApp: TestApp, token: string, query = ''): Promise<string[]> {
+    const response = await testApp.request(`/api/v1/sessions${query}`, {
+      headers: authHeaders(token),
+    });
+    expect(response.status).toBe(200);
+    const body: { sessions: { sessionDate: string }[] } = await response.json();
+    return body.sessions.map((s) => s.sessionDate);
+  }
+
+  it('shows an admin a session five weeks out', async () => {
+    const { testApp, adminToken } = await seedCalendar();
+
+    expect(await listDates(testApp, adminToken)).toEqual([...ALL_DATES]);
+  });
+
+  it('does not show a team lead a session five weeks out', async () => {
+    const { testApp } = await seedCalendar();
+    const { accessToken } = await devLogin(testApp, {
+      email: 'lead@foodbank.org',
+      role: 'team_lead',
+    });
+
+    expect(await listDates(testApp, accessToken)).not.toContain(FIVE_WEEKS_OUT);
+  });
+
+  it('shows a team lead the session tomorrow and the one six days out', async () => {
+    const { testApp } = await seedCalendar();
+    const { accessToken } = await devLogin(testApp, {
+      email: 'lead@foodbank.org',
+      role: 'team_lead',
+    });
+
+    const visible = await listDates(testApp, accessToken);
+
+    expect(visible).toContain(TOMORROW);
+    expect(visible).toContain(SIX_DAYS_OUT);
+    expect(visible).toContain(TODAY);
+  });
+
+  it('does not show a team lead the session seven days out', async () => {
+    const { testApp } = await seedCalendar();
+    const { accessToken } = await devLogin(testApp, {
+      email: 'lead@foodbank.org',
+      role: 'team_lead',
+    });
+
+    expect(await listDates(testApp, accessToken)).not.toContain(SEVEN_DAYS_OUT);
+  });
+
+  it('counts the six days from the London date, not the UTC one', async () => {
+    const { testApp } = await seedCalendar();
+    const { accessToken } = await devLogin(testApp, {
+      email: 'lead@foodbank.org',
+      role: 'team_lead',
+    });
+
+    // It is 21 October in UTC and 22 October in London. Counting from the UTC
+    // date would end the window on 27 October and drop 28 October, which is
+    // the whole of the boundary this asserts.
+    expect(await listDates(testApp, accessToken)).toEqual([
+      YESTERDAY,
+      TODAY,
+      TOMORROW,
+      SIX_DAYS_OUT,
+    ]);
+  });
+
+  it('does not let a team lead widen the window with a query parameter', async () => {
+    const { testApp } = await seedCalendar();
+    const { accessToken } = await devLogin(testApp, {
+      email: 'lead@foodbank.org',
+      role: 'team_lead',
+    });
+
+    // Asking for the whole year is clamped back to the horizon, not obeyed.
+    const widened = await listDates(testApp, accessToken, '?to=2026-12-31');
+    expect(widened).not.toContain(SEVEN_DAYS_OUT);
+    expect(widened).not.toContain(FIVE_WEEKS_OUT);
+
+    // And a window entirely beyond the horizon returns nothing at all.
+    expect(await listDates(testApp, accessToken, '?from=2026-11-01&to=2026-11-30')).toEqual([]);
+  });
+
+  it('narrows to a shorter window a team lead asks for', async () => {
+    const { testApp } = await seedCalendar();
+    const { accessToken } = await devLogin(testApp, {
+      email: 'lead@foodbank.org',
+      role: 'team_lead',
+    });
+
+    // The cap is a ceiling, not a fixed window: a narrower `to` still applies.
+    expect(await listDates(testApp, accessToken, `?from=${TODAY}&to=${TOMORROW}`)).toEqual([
+      TODAY,
+      TOMORROW,
+    ]);
+  });
+
+  it('still offers the public list fourteen days, further ahead than a team lead sees', async () => {
+    const { testApp } = await seedCalendar();
+
+    const response = await testApp.request('/api/v1/public/sessions');
+    expect(response.status).toBe(200);
+    const body: { sessions: { sessionDate: string }[] } = await response.json();
+
+    // Fourteen days from 22 October reaches 5 November: past the team lead's
+    // horizon and short of the admin's. A referrer booking a slot and a team
+    // lead running a shift are different jobs with different windows.
+    expect(body.sessions.map((s) => s.sessionDate)).toEqual([
+      TODAY,
+      TOMORROW,
+      SIX_DAYS_OUT,
+      SEVEN_DAYS_OUT,
+    ]);
+  });
+});
+
 describe('session route authorisation', () => {
   beforeEach(async () => {
     await db.delete(sessions);

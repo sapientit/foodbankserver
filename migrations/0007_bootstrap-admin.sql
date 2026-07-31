@@ -11,6 +11,12 @@
 -- `ON CONFLICT DO NOTHING` makes it safe on a database that already has this
 -- address, and — more to the point — stops a re-run resurrecting an account
 -- that an admin has since renamed, demoted or deactivated.
+--
+-- `pete@x.com` is a stand-in, not the charity's address. It is replaced when
+-- sign-in moves to Google, which is the moment it starts to matter: a Google
+-- deployment resolves accounts by a real Google identity, and this row holds
+-- none. Whoever does that work replaces the seed in the same change — see the
+-- #Login section of INITIAL_SPEC1.txt.
 INSERT INTO users (
 	id,
 	email,

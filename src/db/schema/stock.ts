@@ -12,20 +12,22 @@ import { sessions } from './sessions.ts';
 import { users } from './users.ts';
 
 /**
- * Enumerated generously. `donation`, `wastage` and `expiry` are unused in v1,
- * and `parcel_returned` may never be used at all given stock moves on
- * attendance — but extending a CHECK constraint later means rebuilding a
- * ledger that grows by ~47,000 rows a year.
+ * The six ways stock moves, as the charity names them: an opening balance, a
+ * shop (`purchase`), a donation, a parcel given to a client (`parcel_issued`),
+ * wastage, and a hand correction.
+ *
+ * This list is deliberately short rather than generous. It was once nine —
+ * `expiry`, `parcel_returned` and `stock_take_adjustment` also — and 0011
+ * rebuilt the ledger to take them out. Adding one back costs another rebuild of
+ * a table that grows by ~47,000 rows a year, so a seventh needs asking about,
+ * not assuming.
  */
 export const STOCK_MOVEMENT_TYPES = [
   'opening_balance',
   'purchase',
   'donation',
   'parcel_issued',
-  'parcel_returned',
-  'stock_take_adjustment',
   'wastage',
-  'expiry',
   'correction',
 ] as const;
 export type StockMovementType = (typeof STOCK_MOVEMENT_TYPES)[number];
@@ -40,13 +42,10 @@ export const stockItems = sqliteTable(
     name: text('name').notNull(),
     /** `lower(trim(name))`. The autocomplete match column, and the uniqueness key. */
     nameNormalised: text('name_normalised').notNull().unique(),
-    /** 'tin', 'packet', 'kg', 'box'. Free text: the charity's vocabulary, not ours. */
-    unit: text('unit').notNull(),
     /** As displayed: 'A1', '12b'. Alphanumeric, because shelves are labelled by people. */
     shelfNumber: text('shelf_number').notNull(),
     /** Zero-padded so 'A2' sorts before 'A10'. Computed on write in TypeScript. */
     shelfSortKey: text('shelf_sort_key').notNull(),
-    lowStockThreshold: integer('low_stock_threshold'),
     isActive: integer('is_active').notNull().default(1),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
@@ -195,7 +194,7 @@ export const stockLedger = sqliteTable(
     check('stock_ledger_delta_non_zero', sql`${table.quantityDelta} <> 0`),
     check(
       'stock_ledger_movement_type_valid',
-      sql`${table.movementType} IN ('opening_balance', 'purchase', 'donation', 'parcel_issued', 'parcel_returned', 'stock_take_adjustment', 'wastage', 'expiry', 'correction')`,
+      sql`${table.movementType} IN ('opening_balance', 'purchase', 'donation', 'parcel_issued', 'wastage', 'correction')`,
     ),
   ],
 );

@@ -66,121 +66,6 @@ what the charity is comfortable defending, not a technical one.
 
 ---
 
-## Q3 — How many times may an attendance mistake be corrected?
-
-`Status: open` · `Raised by: server`
-
-Currently: once in each direction. Attended → no-show → attended is fine; a third change is refused
-with a `409` pointing at the stock adjustment path.
-
-The limit exists because every flip moves stock, and unlimited flips produce compensating ledger
-entries that cannot be told apart from real movements. But "two" is a number I chose. The
-alternatives are unlimited flips (simpler for the team lead, messier ledger) or none at all after
-the first (everything goes through an audited adjustment).
-
-**A:**
-There is no correction. Once a delivery/collection is confirmed it cannot be undone.
-
----
-
-## Q5 — How long should someone stay signed in?
-
-`Status: open` · `Raised by: server`
-
-Currently: 15-minute access token, refreshed silently in the background, so in practice a user stays
-signed in until they stop using the app. A refresh token presented twice is treated as theft and
-signs that user out **everywhere**, including the legitimate holder.
-
-The spec asks for "an expiring security token, with refresh tokens etc." and leaves every number to
-us. Two things worth a human view: whether a team lead halfway through recording attendance on a
-warehouse tablet with poor signal can tolerate being signed out, and whether the aggressive
-replay response is proportionate for this charity.
-
-**A:**
-This should not be aggressive. An 8 hour timeout would be acceptable.
----
-
-## Q6 — Who is allowed to log in, and who creates the accounts?
-
-`Status: open` · `Raised by: server`
-
-The spec says how someone proves who they are and never says who is allowed in. The build decided:
-invitation-only. Signing in never creates an account; an admin adds you first; there is no
-self-service signup and no delete, only deactivation. `migrations/0007_bootstrap-admin.sql` seeds
-`pete@x.com`, because otherwise a fresh database has nobody who can create anybody.
-
-That is the safe default for a system holding this data, but it is a whole model nobody asked for.
-Also: **is `pete@x.com` the right seed address?** It is currently in a migration, which means it is
-in the schema history of every deployment.
-
-**A:**
-Pete@x.com will get replaced when we use google authentication.
-
----
-
-## Q7 — Does the charity want low-stock warnings?
-
-`Status: open` · `Raised by: server`
-
-`lowStockThreshold` per item and an `isLow` flag on stock levels. Entirely invented — the spec has
-no notion of running low.
-
-Harmless and probably useful, but it is a column, an input on the item form, and a decision per item
-for all 40 of them. If nobody will set the thresholds it is clutter on the maintenance screen.
-
-**A:**
-No
----
-
-## Q8 — Are these the right reasons for a hand correction?
-
-`Status: open` · `Raised by: server`
-
-`donation`, `wastage`, `expiry`, `correction`, `opening_balance`. Guesses at how stock leaves other
-than through a parcel.
-
-Worth asking because these are the categories any future report on waste or donations will be able
-to produce, and they are a `CHECK` constraint — on D1, adding one later means a table rebuild, so
-they were enumerated generously on purpose. Missing categories are the expensive kind of wrong here.
-Donations in particular: does the charity receive food it does not buy, and does anyone need to
-count it separately from a shop?
-
-**A:**
-Donations, Shopping, given to clients, wastage, correction and opening balance are the only ones we need.
-
----
-
-## Q9 — Should confirming a session be blocked, or just warned about?
-
-`Status: open` · `Raised by: server`
-
-Currently refused with a `409` while any household is still unmarked, listing the pick numbers.
-
-The reasoning is that a session closed with people unaccounted for has wrong stock figures. But the
-spec has no session-close step at all, and a hard block is unkind if somebody walks out mid-session
-and the team lead genuinely cannot say what happened. A warning the team lead can override, with the
-unmarked ones defaulting to no-show, is the obvious alternative.
-
-**A:**
-Yes - we should have a session close and every client must be either attended (or delivered) or absent (or not in) before the session can be closed.
-
----
-
-## Q10 — How far ahead should staff see sessions?
-
-`Status: open` · `Raised by: server`
-
-Six weeks, generated nightly. The spec fixes the **public** window at two weeks and says nothing
-about the staff view.
-
-Six is arbitrary. It matters a little because a re-timed or cancelled occurrence can only be edited
-once it exists, so the horizon is really "how far ahead can the charity rearrange its calendar".
-
-**A:**
-Admin can see the full 6 weeks. Team leads can only see 6 days in advance.
-
----
-
 ## Q12 — When personal data is purged, may any of the form answers be kept?
 
 `Status: open` · `Raised by: server` · `Blocks: nothing today — the purge is dormant until Q2`
@@ -196,5 +81,59 @@ wanted to report on.
 
 If some answers should survive a purge, the server needs to be told which, and by something more
 durable than a client that may have moved on several form versions by then.
+
+**A:**
+
+---
+
+## Q13 — Should a stock take's variance be told apart from a hand correction?
+
+`Status: open` · `Raised by: server` · `Blocks: nothing today — the code works either way`
+
+Closing Q8 fixed the ways stock moves at six: opening balance, shop, donation, parcel given to a
+client, wastage, correction. That answer was given to a question about the reasons for **a hand
+correction**, and there is one movement it did not obviously have in view: the row a stock take
+writes by itself.
+
+A stock take records a count, and the difference between the count and the figure the system holds
+becomes a ledger entry. There used to be a seventh type, `stock_take_adjustment`, for exactly that.
+With six to choose from, **the code now writes `correction`** — it is the only one it can be. Those
+rows still carry the id of the stock take they came from, so a report could still find them, but the
+movement type itself no longer separates _we counted the shelf and were two short_ from _a team
+leader put a mis-tap right_.
+
+Worth a human view because a stock take variance is the number that says how well the stock figures
+are holding up, and because putting a seventh value back costs a rebuild of the whole ledger — the
+same reason the original list was enumerated generously in the first place. If the two never need
+separating in a report, nothing needs doing and this can be closed as it stands.
+
+**A:**
+
+---
+
+## Q14 — Does the team lead's six-day horizon stop them opening a session further out?
+
+`Status: open` · `Raised by: server` · `Blocks: nothing today — the code works either way`
+
+Closing Q10 gave a team lead a six-day window and an admin the full six weeks. That answer was
+about what staff can **see**, and the obvious place it lands is the session **list**. It does not
+say whether it is a limit on _looking_ or a limit on _reaching_.
+
+**Where the horizon is enforced today.** `GET /api/v1/sessions` is capped: a team lead gets today
+through today plus six, and a `to` beyond that is clamped rather than obeyed. Nothing else is.
+`GET /api/v1/sessions/{id}`, `GET`/`POST /api/v1/sessions/{sessionId}/pick-list`,
+`GET /api/v1/pick-lists/{id}` and its print, divergence, parcel and confirm routes, and
+`POST /api/v1/sessions/{sessionId}/confirm` all serve a team lead any session id they hold.
+
+So a team lead cannot browse to a session eight days out, but if they have its id they can open it
+and generate its pick list. Whether that is a hole or the point is a judgement about how the
+warehouse works, not about the code. Capping everything is simpler to describe and harder to
+explain away; but it would also stop a team lead getting a fortnight's picking ready in advance,
+and a session's pick list is the thing they prepare from. Preparing early may be exactly the
+practice, or it may be an administrator's job to hand out.
+
+If the horizon should apply everywhere, the enforcement moves down into the session lookup and the
+pick-list routes inherit it. If it should not, nothing needs doing and the list stays the only
+place it lives.
 
 **A:**

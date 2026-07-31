@@ -9,7 +9,11 @@ Standard sessions repeat weekly.  They have a default capacity of 25.  It is pos
 
 Capacity counts households, not people.  A session of capacity 25 takes 25 referrals however large the households are, so it may well feed a hundred people.  A referral occupies one place whether it is a single person or a family of six, because it is one parcel to pick and one person coming to collect it.  A cancelled referral gives its place back.
 
-A list of available sessions for the next 2 weeks can be made without signon. A session is not available if it is at or over capacity.  A list of all sessions is available after login.
+A list of available sessions for the next 2 weeks can be made without signon. A session is not available if it is at or over capacity.
+
+After signon there is a list of sessions, and how far ahead it reaches depends on who is looking.  An administrator sees the whole six weeks that have been generated, because rearranging the calendar that far ahead is their job and they cannot move a session they cannot see.  A team leader sees six days, counted from today and including it, so they have the week of shifts in front of them and nothing else.  A team leader runs the session that is coming; the calendar six weeks out is a planning tool and it belongs to the administrator.  The six days are a limit on looking forward and not on looking back - the session just gone is still on a team leader's list.
+
+The two week public list is therefore longer than the team leader's six days, which is deliberate rather than an oversight.  They answer different questions: a referrer needs to know which sessions they can still book somebody onto, and needs enough notice to arrange it, while a team leader needs the shifts they are about to work.
 
 #Authorised referrers
 Referrers can be authorised either by full email address or a star and domain name.(*@guildford.gov.uk).  There is no check that they are who they say they are - only that the email address they enter is valid.
@@ -35,6 +39,14 @@ Administrators can amend or cancel referrals or move them to another session (ev
 #Login
 Authentication will eventually be via a Google id.  Initial version will be a dummy signon page with no validation, but this should still generate an expiring security token, with refresh tokens etc.
 
+A signon lasts 8 hours and then the person signs in again.  The 8 hours are counted from the moment they signed in and carrying on working does not push them back, so a signon that started at eight in the morning has ended by four in the afternoon whatever has happened in between.  Eight hours covers a session in the warehouse without a team leader being thrown out halfway through marking attendance, and it means a tablet left on a shared bench is not still signed in the next morning.  Within those 8 hours the client renews its security token quietly in the background, so nobody is asked to sign in again while they are working.
+
+The timeout should not be aggressive in any other way.  In particular, a security token that has already been renewed is refused if it is presented again - it is spent, and one renewal is all it is good for - but the person holding the live signon carries on working.  A repeated request is far more often a client that retried than a stolen token, and signing somebody out of every device they use on that evidence disrupts the charity more than the thing it is guarding against.
+
+Only people the food bank has already given an account to can sign in.  Signing in never creates an account: an administrator adds the person first, and an address with no account is refused however convincingly they proved who they are.  There is no self-service signup.  Accounts are never deleted, because the stock records, the audit trail and the attendance records all name the people who made them; an account that is no longer needed is made inactive instead, and an inactive account cannot sign in.
+
+A new database starts with a single administrator account already in it, because otherwise there is nobody who could create the first one and nobody who could create the person who creates everyone else.  That account is pete@x.com for the time being.  It is a stand-in rather than the charity's own address, and it is replaced when signon moves to Google.
+
 #Roles
 There are two roles, administrator and team leader.
 
@@ -47,8 +59,10 @@ The stock item list is the one part of stock that is administrator only.  Adding
 #Stock maintenance
 There are about 40 stock items (with a maintenance facility to amend them).  After a shop, there will be a facility to type sug and it will find sugar and autocomplete.  Then a field for how many we bought.  This will add to the existing stock.
 There will also be a list screen with items and current stock that can be maintained for a stock take.
-Stock is maintained in a certain place in the warehouse. So each stock item has a "shelf number" .  The list should be by shelf number
+Stock is maintained in a certain place in the warehouse. So each stock item has a "shelf number" .  The list should be by shelf number.  A stock item is a name and a shelf number and nothing else.  There is no unit held against an item, and no low stock warning: nobody is going to keep forty thresholds up to date, and a warning nobody has set is clutter on a maintenance screen rather than help.
 The shop and the stock take are both done by a team leader.  Amending the item list itself is administrator only.
+
+Stock moves in six ways and only these six, because they are the ones the charity would ever want counted or reported on: an opening balance when an item first goes on the list, a shop, a donation, a parcel given to a client, wastage, and a correction.  A shop and a parcel given to a client are recorded by the screens that do those jobs; the other four are typed in by hand, and a hand correction always carries a reason, because it is the only movement that does not explain itself.  Food thrown away is wastage, whatever the reason it was thrown away.  Nothing is ever given back: a parcel that has been handed over stays handed over, and a mistake is put right by correcting the stock rather than by reversing the movement.
 
 #Picking list
 Against a session there will be an option to view picking list.  If that picking list has not been created yet, then it will be done at this point.  For each referral, the number of adults and children will result via a series of rules into a model picking list. 
@@ -68,5 +82,8 @@ A referral must have at least one adult, so every referral maps to a real grid e
 The model picking lists are not versioned.  When a picking list is created for a session, the contents of the relevant model are copied onto each referral's parcel.  From then on that parcel holds its own contents and is unaffected by any later change to the model or the grid.  The parcel does not record which model it came from - only what is in it.
 
 #Session maintenance
-After the session, each referee is marked as attended or did not show.  If they attended, the stock is updated.  Otherwise the parcel will be unpacked.
+After the session, each referee is marked as attended or did not show.  A delivery is marked the same way - delivered counts as attended and not in counts as did not show, because they are the same two outcomes under the names the round uses.  If they attended, the stock is updated.  Otherwise the parcel will be unpacked.
 
+There is no correction.  Once a collection or a delivery has been confirmed it cannot be undone, so marking a referee the other way afterwards is refused.  A mis-tap is put right by correcting the stock by hand, which leaves the correction on the record instead of quietly reversing a movement that really happened.  Marking the same outcome again is not a change and is always accepted, because a team leader will tap twice and the stock must still only move once.
+
+The session is then closed.  Every referee on the session must be marked either attended (or delivered) or absent (or not in) before the session can be closed, so a session is never closed with people unaccounted for and stock figures that do not add up.  If anyone is still unmarked the close is refused and the ones outstanding are named.

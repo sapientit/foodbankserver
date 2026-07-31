@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { ACCESS_TOKEN_TTL_SECONDS, JWT_CLOCK_LEEWAY_SECONDS } from '../src/config/constants.ts';
+import {
+  ACCESS_TOKEN_TTL_SECONDS,
+  JWT_CLOCK_LEEWAY_SECONDS,
+  SIGN_IN_TTL_SECONDS,
+} from '../src/config/constants.ts';
 import { fixedClock } from '../src/core/clock.ts';
 import { encodeBase64UrlText } from '../src/core/base64url.ts';
 import { signAccessToken, verifyAccessToken } from '../src/modules/auth/token.service.ts';
@@ -9,9 +13,19 @@ const SUBJECT = { userId: 'user-1', email: 'lead@example.org', role: 'team_lead'
 
 describe('access tokens', () => {
   const clock = fixedClock('2026-08-04T09:00:00.000Z');
+  /** Far enough away that the fifteen-minute lifetime is what binds. */
+  const SIGN_IN_END = clock.nowEpochSeconds() + SIGN_IN_TTL_SECONDS;
+
+  it('never signs a token that outlives the sign-in it belongs to', async () => {
+    const nearlyOver = clock.nowEpochSeconds() + 30;
+
+    const { expiresAt } = await signAccessToken(SUBJECT, SECRET, clock, nearlyOver);
+
+    expect(expiresAt).toBe(nearlyOver);
+  });
 
   it('round-trips its claims', async () => {
-    const { token, expiresAt } = await signAccessToken(SUBJECT, SECRET, clock);
+    const { token, expiresAt } = await signAccessToken(SUBJECT, SECRET, clock, SIGN_IN_END);
     const claims = await verifyAccessToken(token, SECRET, clock);
 
     expect(claims.sub).toBe('user-1');
@@ -22,7 +36,7 @@ describe('access tokens', () => {
   });
 
   it('rejects a token signed with a different secret', async () => {
-    const { token } = await signAccessToken(SUBJECT, SECRET, clock);
+    const { token } = await signAccessToken(SUBJECT, SECRET, clock, SIGN_IN_END);
 
     await expect(
       verifyAccessToken(token, 'another-secret-of-at-least-32-characters', clock),
@@ -30,7 +44,7 @@ describe('access tokens', () => {
   });
 
   it('rejects a tampered payload', async () => {
-    const { token } = await signAccessToken(SUBJECT, SECRET, clock);
+    const { token } = await signAccessToken(SUBJECT, SECRET, clock, SIGN_IN_END);
     const [header, payload, signature] = token.split('.');
 
     // Promote the team lead to admin without re-signing.
@@ -44,7 +58,7 @@ describe('access tokens', () => {
   });
 
   it('rejects an expired token once past the clock leeway', async () => {
-    const { token } = await signAccessToken(SUBJECT, SECRET, clock);
+    const { token } = await signAccessToken(SUBJECT, SECRET, clock, SIGN_IN_END);
     const later = fixedClock('2026-08-04T09:16:01.000Z');
 
     // Still inside the leeway a moment earlier.
@@ -82,7 +96,7 @@ describe('access tokens', () => {
   });
 
   it('gives the same message whatever the failure, so probing learns nothing', async () => {
-    const { token } = await signAccessToken(SUBJECT, SECRET, clock);
+    const { token } = await signAccessToken(SUBJECT, SECRET, clock, SIGN_IN_END);
     const expired = fixedClock('2026-08-04T10:00:00.000Z');
 
     const messages = await Promise.all(

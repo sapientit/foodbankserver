@@ -144,8 +144,9 @@ export function pickListRoutes(): Hono<AppEnv> {
    * Whether a household turned up.
    *
    * Attended issues the parcel and decrements stock; a no-show moves nothing,
-   * because nothing was given away. Submitting the same outcome twice is safe:
-   * see `attendance.service.ts`.
+   * because nothing was given away. Submitting the same outcome twice is safe;
+   * submitting the other one is refused, because an outcome is final. See
+   * `attendance.service.ts`.
    */
   routes.post('/parcels/:id/attendance', ...staff, async (c) => {
     const { attendance } = await parseJsonBody(c, attendanceSchema);

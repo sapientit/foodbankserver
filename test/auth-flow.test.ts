@@ -1,11 +1,26 @@
 import { env } from 'cloudflare:workers';
 import { eq } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { fixedClock } from '../src/core/clock.ts';
 import { createDatabase } from '../src/db/client.ts';
 import { refreshTokens, users } from '../src/db/schema/users.ts';
-import { authHeaders, buildTestApp, cookieHeader, devLogin, seedUser } from './helpers/app.ts';
+import {
+  authHeaders,
+  buildTestApp,
+  cookieHeader,
+  devLogin,
+  extractRefreshCookie,
+  seedUser,
+} from './helpers/app.ts';
 
 const db = createDatabase(env.DB);
+
+/**
+ * Fake timers do not work in the Workers pool, so an eight-hour sign-in is
+ * tested by driving the same database through apps built on different clocks.
+ */
+const SIGNED_IN_AT = '2026-08-04T09:00:00.000Z';
+const appAt = (instant: string) => buildTestApp({ clock: fixedClock(instant) });
 
 describe('auth flow', () => {
   beforeEach(async () => {
@@ -139,33 +154,111 @@ describe('auth flow', () => {
     expect(rows).toHaveLength(2);
     expect(rows.filter((row) => row.revokedReason === 'rotated')).toHaveLength(1);
     expect(rows.filter((row) => row.revokedAt === null)).toHaveLength(1);
-    // Both belong to the same family, so a later replay can revoke all of it.
     expect(new Set(rows.map((row) => row.familyId)).size).toBe(1);
   });
 
-  it('revokes the whole refresh family when a rotated refresh token is replayed', async () => {
+  it('refuses a refresh token that has already been rotated', async () => {
     const testApp = buildTestApp();
     const { refreshCookie } = await devLogin(testApp, { email: 'pete@example.org' });
 
-    // Legitimate rotation.
     const rotated = await testApp.request('/api/v1/auth/refresh', {
       method: 'POST',
       headers: cookieHeader(refreshCookie),
     });
     expect(rotated.status).toBe(200);
 
-    // The attacker replays the token they stole before rotation.
     const replay = await testApp.request('/api/v1/auth/refresh', {
       method: 'POST',
       headers: cookieHeader(refreshCookie),
     });
-    expect(replay.status).toBe(401);
 
-    // Every token in the family is now dead, including the legitimate one the
-    // real user is holding. That is the intended trade-off.
+    expect(replay.status).toBe(401);
+  });
+
+  it('leaves the legitimate holder signed in after somebody replays an old token', async () => {
+    const testApp = buildTestApp();
+    const { refreshCookie } = await devLogin(testApp, { email: 'pete@example.org' });
+
+    const rotated = await testApp.request('/api/v1/auth/refresh', {
+      method: 'POST',
+      headers: cookieHeader(refreshCookie),
+    });
+    const heldByTheUser = extractRefreshCookie(rotated);
+
+    // Somebody replays the token that was rotated away.
+    await testApp.request('/api/v1/auth/refresh', {
+      method: 'POST',
+      headers: cookieHeader(refreshCookie),
+    });
+
+    // The person actually signed in is unaffected — no family-wide revocation.
+    const carryOn = await testApp.request('/api/v1/auth/refresh', {
+      method: 'POST',
+      headers: cookieHeader(heldByTheUser),
+    });
+    expect(carryOn.status).toBe(200);
+
     const rows = await db.select().from(refreshTokens);
-    expect(rows.every((row) => row.revokedAt !== null)).toBe(true);
-    expect(rows.some((row) => row.revokedReason === 'replay_detected')).toBe(true);
+    expect(rows.filter((row) => row.revokedAt === null)).toHaveLength(1);
+    expect(rows.some((row) => row.revokedReason === 'replay_detected')).toBe(false);
+  });
+
+  it('keeps someone signed in seven hours after they signed in', async () => {
+    const { refreshCookie } = await devLogin(appAt(SIGNED_IN_AT), { email: 'pete@example.org' });
+
+    const response = await appAt('2026-08-04T16:00:00.000Z').request('/api/v1/auth/refresh', {
+      method: 'POST',
+      headers: cookieHeader(refreshCookie),
+    });
+
+    expect(response.status).toBe(200);
+  });
+
+  it('refuses a refresh once eight hours have passed since signing in', async () => {
+    const { refreshCookie } = await devLogin(appAt(SIGNED_IN_AT), { email: 'pete@example.org' });
+
+    const response = await appAt('2026-08-04T17:00:01.000Z').request('/api/v1/auth/refresh', {
+      method: 'POST',
+      headers: cookieHeader(refreshCookie),
+    });
+
+    expect(response.status).toBe(401);
+  });
+
+  it('does not extend the eight hours by refreshing part-way through them', async () => {
+    const { refreshCookie } = await devLogin(appAt(SIGNED_IN_AT), { email: 'pete@example.org' });
+
+    // Working through the morning, so the token rotates several times.
+    let cookie = refreshCookie;
+    for (const at of ['2026-08-04T12:00:00.000Z', '2026-08-04T15:00:00.000Z']) {
+      const rotated = await appAt(at).request('/api/v1/auth/refresh', {
+        method: 'POST',
+        headers: cookieHeader(cookie),
+      });
+      expect(rotated.status).toBe(200);
+      cookie = extractRefreshCookie(rotated);
+    }
+
+    // Eight hours after signing in, not after the last refresh.
+    const response = await appAt('2026-08-04T17:00:01.000Z').request('/api/v1/auth/refresh', {
+      method: 'POST',
+      headers: cookieHeader(cookie),
+    });
+
+    expect(response.status).toBe(401);
+  });
+
+  it('never issues an access token that outlives the sign-in', async () => {
+    const { refreshCookie } = await devLogin(appAt(SIGNED_IN_AT), { email: 'pete@example.org' });
+
+    // Five minutes from the cap, so a full fifteen-minute token would overrun.
+    const response = await appAt('2026-08-04T16:55:00.000Z').request('/api/v1/auth/refresh', {
+      method: 'POST',
+      headers: cookieHeader(refreshCookie),
+    });
+
+    const body: { expiresAt: number } = await response.json();
+    expect(body.expiresAt).toBe(Date.parse('2026-08-04T17:00:00.000Z') / 1000);
   });
 
   it('refuses a refresh token that was never issued', async () => {

@@ -199,23 +199,21 @@ export function createPickListsRepository(db: Database) {
     },
 
     /**
-     * Writes one ledger row per parcel line, in a single statement.
+     * Issues a parcel: one negative ledger row per line, in a single statement.
      *
      * **This is the write the whole stock design exists to protect.** The
      * partial unique index on
      * `(parcel_id, stock_item_id, movement_type)` means a second attempt for
-     * the same parcel and movement violates the constraint rather than moving
-     * stock twice — which is the failure nobody notices until a stock take
-     * will not reconcile.
+     * the same parcel violates the constraint rather than moving stock twice —
+     * which is the failure nobody notices until a stock take will not
+     * reconcile.
      *
-     * `sign` is -1 to issue and +1 to return, so the same statement serves
-     * both directions and the ledger stays append-only.
+     * There is no matching un-issue: an outcome, once recorded, is final, and
+     * a mistake is put right through an audited stock adjustment.
      */
-    buildParcelStockMovement(input: {
+    buildParcelIssue(input: {
       parcelId: string;
       sessionId: string;
-      movementType: 'parcel_issued' | 'parcel_returned';
-      sign: -1 | 1;
       actorUserId: string | null;
       occurredAt: string;
       lines: readonly { id: string; stockItemId: string; quantity: number }[];
@@ -223,7 +221,7 @@ export function createPickListsRepository(db: Database) {
       const rows = input.lines.map((line) => ({
         id: crypto.randomUUID(),
         stockItemId: line.stockItemId,
-        quantityDelta: input.sign * line.quantity,
+        quantityDelta: -line.quantity,
       }));
 
       return db.$client
@@ -235,12 +233,11 @@ export function createPickListsRepository(db: Database) {
              json_extract(value, '$.id'),
              json_extract(value, '$.stockItemId'),
              json_extract(value, '$.quantityDelta'),
-             ?2, ?3, ?4, NULL, NULL, NULL, ?5, ?6, ?6
+             'parcel_issued', ?2, ?3, NULL, NULL, NULL, ?4, ?5, ?5
            FROM json_each(?1)`,
         )
         .bind(
           JSON.stringify(rows),
-          input.movementType,
           input.parcelId,
           input.sessionId,
           input.actorUserId,

@@ -12,11 +12,15 @@
 export const ACCESS_TOKEN_TTL_SECONDS = 15 * 60;
 
 /**
- * Fourteen days rather than the more common thirty. This system holds names,
- * addresses and reasons for needing food, so a stolen refresh token is worth
- * more than it would be elsewhere.
+ * A sign-in lasts eight hours, measured from the moment the person signed in.
+ *
+ * This is an absolute cap, not an idle timeout: a refresh token inherits the
+ * expiry of the one it replaces, so carrying on working never pushes the cap
+ * forward. Eight hours covers a session in the warehouse without signing a team
+ * lead out halfway through marking attendance, and is short enough that a
+ * shared tablet is not still signed in the next morning.
  */
-export const REFRESH_TOKEN_TTL_SECONDS = 14 * 24 * 60 * 60;
+export const SIGN_IN_TTL_SECONDS = 8 * 60 * 60;
 
 /** Tolerance for clock skew between the signer and the verifier. */
 export const JWT_CLOCK_LEEWAY_SECONDS = 60;
@@ -33,6 +37,17 @@ export const REFERRAL_EDIT_KEY_TTL_SECONDS = 15 * 60;
 
 /** How far ahead the cron materialises sessions from recurring templates. */
 export const SESSION_HORIZON_WEEKS = 6;
+
+/**
+ * How far ahead a team lead's session list looks, counted in days from today
+ * in London and inclusive of today — so today through today plus six, a full
+ * week of shifts including the one being worked.
+ *
+ * An admin has no such cap: the whole materialised six weeks is their planning
+ * tool. A team lead runs the session in front of them, and the calendar six
+ * weeks out is not theirs to read.
+ */
+export const TEAM_LEAD_SESSION_HORIZON_DAYS = 6;
 
 /** Sessions default to this many households unless an admin overrides it. */
 export const DEFAULT_SESSION_CAPACITY = 25;

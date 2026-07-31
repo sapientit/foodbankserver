@@ -105,7 +105,9 @@ paths:
               schema: { type: string }
               description: >
                 `foodbank_refresh`, HttpOnly, Secure, SameSite=Strict, scoped to
-                `/api/v1/auth`. Not readable by JavaScript, by design.
+                `/api/v1/auth`. Not readable by JavaScript, by design. It
+                expires when the eight-hour sign-in does, and a rotation does
+                not extend it.
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { description: No user record for that address }
         '403': { description: That account has been deactivated }
@@ -116,13 +118,19 @@ paths:
       tags: [Auth]
       summary: Exchange the refresh cookie for a new access token
       description: |
-        Rotates the refresh token. Presenting one that has already been rotated
-        is treated as theft and **revokes the entire token family** — the user
-        is signed out everywhere. Send the cookie, never a body.
-      x-assumed: >-
-        Q5 — the session lengths, and that a suspected replay signs the
-        legitimate holder out too. The spec asks for "an expiring security
-        token, with refresh tokens etc." and leaves every number to us.
+        Rotates the refresh token. Send the cookie, never a body.
+
+        **A sign-in lasts eight hours from the moment the user signed in.** The
+        replacement token inherits the expiry of the one it replaces, so
+        refreshing never pushes that out: once the eight hours are up, refresh
+        returns `401` and the user signs in again. The access token in the
+        response is capped at the same instant, so the last one of a sign-in
+        may be shorter than fifteen minutes.
+
+        A token that has already been rotated is **refused and nothing more**.
+        The sign-in it belonged to carries on, so a client that refreshed twice
+        by accident should retry with the cookie it now holds rather than sign
+        the user out.
       security: []
       responses:
         '200':
@@ -131,7 +139,9 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/TokenResponse' }
         '401':
-          description: Missing, expired, unknown, or replayed
+          description: >-
+            Missing, unknown, already rotated, or the eight-hour sign-in has
+            ended
 
   /api/v1/auth/logout:
     post:
@@ -187,12 +197,13 @@ paths:
       summary: Add a user
       description: |
         Admin only. **This is the only way an account comes into existence** —
-        signing in never creates one. The address is stored lowercased, because
-        that is how every identity provider resolves an account.
-      x-assumed: >-
-        Q6 — the whole account model, including the seeded first admin. The
-        spec covers how somebody proves who they are and never says who is
-        allowed in, so invitation-only is our answer, not the charity's.
+        signing in never creates one, and there is no self-service signup. The
+        address is stored lowercased, because that is how every identity
+        provider resolves an account.
+
+        A fresh database is seeded with one administrator so there is somebody
+        who can call this. That seeded address is a stand-in and is replaced
+        when sign-in moves to Google.
       requestBody:
         required: true
         content:
@@ -436,9 +447,34 @@ paths:
     get:
       tags: [Sessions]
       summary: List sessions
+      description: |
+        **How far ahead this reaches depends on the caller's role.** An admin
+        sees the whole materialised six weeks. A **team lead sees six days**:
+        today through today plus six inclusive, counted in `Europe/London`.
+
+        The cap is applied server-side from the access token, so a team lead
+        cannot widen it — a `to` beyond the horizon is silently **clamped** back
+        to it rather than refused, and a `from` beyond it simply returns an
+        empty list. A narrower `to` still applies. Only the far end is capped:
+        a team lead can still list sessions in the past.
+
+        Note the unauthenticated `GET /api/v1/public/sessions` window is
+        fourteen days, so it reaches further ahead than a team lead's list.
+        That is deliberate — it answers "which session can I book somebody
+        onto", not "which shift am I working".
+      x-assumed: >-
+        Q14 — that the six-day horizon applies to this list and to nothing
+        else. `GET /api/v1/sessions/{id}`, the pick-list routes and
+        `POST /api/v1/sessions/{sessionId}/confirm` are **not** capped, so a
+        team lead holding an id can still open a session eight days out — which
+        may be exactly how they prepare, or may be a hole in the rule. Pete
+        answered what staff can *see*, not what they may *open*.
       parameters:
         - { in: query, name: from, schema: { type: string, format: date } }
-        - { in: query, name: to, schema: { type: string, format: date } }
+        - in: query
+          name: to
+          description: Clamped to the caller's horizon; see the description.
+          schema: { type: string, format: date }
         - in: query
           name: status
           schema: { type: string, enum: [planned, in_progress, confirmed, cancelled] }
@@ -549,12 +585,11 @@ paths:
       tags: [Pick lists]
       summary: Close the session
       description: |
-        The team lead's final step. Refuses while any household is still
-        unrecorded, and says which pick numbers — a session confirmed with
-        people unaccounted for has wrong stock figures.
-      x-assumed: >-
-        Q9 — that confirming is blocked rather than warned about. The spec has
-        no session-close step at all; this is ours.
+        The team lead's final step. Every household must be marked either
+        attended (delivered) or a no-show (not in) first: this refuses while
+        anyone is still unrecorded and says which pick numbers, because a
+        session closed with people unaccounted for has wrong stock figures.
+        There is no override.
       responses:
         '200': { description: Confirmed }
         '409':
@@ -799,21 +834,17 @@ paths:
       tags: [Stock]
       summary: Add a stock item
       description: Admin only.
-      x-assumed: >-
-        Q7 — `lowStockThreshold` and the `isLow` flag derived from it are a
-        feature nobody asked for. The spec has no notion of running low.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [name, unit, shelfNumber]
+              # Unit and low-stock controls are deliberately not part of stock maintenance.
+              required: [name, shelfNumber]
               properties:
                 name: { type: string, maxLength: 120 }
-                unit: { type: string, maxLength: 30, examples: [tin, packet, kg] }
                 shelfNumber: { type: string, maxLength: 20, examples: ['A1', '12b'] }
-                lowStockThreshold: { type: [integer, 'null'] }
       responses:
         '201':
           description: Created
@@ -837,9 +868,7 @@ paths:
               minProperties: 1
               properties:
                 name: { type: string }
-                unit: { type: string }
                 shelfNumber: { type: string }
-                lowStockThreshold: { type: [integer, 'null'] }
                 isActive: { type: boolean }
       responses:
         '200':
@@ -893,12 +922,16 @@ paths:
       tags: [Stock]
       summary: Correct stock by hand
       description: |
-        Admin or team lead. Always requires a reason — this is the only
-        unexplained movement type, and it is where a mis-recorded attendance
-        gets fixed, which is the team lead's own mistake to correct.
-      x-assumed: >-
-        Q8 — the movement-type list. The spec never mentions donations,
-        wastage or expiry; these are guesses at how stock actually leaves.
+        Admin or team lead. Always requires a reason — a hand correction is the
+        only movement that does not explain itself, and it is where a
+        mis-recorded attendance gets fixed, which is the team lead's own mistake
+        to correct.
+
+        All six ways stock moves are offered, including the two the app usually
+        writes for itself: stock arriving without a recorded shop, or a parcel
+        handed over outside a session, both happen in a warehouse and both need
+        a way onto the ledger. Food thrown away is `wastage`, whatever the
+        reason it was thrown away.
       requestBody:
         required: true
         content:
@@ -913,7 +946,7 @@ paths:
                   description: Signed, never zero. Negative removes stock.
                 movementType:
                   type: string
-                  enum: [donation, wastage, expiry, correction, opening_balance]
+                  enum: [opening_balance, purchase, donation, parcel_issued, wastage, correction]
                 reason: { type: string, minLength: 1, maxLength: 300 }
       responses:
         '204': { description: Recorded }
@@ -994,6 +1027,16 @@ paths:
         Admin or team lead. Writes an adjustment **only for items whose count
         differs** from the derived level, so the variance is visible rather than
         silently absorbed. The response lists exactly what moved.
+
+        The variance lands on the ledger as a `correction` carrying the id of
+        this stock take, so it can still be found — but the movement type does
+        not distinguish it from a hand correction.
+      x-assumed: >-
+        Q13 — that a stock take's variance is written as `correction`. There are
+        six movement types and it is the only one it can be, but the answer that
+        fixed the list was given about hand corrections and may not have had
+        this row in view. Only Pete can settle whether the two need telling
+        apart in a report.
       responses:
         '200':
           description: Committed
@@ -1416,15 +1459,16 @@ paths:
       summary: Did this household turn up?
       description: |
         **Attended** issues the parcel and decrements stock. **No-show** moves
-        nothing — the parcel is unpacked and nothing was ever given away.
+        nothing — the parcel is unpacked and nothing was ever given away. For a
+        delivery these are the same two outcomes under the driver's names:
+        delivered and not in.
 
         Safe to submit repeatedly: `alreadyRecorded: true` means the outcome was
-        already in place and stock did not move again. A mis-record can be
-        corrected once in each direction; a third change is refused and needs a
-        stock adjustment.
-      x-assumed: >-
-        Q3 — the twice-then-refuse correction limit is ours. The spec says only
-        that attendance moves stock; it sets no limit on fixing a mis-tap.
+        already in place and stock did not move again.
+
+        **The outcome is final.** Submitting the *other* outcome afterwards is
+        refused with `409`; a mis-tap is put right with a stock adjustment
+        (`POST /stock/adjustments`), which leaves the correction on the record.
       requestBody:
         required: true
         content:
@@ -1446,7 +1490,7 @@ paths:
                   attendance: { type: string }
                   stockMoved: { type: boolean }
                   alreadyRecorded: { type: boolean }
-        '409': { description: Already issued and returned once }
+        '409': { description: The other outcome is already recorded, and cannot be undone }
 
   # ---------------------------------------------------------- admin set-up --
   /api/v1/authorised-referrers:
@@ -1602,9 +1646,10 @@ paths:
         Admin only. Calls exactly what the nightly cron calls: generates six
         weeks of sessions from the weekly templates, clears expired referral
         edit keys, and purges old personal data if a retention period is set.
-      x-assumed: >-
-        Q10 — six weeks. The spec fixes the *public* window at two weeks but
-        says nothing about how far ahead staff should be able to plan.
+
+        Six weeks is how far ahead sessions are *materialised*, and it is not
+        the same thing as how far ahead anyone is shown them — see
+        `GET /api/v1/sessions` for the per-role horizons.
 
         Idempotent — a second run creates nothing.
       responses:
@@ -1630,8 +1675,9 @@ components:
       scheme: bearer
       bearerFormat: JWT
       description: >
-        `Authorization: Bearer <accessToken>`. Expires after 15 minutes; see the
-        refresh flow in API.md.
+        `Authorization: Bearer <accessToken>`. Expires after 15 minutes, or
+        when the eight-hour sign-in ends if that comes first; see the refresh
+        flow in API.md.
     referralKey:
       type: apiKey
       in: header
@@ -1752,7 +1798,11 @@ components:
         accessToken:
           type: string
           description: Hold in memory only. Never in localStorage.
-        expiresAt: { type: integer, description: Epoch seconds. }
+        expiresAt:
+          type: integer
+          description: >
+            Epoch seconds. Fifteen minutes away, or the end of the eight-hour
+            sign-in, whichever is sooner.
         user:
           type: object
           required: [id, email, displayName, role]
@@ -2010,25 +2060,23 @@ components:
 
     StockItem:
       type: object
-      required: [id, name, unit, shelfNumber, lowStockThreshold, isActive]
+      # Unit and low-stock controls are deliberately not part of stock maintenance.
+      required: [id, name, shelfNumber, isActive]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
-        unit: { type: string }
         shelfNumber: { type: string }
-        lowStockThreshold: { type: [integer, 'null'] }
         isActive: { type: boolean }
 
     StockLevel:
       allOf:
         - $ref: '#/components/schemas/StockItem'
         - type: object
-          required: [quantityOnHand, isLow]
+          required: [quantityOnHand]
           properties:
             quantityOnHand:
               type: integer
               description: Derived by summing the ledger. May be negative after a correction.
-            isLow: { type: boolean }
 
     ParcelContentLine:
       type: object
@@ -2062,11 +2110,10 @@ components:
 
     ParcelLine:
       type: object
-      required: [stockItemId, name, unit, shelfNumber, quantity, source]
+      required: [stockItemId, name, shelfNumber, quantity, source]
       properties:
         stockItemId: { type: string, format: uuid }
         name: { type: string }
-        unit: { type: string }
         shelfNumber: { type: string }
         quantity: { type: integer }
         source:

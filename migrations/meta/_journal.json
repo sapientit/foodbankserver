@@ -71,6 +71,20 @@
       "when": 1785427102727,
       "tag": "0009_delivery-uses-the-referee-address",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1785435290209,
+      "tag": "0010_stock-items-lose-unit-and-threshold",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1785436000000,
+      "tag": "0011_stock-movement-types-reduced",
+      "breakpoints": true
     }
   ]
 }

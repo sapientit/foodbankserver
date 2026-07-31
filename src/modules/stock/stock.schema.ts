@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { STOCK_MOVEMENT_TYPES } from '../../db/schema/stock.ts';
 
 /**
  * D1 caps a `LIKE`/`GLOB` pattern at **50 bytes**. Exceeding it is a runtime
@@ -9,17 +10,13 @@ export const MAX_SEARCH_TERM = 40;
 
 export const stockItemInputSchema = z.object({
   name: z.string().trim().min(1).max(120),
-  unit: z.string().trim().min(1).max(30),
   shelfNumber: z.string().trim().min(1).max(20),
-  lowStockThreshold: z.number().int().min(0).max(100000).nullable().default(null),
 });
 
 export const stockItemPatchSchema = z
   .object({
     name: z.string().trim().min(1).max(120),
-    unit: z.string().trim().min(1).max(30),
     shelfNumber: z.string().trim().min(1).max(20),
-    lowStockThreshold: z.number().int().min(0).max(100000).nullable(),
     isActive: z.boolean(),
   })
   .partial()
@@ -60,13 +57,20 @@ export const stockTakeCountsSchema = z.object({
     .max(500),
 });
 
-/** A manual correction always needs a reason — it is the only unexplained delta. */
+/**
+ * A hand correction always needs a reason — it is the only unexplained delta.
+ *
+ * Every one of the six movement types is offered, including the two the app
+ * normally writes for itself: stock arriving without a recorded shop, or a
+ * parcel handed over outside a session, are both things that happen in a
+ * warehouse and both need a way onto the ledger.
+ */
 export const stockAdjustmentSchema = z.object({
   stockItemId: z.uuid(),
   quantityDelta: z
     .number()
     .int()
     .refine((value) => value !== 0, 'must not be zero'),
-  movementType: z.enum(['donation', 'wastage', 'expiry', 'correction', 'opening_balance']),
+  movementType: z.enum(STOCK_MOVEMENT_TYPES),
   reason: z.string().trim().min(1).max(300),
 });

@@ -42,6 +42,11 @@ export function createAttendanceService(deps: AttendanceDeps) {
    *   negative, in a single batch with the attendance update.
    * - **No-show** writes **no ledger entry at all**. Nothing was ever given
    *   away, so there is nothing to return — the parcel is simply unpacked.
+   * - **The outcome is final.** A collection or delivery that has been
+   *   recorded cannot be undone, so the contradicting outcome is refused and
+   *   the mistake is put right through the audited stock adjustment path.
+   *   Reversing it here would append a compensating ledger entry nobody could
+   *   tell apart from a real movement.
    *
    * ## Why this cannot double-count
    *
@@ -66,6 +71,9 @@ export function createAttendanceService(deps: AttendanceDeps) {
       // a conflict when someone taps twice.
       return { parcel, stockMoved: false, alreadyRecorded: true };
     }
+    if (parcel.attendance !== 'pending') {
+      throw finalOutcomeConflict(parcelId, parcel.attendance);
+    }
 
     const pickList = await repository.findById(parcel.pickListId);
     if (pickList === undefined) {
@@ -73,9 +81,9 @@ export function createAttendanceService(deps: AttendanceDeps) {
     }
 
     const now = clock.nowIso();
-    const movement = movementFor(parcel.attendance, attendance);
 
-    if (movement === undefined) {
+    // A no-show issued nothing, so there is nothing for the ledger to say.
+    if (attendance === 'no_show') {
       return {
         parcel: await applyWithoutStock(parcelId, attendance, actor, now),
         stockMoved: false,
@@ -95,11 +103,9 @@ export function createAttendanceService(deps: AttendanceDeps) {
 
     try {
       await db.$client.batch([
-        repository.buildParcelStockMovement({
+        repository.buildParcelIssue({
           parcelId,
           sessionId: pickList.sessionId,
-          movementType: movement.type,
-          sign: movement.sign,
           actorUserId: actor.userId,
           occurredAt: now,
           lines,
@@ -108,9 +114,9 @@ export function createAttendanceService(deps: AttendanceDeps) {
       ]);
     } catch (error) {
       if (isUniqueViolation(error, ...PARCEL_GUARD)) {
-        // Either a retry of a movement already applied, or a third attendance
-        // change that would reuse a movement slot. Distinguish the two by what
-        // the parcel currently says.
+        // This parcel has already been issued. Whether that was this request
+        // arriving twice or a genuine conflict is decided by what the parcel
+        // now says.
         return handleGuardViolation(parcelId, attendance, actor, now, error);
       }
       throw error;
@@ -125,20 +131,6 @@ export function createAttendanceService(deps: AttendanceDeps) {
     });
 
     return { parcel: await requireParcel(parcelId), stockMoved: true, alreadyRecorded: false };
-  }
-
-  /**
-   * The stock movement a transition needs, or undefined for none.
-   *
-   * `pending → no_show` moves nothing: the parcel was never issued.
-   * `attended → no_show` returns it, because it was.
-   */
-  function movementFor(
-    from: AttendanceStatus,
-    to: 'attended' | 'no_show',
-  ): { type: 'parcel_issued' | 'parcel_returned'; sign: -1 | 1 } | undefined {
-    if (to === 'attended') return { type: 'parcel_issued', sign: -1 };
-    return from === 'attended' ? { type: 'parcel_returned', sign: 1 } : undefined;
   }
 
   async function applyWithoutStock(
@@ -160,13 +152,13 @@ export function createAttendanceService(deps: AttendanceDeps) {
   }
 
   /**
-   * A movement slot was already used for this parcel.
+   * The parcel had already been issued when this request tried to issue it.
    *
-   * If the parcel already reads as the requested outcome, this was a retry and
-   * the earlier attempt succeeded — report success. Otherwise the team lead is
-   * flipping attendance a third time, which would need a movement slot that is
-   * spent. Refuse and point at the audited adjustment path rather than
-   * inventing a compensating entry that cannot be told apart from a real one.
+   * If the parcel now reads as the requested outcome, this was a retry and the
+   * earlier attempt succeeded — report success. If it still reads `pending`,
+   * the ledger row landed without its attendance update, so record the outcome
+   * and leave the append-only ledger alone. Anything else is a contradicting
+   * outcome, which is final and refused.
    */
   async function handleGuardViolation(
     parcelId: string,
@@ -182,8 +174,6 @@ export function createAttendanceService(deps: AttendanceDeps) {
       return { parcel: current, stockMoved: false, alreadyRecorded: true };
     }
 
-    // The stock movement was applied but the attendance update was rolled back
-    // with it, so record the outcome and leave the ledger alone.
     if (current.attendance === 'pending') {
       return {
         parcel: await applyWithoutStock(parcelId, attendance, actor, at),
@@ -192,9 +182,23 @@ export function createAttendanceService(deps: AttendanceDeps) {
       };
     }
 
-    throw new ConflictError(
-      'This parcel has already been issued and returned once. Ask an admin to correct the stock directly.',
-      { cause, details: { parcelId, currentAttendance: current.attendance } },
+    throw finalOutcomeConflict(parcelId, current.attendance, cause);
+  }
+
+  /**
+   * A recorded outcome is final: once a collection or delivery is confirmed it
+   * cannot be undone. Point the team lead at the audited adjustment path,
+   * which leaves a correction on the record rather than a reversal that reads
+   * exactly like a real movement.
+   */
+  function finalOutcomeConflict(
+    parcelId: string,
+    recorded: AttendanceStatus,
+    cause?: unknown,
+  ): ConflictError {
+    return new ConflictError(
+      'This parcel has already been recorded and cannot be changed. Correct the stock directly instead.',
+      { cause, details: { parcelId, currentAttendance: recorded } },
     );
   }
 

@@ -1,11 +1,7 @@
 import { Hono, type Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import type { AppConfig } from '../../config/env.ts';
-import {
-  REFRESH_COOKIE_NAME,
-  REFRESH_COOKIE_PATH,
-  REFRESH_TOKEN_TTL_SECONDS,
-} from '../../config/constants.ts';
+import { REFRESH_COOKIE_NAME, REFRESH_COOKIE_PATH } from '../../config/constants.ts';
 import { UnauthorizedError } from '../../core/errors.ts';
 import type { AppEnv } from '../../http/types.ts';
 import { requireAuth } from '../../http/middleware/require-auth.ts';
@@ -80,14 +76,20 @@ function serviceFor(c: Context<AppEnv>) {
  * cannot ride on it.
  *
  * The access token goes in the body, for the frontend to hold in memory only.
+ *
+ * The cookie expires with the sign-in rather than eight hours after whichever
+ * refresh wrote it, so a rotation late in the day cannot leave the browser
+ * holding a cookie the server would refuse anyway.
  */
 function respondWithTokens(c: Context<AppEnv>, tokens: IssuedTokens): Response {
+  const maxAge = Math.max(1, tokens.signInExpiresAt - c.get('clock').nowEpochSeconds());
+
   setCookie(c, REFRESH_COOKIE_NAME, tokens.refreshToken, {
     httpOnly: true,
     secure: true,
     sameSite: 'Strict',
     path: REFRESH_COOKIE_PATH,
-    maxAge: REFRESH_TOKEN_TTL_SECONDS,
+    maxAge,
   });
 
   return c.json<TokenResponse>({

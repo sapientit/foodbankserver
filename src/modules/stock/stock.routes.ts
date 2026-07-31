@@ -19,15 +19,12 @@ import {
 interface StockItemResponse {
   readonly id: string;
   readonly name: string;
-  readonly unit: string;
   readonly shelfNumber: string;
-  readonly lowStockThreshold: number | null;
   readonly isActive: boolean;
 }
 
 interface StockLevelResponse extends StockItemResponse {
   readonly quantityOnHand: number;
-  readonly isLow: boolean;
 }
 
 /**
@@ -141,27 +138,21 @@ export function stockRoutes(): Hono<AppEnv> {
 function toItemResponse(item: {
   id: string;
   name: string;
-  unit: string;
   shelfNumber: string;
-  lowStockThreshold: number | null;
   isActive: number;
 }): StockItemResponse {
   return {
     id: item.id,
     name: item.name,
-    unit: item.unit,
     shelfNumber: item.shelfNumber,
-    lowStockThreshold: item.lowStockThreshold,
     isActive: item.isActive === 1,
   };
 }
 
 function toLevelResponse(level: StockLevel): StockLevelResponse {
-  const threshold = level.item.lowStockThreshold;
   return {
     ...toItemResponse(level.item),
     quantityOnHand: level.quantityOnHand,
-    isLow: threshold !== null && level.quantityOnHand <= threshold,
   };
 }
 

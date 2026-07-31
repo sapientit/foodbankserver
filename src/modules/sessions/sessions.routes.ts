@@ -1,4 +1,6 @@
 import { Hono, type Context } from 'hono';
+import type { Actor } from '../../core/actor.ts';
+import { UnauthorizedError } from '../../core/errors.ts';
 import { requireAuth, requireRole } from '../../http/middleware/require-auth.ts';
 import { parseJsonBody, parseOptionalJsonBody, parseOrThrow } from '../../http/validate.ts';
 import type { AppEnv } from '../../http/types.ts';
@@ -24,6 +26,11 @@ import {
  * Reads are open to anyone with an account — a team lead needs to see the
  * schedule to run a session. Writes are admin-only: re-timing or cancelling a
  * session affects every referral already attached to it.
+ *
+ * How far ahead a read reaches is not the same question as who may read: the
+ * list is capped at six days for a team lead and uncapped for an admin, and
+ * that cap lives in the service, from the `Actor`. Fetching one session by id
+ * is not capped — see Q14.
  */
 export function sessionRoutes(): Hono<AppEnv> {
   const routes = new Hono<AppEnv>();
@@ -48,7 +55,9 @@ export function sessionRoutes(): Hono<AppEnv> {
       status: c.req.query('status'),
     });
 
-    const sessions = await serviceFor(c).listSessions(query);
+    // The role decides how far ahead the answer reaches; the service applies
+    // it, so no request can widen its own window.
+    const sessions = await serviceFor(c).listSessions(actorOf(c), query);
     return c.json<{ sessions: SessionResponse[] }>({ sessions: sessions.map(toSessionResponse) });
   });
 
@@ -122,6 +131,14 @@ export function sessionRoutes(): Hono<AppEnv> {
   });
 
   return routes;
+}
+
+function actorOf(c: Context<AppEnv>): Actor {
+  const actor = c.get('actor');
+  if (actor === undefined) {
+    throw new UnauthorizedError('Authentication required');
+  }
+  return actor;
 }
 
 function serviceFor(c: Context<AppEnv>) {

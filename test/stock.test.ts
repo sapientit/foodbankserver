@@ -5,6 +5,7 @@ import { createDatabase } from '../src/db/client.ts';
 import {
   purchaseLines,
   purchases,
+  STOCK_MOVEMENT_TYPES,
   stockItems,
   stockLedger,
   stockTakeLines,
@@ -30,12 +31,11 @@ async function createItem(
   token: string,
   name: string,
   shelfNumber: string,
-  lowStockThreshold: number | null = null,
 ): Promise<string> {
   const response = await testApp.request('/api/v1/stock/items', {
     method: 'POST',
     headers: json(token),
-    body: JSON.stringify({ name, unit: 'tin', shelfNumber, lowStockThreshold }),
+    body: JSON.stringify({ name, shelfNumber }),
   });
   expect(response.status).toBe(201);
   const { id }: { id: string } = await response.json();
@@ -53,7 +53,7 @@ async function teamLeadApp(): Promise<{ lead: TestApp; accessToken: string }> {
 
 async function levels(testApp: TestApp, token: string) {
   const response = await testApp.request('/api/v1/stock/levels', { headers: authHeaders(token) });
-  const body: { items: { id: string; name: string; quantityOnHand: number; isLow: boolean }[] } =
+  const body: { items: { id: string; name: string; quantityOnHand: number }[] } =
     await response.json();
   return body.items;
 }
@@ -70,6 +70,19 @@ beforeEach(async () => {
 });
 
 describe('stock levels', () => {
+  it('does not expose units or low-stock warnings', async () => {
+    const { testApp, token } = await adminApp();
+    await createItem(testApp, token, 'Beans', 'A2');
+
+    const [level] = await levels(testApp, token);
+    expect(level).toEqual(
+      expect.objectContaining({ name: 'Beans', shelfNumber: 'A2', quantityOnHand: 0 }),
+    );
+    expect(level).not.toHaveProperty('unit');
+    expect(level).not.toHaveProperty('lowStockThreshold');
+    expect(level).not.toHaveProperty('isLow');
+  });
+
   it('derives the stock level as the sum of ledger entries', async () => {
     const { testApp, token } = await adminApp();
     const sugar = await createItem(testApp, token, 'Sugar', 'A1');
@@ -117,20 +130,6 @@ describe('stock levels', () => {
       'Second',
       'Tenth',
     ]);
-  });
-
-  it('flags an item at or below its low-stock threshold', async () => {
-    const { testApp, token } = await adminApp();
-    const sugar = await createItem(testApp, token, 'Sugar', 'A1', 5);
-
-    await testApp.request('/api/v1/stock/purchases', {
-      method: 'POST',
-      headers: json(token),
-      body: JSON.stringify({ lines: [{ stockItemId: sugar, quantity: 5 }] }),
-    });
-
-    const [level] = await levels(testApp, token);
-    expect(level?.isLow).toBe(true);
   });
 
   it('keeps the shelf sort key in step when a shelf number changes', async () => {
@@ -275,6 +274,127 @@ describe('the purchase idempotency guard', () => {
   });
 });
 
+describe('the idempotency guards after the ledger rebuild', () => {
+  it('keeps all three guards unique and partial', async () => {
+    // 0011 rebuilt `stock_ledger` to narrow the movement-type CHECK, which
+    // means every index on it was dropped and recreated by hand. Losing a
+    // `WHERE` clause or a column here costs nothing at first and then quietly
+    // stops stopping a double-tap, so the definitions are pinned rather than
+    // trusted.
+    const { results } = await env.DB.prepare(
+      `SELECT name, sql FROM sqlite_master
+        WHERE type = 'index' AND tbl_name = 'stock_ledger' AND sql IS NOT NULL
+        ORDER BY name`,
+    ).all<{ name: string; sql: string }>();
+    const byName = new Map(results.map((row) => [row.name, row.sql.replace(/\s+/g, ' ')]));
+
+    for (const [name, owner] of [
+      ['idx_stock_ledger_parcel_movement', 'parcel_id'],
+      ['idx_stock_ledger_purchase_movement', 'purchase_id'],
+      ['idx_stock_ledger_stock_take_movement', 'stock_take_id'],
+    ] as const) {
+      const sql = byName.get(name);
+      expect([name, sql]).toEqual([name, expect.stringContaining('CREATE UNIQUE INDEX')]);
+      expect([name, sql]).toEqual([
+        name,
+        expect.stringContaining(`(\`${owner}\`,\`stock_item_id\`,\`movement_type\`)`),
+      ]);
+      expect([name, sql]).toEqual([
+        name,
+        expect.stringContaining(`WHERE "stock_ledger"."${owner}" IS NOT NULL`),
+      ]);
+    }
+  });
+
+  it('lets a hand correction repeat, because it owns none of the three keys', async () => {
+    // The partial clauses are what keep the guards off every other movement.
+    // Two identical corrections are a real thing a warehouse does twice.
+    const { testApp, token } = await adminApp();
+    const sugar = await createItem(testApp, token, 'Sugar', 'A1');
+
+    for (let i = 0; i < 2; i++) {
+      const response = await testApp.request('/api/v1/stock/adjustments', {
+        method: 'POST',
+        headers: json(token),
+        body: JSON.stringify({
+          stockItemId: sugar,
+          quantityDelta: -1,
+          movementType: 'wastage',
+          reason: 'Split bag',
+        }),
+      });
+      expect(response.status).toBe(204);
+    }
+
+    expect((await levels(testApp, token))[0]?.quantityOnHand).toBe(-2);
+  });
+});
+
+describe('the ways stock moves', () => {
+  it('accepts each of the six ways stock moves', async () => {
+    const { testApp, token } = await adminApp();
+    const sugar = await createItem(testApp, token, 'Sugar', 'A1');
+
+    for (const movementType of STOCK_MOVEMENT_TYPES) {
+      const response = await testApp.request('/api/v1/stock/adjustments', {
+        method: 'POST',
+        headers: json(token),
+        body: JSON.stringify({
+          stockItemId: sugar,
+          quantityDelta: 1,
+          movementType,
+          reason: `Recorded as ${movementType}`,
+        }),
+      });
+      expect([movementType, response.status]).toEqual([movementType, 204]);
+    }
+
+    expect(STOCK_MOVEMENT_TYPES).toHaveLength(6);
+    expect((await levels(testApp, token))[0]?.quantityOnHand).toBe(6);
+  });
+
+  it('refuses a movement type the charity no longer records', async () => {
+    // Nine were guessed at; six were wanted. These three went in 0011, and the
+    // request has to be turned away at the edge rather than by the CHECK.
+    const { testApp, token } = await adminApp();
+    const sugar = await createItem(testApp, token, 'Sugar', 'A1');
+
+    for (const movementType of ['expiry', 'parcel_returned', 'stock_take_adjustment']) {
+      const response = await testApp.request('/api/v1/stock/adjustments', {
+        method: 'POST',
+        headers: json(token),
+        body: JSON.stringify({
+          stockItemId: sugar,
+          quantityDelta: -1,
+          movementType,
+          reason: 'Out of date',
+        }),
+      });
+      expect([movementType, response.status]).toEqual([movementType, 400]);
+    }
+
+    expect(await db.select().from(stockLedger)).toHaveLength(0);
+  });
+
+  it('refuses a retired movement type at the database as well', async () => {
+    // The CHECK constraint is the backstop: the Zod enum could be widened by
+    // accident, but a retired value still cannot reach the ledger.
+    const { testApp, token } = await adminApp();
+    const sugar = await createItem(testApp, token, 'Sugar', 'A1');
+    const now = new Date().toISOString();
+
+    await expect(
+      env.DB.prepare(
+        `INSERT INTO stock_ledger
+           (id, stock_item_id, quantity_delta, movement_type, occurred_at, created_at)
+         VALUES (?, ?, ?, 'stock_take_adjustment', ?, ?)`,
+      )
+        .bind(crypto.randomUUID(), sugar, -1, now, now)
+        .run(),
+    ).rejects.toThrow();
+  });
+});
+
 describe('stock takes', () => {
   it('writes an adjustment only where the count differs', async () => {
     const { testApp, token } = await adminApp();
@@ -328,13 +448,98 @@ describe('stock takes', () => {
     const adjustments = await db
       .select()
       .from(stockLedger)
-      .where(eq(stockLedger.movementType, 'stock_take_adjustment'));
+      .where(eq(stockLedger.movementType, 'correction'));
     expect(adjustments).toHaveLength(1);
     expect(adjustments[0]?.quantityDelta).toBe(-2);
 
     const byName = new Map((await levels(testApp, token)).map((i) => [i.name, i.quantityOnHand]));
     expect(byName.get('Sugar')).toBe(8);
     expect(byName.get('Beans')).toBe(20);
+  });
+
+  it('records the variance as a correction carrying the stock take it came from', async () => {
+    // `stock_take_adjustment` is gone, so the variance is written as one of the
+    // six. What still says where it came from is `stock_take_id` — see Q13,
+    // which asks whether the charity wants the two kinds of correction told
+    // apart at all.
+    const { testApp, token } = await adminApp();
+    const sugar = await createItem(testApp, token, 'Sugar', 'A1');
+
+    await testApp.request('/api/v1/stock/purchases', {
+      method: 'POST',
+      headers: json(token),
+      body: JSON.stringify({ lines: [{ stockItemId: sugar, quantity: 10 }] }),
+    });
+
+    const opened = await testApp.request('/api/v1/stock/takes', {
+      method: 'POST',
+      headers: json(token),
+      body: JSON.stringify({}),
+    });
+    const { id: takeId }: { id: string } = await opened.json();
+    await testApp.request(`/api/v1/stock/takes/${takeId}/counts`, {
+      method: 'POST',
+      headers: json(token),
+      body: JSON.stringify({ counts: [{ stockItemId: sugar, countedQuantity: 8 }] }),
+    });
+    await testApp.request(`/api/v1/stock/takes/${takeId}/commit`, {
+      method: 'POST',
+      headers: authHeaders(token),
+    });
+
+    const [variance] = await db
+      .select()
+      .from(stockLedger)
+      .where(eq(stockLedger.stockTakeId, takeId));
+
+    expect(variance?.movementType).toBe('correction');
+    expect(variance?.quantityDelta).toBe(-2);
+    // And the level still derives from the sum, not from the count.
+    expect((await levels(testApp, token))[0]?.quantityOnHand).toBe(8);
+  });
+
+  it('refuses a second ledger entry for the same stock take and item', async () => {
+    // The stock take guard at the database level, independent of the service's
+    // "already committed" check — the partial index has to survive the 0011
+    // rebuild or a replayed commit doubles the variance.
+    const { testApp, token } = await adminApp();
+    const sugar = await createItem(testApp, token, 'Sugar', 'A1');
+
+    const opened = await testApp.request('/api/v1/stock/takes', {
+      method: 'POST',
+      headers: json(token),
+      body: JSON.stringify({}),
+    });
+    const { id: takeId }: { id: string } = await opened.json();
+    await testApp.request(`/api/v1/stock/takes/${takeId}/counts`, {
+      method: 'POST',
+      headers: json(token),
+      body: JSON.stringify({ counts: [{ stockItemId: sugar, countedQuantity: 5 }] }),
+    });
+    await testApp.request(`/api/v1/stock/takes/${takeId}/commit`, {
+      method: 'POST',
+      headers: authHeaders(token),
+    });
+
+    const now = new Date().toISOString();
+    await expect(
+      db.insert(stockLedger).values({
+        id: crypto.randomUUID(),
+        stockItemId: sugar,
+        quantityDelta: 5,
+        movementType: 'correction',
+        parcelId: null,
+        sessionId: null,
+        purchaseId: null,
+        stockTakeId: takeId,
+        reason: 'Replayed commit',
+        actorUserId: null,
+        occurredAt: now,
+        createdAt: now,
+      }),
+    ).rejects.toThrow();
+
+    expect((await levels(testApp, token))[0]?.quantityOnHand).toBe(5);
   });
 
   it('records what was expected, so the variance stays auditable', async () => {
@@ -547,7 +752,7 @@ describe('stock authorisation', () => {
     const created = await lead.request('/api/v1/stock/items', {
       method: 'POST',
       headers: json(accessToken),
-      body: JSON.stringify({ name: 'Beans', unit: 'tin', shelfNumber: 'B2' }),
+      body: JSON.stringify({ name: 'Beans', shelfNumber: 'B2' }),
     });
     expect(created.status).toBe(403);
 
@@ -566,7 +771,7 @@ describe('stock authorisation', () => {
     const duplicate = await testApp.request('/api/v1/stock/items', {
       method: 'POST',
       headers: json(token),
-      body: JSON.stringify({ name: 'sugar', unit: 'bag', shelfNumber: 'B1' }),
+      body: JSON.stringify({ name: 'sugar', shelfNumber: 'B1' }),
     });
 
     expect(duplicate.status).toBe(409);
