@@ -5,8 +5,9 @@ Workers with D1.
 
 The frontend is a separate TS/React application — this repo serves JSON only.
 
-See [`INITIAL_SPEC1.txt`](./INITIAL_SPEC1.txt) for requirements and [`CLAUDE.md`](./CLAUDE.md) for
-architecture and coding standards.
+See [`INITIAL_SPEC1.txt`](./INITIAL_SPEC1.txt) for requirements, [`CLAUDE.md`](./CLAUDE.md) for the
+working rules, [`STATUS.md`](./STATUS.md) for what is built and what is outstanding, and
+[`docs/`](./docs) for architecture, engineering and operations detail.
 
 ## Requirements
 

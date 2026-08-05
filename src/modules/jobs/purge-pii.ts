@@ -16,11 +16,21 @@ export interface PurgePiiResult {
  *
  * ## Why this is safe to run
  *
- * `adults`, `children`, `isDelivery` and `reasonId` are deliberately outside
- * the PII block and are **kept**. Once the identifying columns are null the
- * referee is no longer identifiable, so those become statistics — which is how
- * "we fed 340 households, 890 people, 22% for benefit delay" survives a purge.
- * That only works because the reason is a dropdown; free text would have to go.
+ * `adults`, `children`, `isDelivery`, `needsFuelHelp` and `reasonId` are
+ * deliberately outside the PII block and are **kept**. Once the referee's own
+ * columns are null they are no longer identifiable, so those become statistics
+ * — which is how "we fed 340 households, 890 people, 22% for benefit delay"
+ * survives a purge. That only works because the reason is a dropdown; free text
+ * would have to go.
+ *
+ * ## Only the referee's own details go
+ *
+ * The referrer's name, email address and phone number are **kept**, along with
+ * `reviewComment`. The retention period exists to forget the household that
+ * needed feeding, not the professional who referred them: the charity needs to
+ * know who sent a referral, and who reviewed it, long after the referral itself
+ * has been anonymised. That is the charity's decision — see `INITIAL_SPEC1.txt`
+ * — and it is why this list is shorter than the nullable columns on the table.
  *
  * Dynamic answers are dropped **whole**. The referral form is client
  * configuration, so the server has no definition telling it which questions
@@ -66,9 +76,9 @@ export async function purgeReferralPii(deps: {
     await db
       .update(referrals)
       .set({
-        referrerEmail: null,
-        referrerPhone: null,
-        refereeName: null,
+        refereeFirstName: null,
+        refereeSurname: null,
+        refereeDateOfBirth: null,
         refereeAddress: null,
         refereePostcode: null,
         refereePhone: null,

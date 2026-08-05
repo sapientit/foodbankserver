@@ -1,10 +1,8 @@
 import type { Clock } from '../../core/clock.ts';
 import { toSafeError, type Logger } from '../../core/log.ts';
 import type { Database } from '../../db/client.ts';
-import { createReferralsRepository } from '../referrals/referrals.repository.ts';
 import { createSessionsRepository } from '../sessions/sessions.repository.ts';
 import { createJobsRepository } from './jobs.repository.ts';
-import { purgeExpiredEditKeys, PURGE_EDIT_KEYS_JOB } from './purge-expired-keys.ts';
 import { purgeReferralPii, PURGE_PII_JOB } from './purge-pii.ts';
 import {
   materialiseSessions,
@@ -13,7 +11,6 @@ import {
 } from './materialise-sessions.ts';
 
 export interface ScheduledResult extends MaterialiseResult {
-  readonly editKeysPurged: number;
   readonly referralsPurged: number;
 }
 
@@ -47,12 +44,6 @@ export async function runScheduledJobs(deps: ScheduledDeps): Promise<ScheduledRe
       logger: deps.logger,
     });
 
-    const purge = await purgeExpiredEditKeys({
-      repository: createReferralsRepository(deps.db),
-      clock: deps.clock,
-      logger: deps.logger,
-    });
-
     const pii = await purgeReferralPii({
       db: deps.db,
       clock: deps.clock,
@@ -61,12 +52,11 @@ export async function runScheduledJobs(deps: ScheduledDeps): Promise<ScheduledRe
     });
 
     await jobs.recordSuccess(MATERIALISE_SESSIONS_JOB, startedAt);
-    await jobs.recordSuccess(PURGE_EDIT_KEYS_JOB, startedAt);
     if (deps.piiRetentionDays !== undefined) {
       await jobs.recordSuccess(PURGE_PII_JOB, startedAt);
     }
 
-    return { ...result, editKeysPurged: purge.deleted, referralsPurged: pii.purged };
+    return { ...result, referralsPurged: pii.purged };
   } catch (error) {
     const safe = toSafeError(error);
     deps.logger.error('scheduled job failed', {

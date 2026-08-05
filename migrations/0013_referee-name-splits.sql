@@ -1,0 +1,14 @@
+-- The referee's name is now held in two parts, so the single column goes.
+--
+-- This is a separate migration from 0012 only because drizzle-kit cannot tell a
+-- dropped column from a renamed one without asking, and asking needs a terminal.
+-- Splitting the change in two — add the new columns, then drop the old one —
+-- makes each step unambiguous. Read them together; they are one change.
+--
+-- One line rather than 0012's rebuild, for the same reason 0009 was one line:
+-- SQLite refuses `DROP COLUMN` only for a column named in an index, a `CHECK`, a
+-- `FOREIGN KEY`, a generated column or the primary key. `referee_name` is in
+-- none of them — the two indexes on this table cover `session_id, status` and
+-- `referred_at`. No column becomes NOT NULL, so the referee's block stays
+-- purgeable.
+ALTER TABLE `referrals` DROP COLUMN `referee_name`;

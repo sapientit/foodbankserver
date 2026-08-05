@@ -1,6 +1,11 @@
 import { allGridKeys, type ParcelGrid } from '../../src/modules/rules/engine.ts';
 import { authHeaders, type TestApp } from './app.ts';
-import { setUpReferralWorld, submitReferral, type ReferralWorld } from './referral-fixtures.ts';
+import {
+  setUpReferralWorld,
+  submitReferral,
+  UNKNOWN_REFERRER,
+  type ReferralWorld,
+} from './referral-fixtures.ts';
 
 function json(token: string): Record<string, string> {
   return { ...authHeaders(token), 'content-type': 'application/json' };
@@ -133,4 +138,4 @@ export async function readPickList(testApp: TestApp, token: string, pickListId: 
   return body;
 }
 
-export { submitReferral };
+export { submitReferral, UNKNOWN_REFERRER };

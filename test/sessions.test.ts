@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { fixedClock } from '../src/core/clock.ts';
 import { createDatabase } from '../src/db/client.ts';
-import { auditEvents, referralEditKeys, referrals } from '../src/db/schema/referrals.ts';
+import { auditEvents, referrals } from '../src/db/schema/referrals.ts';
 import { authorisedReferrers, referralReasons } from '../src/db/schema/referrers.ts';
 import { recurringSessions, sessions } from '../src/db/schema/sessions.ts';
 import { systemJobs } from '../src/db/schema/jobs.ts';
@@ -262,7 +262,6 @@ describe('public session list', () => {
 describe('session occupancy', () => {
   beforeEach(async () => {
     await db.delete(auditEvents);
-    await db.delete(referralEditKeys);
     await db.delete(referrals);
     await db.delete(referralReasons);
     await db.delete(authorisedReferrers);
@@ -664,5 +663,131 @@ describe('session route authorisation', () => {
     ]);
     // The offending values must not come back — error bodies get logged.
     expect(JSON.stringify(body)).not.toContain('not-a-date');
+  });
+});
+
+describe('amending a weekly template', () => {
+  beforeEach(async () => {
+    await db.delete(sessions);
+    await db.delete(recurringSessions);
+    await db.delete(refreshTokens);
+    await db.delete(users);
+  });
+
+  async function patchTemplate(
+    testApp: TestApp,
+    token: string,
+    id: string,
+    patch: Record<string, unknown>,
+  ): Promise<Response> {
+    return testApp.request(`/api/v1/recurring-sessions/${id}`, {
+      method: 'PATCH',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+  }
+
+  // One case per field the contract names, so a field cannot quietly stop being
+  // amendable while the spec still advertises it.
+  it('amends every field the contract offers', async () => {
+    const { testApp, token } = await adminApp();
+    const id = await createTuesdayTemplate(testApp, token);
+
+    const amended = {
+      name: 'Wednesday afternoon',
+      weekday: 3,
+      startTime: '14:30',
+      durationMinutes: 90,
+      location: 'Scout Hut',
+      capacity: 40,
+      activeFrom: '2026-02-01',
+      activeUntil: '2026-12-31',
+    };
+
+    for (const [field, value] of Object.entries(amended)) {
+      const response = await patchTemplate(testApp, token, id, { [field]: value });
+      expect(response.status, `patching ${field}`).toBe(200);
+      const body: Record<string, unknown> = await response.json();
+      expect(body[field], `patching ${field}`).toEqual(value);
+    }
+  });
+
+  it('leaves the fields it was not asked about alone', async () => {
+    const { testApp, token } = await adminApp();
+    const id = await createTuesdayTemplate(testApp, token);
+
+    const response = await patchTemplate(testApp, token, id, { capacity: 30 });
+
+    expect(response.status).toBe(200);
+    const body: { capacity: number; name: string; weekday: number; startTime: string } =
+      await response.json();
+    expect(body).toMatchObject({
+      capacity: 30,
+      name: 'Tuesday morning',
+      weekday: 2,
+      startTime: '10:00',
+    });
+  });
+
+  // A patch schema built by making an input schema optional keeps that schema's
+  // defaults, so a one-field amendment quietly rewrites the fields it omitted.
+  it('does not reset the capacity or the end date when amending only the name', async () => {
+    const { testApp, token } = await adminApp();
+    const id = await createTuesdayTemplate(testApp, token);
+    expect((await patchTemplate(testApp, token, id, { capacity: 40 })).status).toBe(200);
+    expect((await patchTemplate(testApp, token, id, { activeUntil: '2026-12-31' })).status).toBe(
+      200,
+    );
+
+    const response = await patchTemplate(testApp, token, id, { name: 'Tuesday (renamed)' });
+
+    expect(response.status).toBe(200);
+    const body: { name: string; capacity: number; activeUntil: string | null } =
+      await response.json();
+    expect(body).toMatchObject({
+      name: 'Tuesday (renamed)',
+      capacity: 40,
+      activeUntil: '2026-12-31',
+    });
+  });
+
+  it('clears an end date with an explicit null', async () => {
+    const { testApp, token } = await adminApp();
+    const id = await createTuesdayTemplate(testApp, token);
+
+    expect((await patchTemplate(testApp, token, id, { activeUntil: '2026-09-30' })).status).toBe(
+      200,
+    );
+    const response = await patchTemplate(testApp, token, id, { activeUntil: null });
+
+    expect(response.status).toBe(200);
+    const body: { activeUntil: string | null } = await response.json();
+    expect(body.activeUntil).toBeNull();
+  });
+
+  it('refuses an empty patch rather than reporting a change it did not make', async () => {
+    const { testApp, token } = await adminApp();
+    const id = await createTuesdayTemplate(testApp, token);
+
+    const response = await patchTemplate(testApp, token, id, {});
+
+    expect(response.status).toBe(400);
+  });
+
+  it('refuses a weekday outside 1-7', async () => {
+    const { testApp, token } = await adminApp();
+    const id = await createTuesdayTemplate(testApp, token);
+
+    const response = await patchTemplate(testApp, token, id, { weekday: 0 });
+
+    expect(response.status).toBe(400);
+  });
+
+  it('is not found when the template does not exist', async () => {
+    const { testApp, token } = await adminApp();
+
+    const response = await patchTemplate(testApp, token, crypto.randomUUID(), { capacity: 30 });
+
+    expect(response.status).toBe(404);
   });
 });

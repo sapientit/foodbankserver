@@ -60,25 +60,40 @@ export function submission(world: ReferralWorld, overrides: Record<string, unkno
   return {
     sessionId: world.sessionId,
     reasonId: world.reasonId,
+    referrerName: 'Jane Fieldsworth',
     referrerEmail: 'jane@guildford.gov.uk',
+    referrerOrganisation: 'Guildford Borough Council',
     referrerPhone: '01483 000111',
-    refereeName: 'Alice Wintergreen',
+    refereeFirstName: 'Alice',
+    refereeSurname: 'Wintergreen',
+    refereeDateOfBirth: '1985-03-14',
     refereeAddress: '12 Bramble Cottages',
     refereePostcode: 'GU1 4AA',
     refereePhone: '07700 900123',
     adults: 2,
     children: 3,
-    answers: { dietary_needs: 'no pork' },
+    answers: { Dietary: 'no pork' },
     ...overrides,
   };
 }
+
+/**
+ * An address the authorised-referrer list does not know.
+ *
+ * Submitting with it is the only way to get a `pending_review` referral, so it
+ * is the starting point for every review test.
+ */
+export const UNKNOWN_REFERRER = {
+  referrerEmail: 'someone@notonthelist.example',
+  referrerOrganisation: 'A Charity Nobody Has Added Yet',
+};
 
 export async function submitReferral(
   testApp: TestApp,
   world: ReferralWorld,
   overrides: Record<string, unknown> = {},
   options: { clientIp?: string } = {},
-): Promise<{ id: string; editKey: string; status: number; body: unknown }> {
+): Promise<{ id: string; referralStatus: string; status: number; body: unknown }> {
   const response = await testApp.request('/api/v1/public/referrals', {
     method: 'POST',
     headers: {
@@ -92,15 +107,11 @@ export async function submitReferral(
   });
 
   const body: unknown = await response.json();
-  const parsed = body as { id?: string; editKey?: string };
+  const parsed = body as { id?: string; status?: string };
   return {
     id: parsed.id ?? '',
-    editKey: parsed.editKey ?? '',
+    referralStatus: parsed.status ?? '',
     status: response.status,
     body,
   };
-}
-
-export function keyHeaders(editKey: string): Record<string, string> {
-  return { 'x-referral-key': editKey, 'content-type': 'application/json' };
 }

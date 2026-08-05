@@ -149,13 +149,20 @@ every one of them — harmless, but show the right menu anyway.
 
 ### Field-level visibility
 
-A **team lead does not receive** `reasonId`, `referrerEmail` or `referrerPhone`
-on a referral. The fields are absent, not null. Treat them as optional in your
-types — `openapi-typescript` already will.
+A **team lead does not receive** `reasonId`, `referrerEmail`, `referrerPhone` or
+`reviewComment` on a referral. The fields are absent, not null. Treat them as
+optional in your types — `openapi-typescript` already will.
 
 Why: the reason for referral is the most sensitive thing in the system. It can
 mean financial hardship, domestic abuse, or immigration status. A picker needs
-household size, not that.
+household size, not that. `reviewComment` is withheld for the same kind of
+reason — it can name a referrer or record a suspicion about one.
+
+A team lead also **does not see rejected referrals at all**. They are missing
+from `GET /referrals` whatever you filter by (`status=rejected` returns an empty
+list rather than an error), and `GET /referrals/{id}` on one is a `404`. Pending
+referrals they do see, marked by `status`: the household may well turn up, and
+the team lead is the person in the hall when they do.
 
 ### How far ahead each role sees
 
@@ -197,13 +204,39 @@ Unauthenticated, and the only open write in the system. Rate limited per IP.
 
 ```
 1  GET  /api/v1/public/sessions           which sessions have space
-2  POST /api/v1/public/referrers/check    is this address allowed to refer?
-3  GET  /api/v1/public/referral-reasons   the reason dropdown
-4  POST /api/v1/public/referrals          submit  → returns editKey ONCE
+2  GET  /api/v1/public/organisations      the organisation dropdown
+3  POST /api/v1/public/referrers/check    is this address on the list?
+4  GET  /api/v1/public/referral-reasons   the reason dropdown
+5  POST /api/v1/public/referrals          submit  → 201, always
 ```
 
-Call step 2 as the referrer types their address, so an unauthorised one is
-caught before they fill in a whole form.
+### An unrecognised referrer is no longer refused
+
+`POST /public/referrals` **never returns `403`.** The address is still checked,
+but it decides the referral's `status`, not whether it is taken at all:
+
+| `POST /public/referrers/check` | Resulting `status`         |
+| ------------------------------ | -------------------------- |
+| `authorised: true`             | `active` — booked          |
+| `authorised: false`            | `pending_review` — waiting |
+
+A `pending_review` referral **holds its place on the session**, so it counts
+against capacity and `GET /public/sessions` stops offering a session once the
+places are gone, reviewed or not. It never reaches a pick list, a printed sheet
+or the household grid until an administrator accepts it.
+
+So call step 3 as the referrer types their address, but not to block them — use
+it to pre-fill `referrerOrganisation` when it comes back authorised, and to warn
+them that the referral will need checking when it does not. Do not gate the form
+on it.
+
+`referrerOrganisation` is now **yours to send**, not derived. An unrecognised
+referrer has no authorised-referrer row to derive it from, which is why the form
+asks: the dropdown from step 2 for one on the list, the free-text box beside it
+for one that is not. When the address is authorised, send back what step 3
+returned so the value matches what the server would have derived — the server
+still records its own match separately, so your string never decides which
+organisation gets the credit.
 
 ### The form itself is yours
 
@@ -226,12 +259,21 @@ What the server does with `answers` is store it and give it back:
   serialised. That is a bound on an unauthenticated write, not form validation,
   and no real form comes near it.
 
-The reason dropdown (step 3) is the exception that stays server-side: it is a
+The reason dropdown (step 4) is the exception that stays server-side: it is a
 maintained lookup, admin-editable, and the referral points at one by `reasonId`.
 
-**After a retention purge, `answers` comes back empty** along with the
-identifying fields — the server cannot tell which answers were personal, so it
-drops all of them.
+**Six things are fixed columns, not answers**, because the charity reports on
+them or the server acts on them: `refereeFirstName`, `refereeSurname`,
+`refereeDateOfBirth`, `referrerName`, `referrerOrganisation` and
+`needsFuelHelp`. Send them as named fields on `ReferralSubmission`, not as
+`answers` keys. The two questions that follow from `needsFuelHelp` — pre-payment
+meter, permission to ring — are ordinary answers.
+
+**After a retention purge, `answers` comes back empty** along with the referee's
+own fields — the server cannot tell which answers were personal, so it drops all
+of them. The referrer's name, email and phone survive, as does `reviewComment`:
+the point of the purge is to stop holding the household's details, not to lose
+track of who referred them.
 
 ### Turnstile
 
@@ -246,28 +288,34 @@ handle:
   will hit this and get a `400` saying the check expired. Reset the widget and
   let them resubmit rather than showing a generic error.
 
-### The edit key
+### There is no edit window
 
-The submission response contains `editKey`, **once and nowhere else**. It lets
-the referrer amend or withdraw _that one referral_ for fifteen minutes:
+The fifteen-minute self-service window is **gone**, along with `editKey`,
+`editKeyExpiresAt`, the `x-referral-key` header and
+`GET|PATCH|DELETE /api/v1/public/referrals/{id}`. Once a referral is submitted
+the referrer cannot change it; they phone the food bank, as they already did
+once fifteen minutes had passed.
+
+What replaces it is a confirmation screen. `ReferralReceipt` carries the fixed
+fields back so the referrer can see what they sent, plus `status` — show them
+plainly that a `pending_review` referral is waiting to be checked rather than
+letting them assume a place is settled.
+
+### Reviewing (admin only)
 
 ```
-GET|PATCH|DELETE /api/v1/public/referrals/{id}
-  header: x-referral-key: <editKey>
+POST /api/v1/referrals/{id}/accept   { comment?: string }  → Referral (active)
+POST /api/v1/referrals/{id}/reject   { comment?: string }  → Referral (rejected)
 ```
 
-Four things to build around:
+Both are `409` if the referral is not `pending_review`. `comment` is one line,
+at most 200 characters, and **replaces** any earlier one — there is no review
+history and no review timestamp. `referredAt` is the timestamp, and it is the
+referrer's submission, not the review. Who reviewed is recorded but never
+returned.
 
-- **Fifteen minutes from submission, absolute.** Amending does not extend it.
-  Show a countdown, and hide the edit UI when it lapses.
-- **Amending does not return a new key.** Keep the original.
-- **`DELETE` consumes it.** After withdrawing, the key is dead.
-- After expiry the referrer has no self-service route and must phone the food
-  bank. Say so in the UI; a `409` here is not an error to apologise for.
-
-Hold the key in memory. It authorises access to somebody's name and address, so
-it does not belong in a URL, `localStorage`, or anywhere it could be shared or
-logged.
+Accepting cannot fail for a full session: the referral was already holding its
+place. Rejecting releases it.
 
 ---
 
@@ -382,18 +430,36 @@ Two things worth knowing when you build a report:
 ordered by shelf** so a picker walks the aisle once (`A1, A2, A10` — not
 alphabetically). Render in the order given.
 
+What is **on every sheet**: `pickNumber`, and `refereeFirstName` /
+`refereeSurname`. The name used to be withheld on collections; it is now on all
+of them, because the person carrying the bag has to hand it to somebody and a
+number does not do that.
+
+What is on a sheet **only when `isDelivery` is true**: `deliveryAddress`,
+`deliveryPostcode` and `deliveryPhone` — and the word `DELIVERY`, which you
+render. These are the referee's own details: a delivery never goes anywhere
+else, so there is no second address to send on a referral or display on a form.
+All three are `null` on a collection.
+
 What is deliberately **not** on a sheet:
 
 - **The reason for referral.** Never, not even for an admin. Sheets get carried
   round halls and left on tables.
-- **Name and address**, unless `isDelivery` is true — where the address is the
-  entire point. `deliveryAddress` on a print sheet is the referee's own address:
-  a delivery never goes anywhere else, so there is no second address to send on
-  a referral or to display on a form.
+- **The answers.** `dietaryNotes` is **gone** — it scanned four guessed
+  snake_case keys, none of which is a key in the real form, so it would have
+  become `null` the day the form shipped. The preferences belong on the
+  maintenance screen instead; see below.
 
-What **is** there: `dietaryNotes`, because the picker is the only person who can
-act on them, and the alternative is a parcel that cannot be eaten. Show them
-prominently.
+### Preferences on the maintenance screen
+
+`Parcel.answers` (on `GET /sessions/{id}/pick-list` and `GET /pick-lists/{id}`)
+carries the referral's **whole answers map**, unfiltered.
+
+Which of those are preferences is yours to know — you own the form definition
+and the `preference` flag on each question — so filter the map yourself. The
+server holds no definition and will not guess; that guess is exactly what
+`dietaryNotes` was. The map is empty once the referral's personal data has been
+purged.
 
 ---
 

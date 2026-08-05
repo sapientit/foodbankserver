@@ -38,10 +38,7 @@ export const cors: MiddlewareHandler<AppEnv> = async (c, next) => {
   }
 
   c.header('access-control-allow-methods', 'GET,POST,PATCH,PUT,DELETE,OPTIONS');
-  c.header(
-    'access-control-allow-headers',
-    'authorization,content-type,x-referral-key,cf-turnstile-response',
-  );
+  c.header('access-control-allow-headers', 'authorization,content-type,cf-turnstile-response');
   c.header('access-control-max-age', '86400');
   return c.body(null, 204);
 };

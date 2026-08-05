@@ -8,9 +8,9 @@ info:
     lists produced, stock adjusted.
 
     **Read `API.md` alongside this.** A schema describes shapes; it cannot
-    describe the login/refresh cycle, the fifteen-minute referral edit window,
-    or why a team lead receives fewer fields than an admin. Those are the parts
-    most likely to be got wrong.
+    describe the login/refresh cycle, what happens to a referral from an
+    unrecognised address, or why a team lead receives fewer fields than an
+    admin. Those are the parts most likely to be got wrong.
 
     ## Generating a client
 
@@ -365,9 +365,15 @@ paths:
         server is configured with a secret — always in production. Tokens are
         single-use and expire after five minutes.
 
-        The response contains `editKey` **once and nowhere else**. Hold it in
-        memory to let the referrer amend or withdraw within fifteen minutes;
-        after that they must phone the food bank.
+        **An unrecognised referrer is not refused.** The address is still
+        checked, but it decides the *status* rather than whether the referral is
+        taken: a recognised address gives `status: "active"`, an unrecognised
+        one `status: "pending_review"`, which waits for an administrator to
+        accept or reject it. This endpoint no longer returns `403`.
+
+        **There is no edit window.** The response is a confirmation to show
+        back, not a handle to return with — show the referrer what they sent
+        and tell them to phone the food bank if it needs changing.
       security: []
       parameters:
         - in: header
@@ -381,66 +387,48 @@ paths:
             schema: { $ref: '#/components/schemas/ReferralSubmission' }
       responses:
         '201':
-          description: Referral accepted
+          description: >-
+            Referral accepted. Check `status` — it may be awaiting review.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ReferralReceipt' }
         '400':
           description: Validation failed, or the bot check was missing or stale
-        '403':
-          description: The referrer's address is not authorised
         '409':
           description: The session is full, cancelled, or already confirmed
         '422':
           description: The chosen reason is no longer offered
         '429': { $ref: '#/components/responses/RateLimited' }
 
-  /api/v1/public/referrals/{id}:
-    parameters:
-      - $ref: '#/components/parameters/Id'
-      - $ref: '#/components/parameters/ReferralKey'
+  /api/v1/public/organisations:
     get:
       tags: [Public]
-      summary: Read your own referral during the edit window
-      security: []
-      responses:
-        '200':
-          description: The referral as the referrer submitted it
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/SelfServiceReferral' }
-        '401': { description: The edit key header is missing }
-        '403': { description: The key is invalid, consumed, or for another referral }
-        '409': { description: The fifteen-minute window has closed }
-    patch:
-      tags: [Public]
-      summary: Amend your own referral
+      summary: Organisations that may refer
       description: >
-        Amending does **not** extend the window — it runs from submission and
-        is absolute.
+        The distinct organisation names on the active authorised-referrer list,
+        sorted, for the dropdown on page one of the referral form. Beside it the
+        form offers a free-text box for an organisation that is not here — which
+        is also the path that produces a `pending_review` referral.
+
+        Names only, never the match rules behind them.
       security: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/ReferralSelfAmend' }
       responses:
         '200':
-          description: Updated
+          description: Organisations, by name
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/SelfServiceReferral' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '403': { description: Invalid key }
-        '409': { description: Window closed, or the referral is cancelled }
-    delete:
-      tags: [Public]
-      summary: Withdraw your own referral
-      description: Consumes the key, so it cannot be used again.
-      security: []
-      responses:
-        '204': { description: Withdrawn }
-        '403': { description: Invalid key }
+              schema:
+                type: object
+                required: [organisations]
+                properties:
+                  organisations:
+                    type: array
+                    items:
+                      type: object
+                      required: [name]
+                      properties:
+                        name: { type: string }
+        '429': { $ref: '#/components/responses/RateLimited' }
 
   # -------------------------------------------------------------- sessions --
   /api/v1/sessions:
@@ -666,12 +654,30 @@ paths:
       tags: [Sessions]
       summary: Amend a weekly template
       description: >
-        Admin only. Does not retrospectively change sessions already generated.
+        Admin only. Any subset of the fields, and at least one — an empty body is
+        a `400`. Does not retrospectively change sessions already generated: the
+        cron never updates a session row, so an amendment reaches only the
+        occurrences materialised after it.
       requestBody:
         required: true
         content:
           application/json:
-            schema: { type: object, minProperties: 1 }
+            schema:
+              type: object
+              minProperties: 1
+              properties:
+                name: { type: string, maxLength: 120 }
+                weekday:
+                  type: integer
+                  minimum: 1
+                  maximum: 7
+                  description: ISO-8601, 1 = Monday.
+                startTime: { $ref: '#/components/schemas/LocalTime' }
+                durationMinutes: { type: integer, minimum: 1, maximum: 1440 }
+                location: { type: string }
+                capacity: { type: integer }
+                activeFrom: { type: string, format: date }
+                activeUntil: { type: [string, 'null'], format: date }
       responses:
         '200':
           description: Updated
@@ -685,11 +691,21 @@ paths:
       tags: [Referrals]
       summary: List referrals
       description: |
-        **A team lead does not receive `reasonId`, `referrerEmail` or
-        `referrerPhone`.** Why someone is hungry is not picking information.
+        **A team lead does not receive `reasonId`, `referrerEmail`,
+        `referrerPhone` or `reviewComment`.** Why someone is hungry is not
+        picking information.
+
+        **A team lead's list never contains rejected referrals**, whatever they
+        filter by; asking for `status=rejected` returns an empty list rather
+        than an error, because the status is simply not one of theirs. Pending
+        ones they do see.
       parameters:
         - { in: query, name: sessionId, schema: { type: string, format: uuid } }
-        - { in: query, name: status, schema: { type: string, enum: [active, cancelled] } }
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [pending_review, active, rejected, cancelled]
       responses:
         '200':
           description: Referrals
@@ -714,7 +730,10 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Referral' }
-        '404': { $ref: '#/components/responses/NotFound' }
+        '404':
+          description: >-
+            No such referral — or it is rejected and the caller is a team lead,
+            who has no business learning that it exists.
     patch:
       tags: [Referrals]
       summary: Amend or move a referral
@@ -722,13 +741,24 @@ paths:
         Admin only. Supplying `sessionId` moves it; moving into a full session
         requires `acknowledgeOverCapacity: true`, which is the server half of
         the warning the operator has to accept.
+
+        A cancelled or rejected referral cannot be amended **or moved** — a move
+        is an amendment, and nothing reinstates a referral, so relocating a dead
+        one only moves a dead record.
+      x-assumed: >-
+        Q23 — which fields an administrator may change. This surface predates
+        `referral details.txt` item 7, which says the session, "other
+        information" and "the notes" are the only three. Whether that describes
+        the review screen or the referral generally is unsettled, and two of the
+        three names do not map onto anything here. The wider set stands
+        meanwhile; a client is free to offer fewer fields.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               allOf:
-                - $ref: '#/components/schemas/ReferralSelfAmend'
+                - $ref: '#/components/schemas/ReferralAmend'
                 - type: object
                   properties:
                     sessionId: { type: string, format: uuid }
@@ -739,14 +769,67 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Referral' }
-        '409': { description: Target session is full and not acknowledged }
+        '409':
+          description: >-
+            Target session is full and not acknowledged, or the referral is
+            cancelled or rejected
+
+  /api/v1/referrals/{id}/accept:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    post:
+      tags: [Referrals]
+      summary: Accept a referral awaiting review
+      description: >
+        Admin only. Moves `pending_review` to `active`. The referral already
+        held its place on the session, so accepting it takes no further
+        capacity and cannot fail for a full session.
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReferralReview' }
+      responses:
+        '200':
+          description: Accepted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Referral' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: That referral is not awaiting review }
+
+  /api/v1/referrals/{id}/reject:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    post:
+      tags: [Referrals]
+      summary: Reject a referral awaiting review
+      description: >
+        Admin only. Moves `pending_review` to `rejected` and releases its place
+        on the session. A team lead can no longer see it at all.
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReferralReview' }
+      responses:
+        '200':
+          description: Rejected
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Referral' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: That referral is not awaiting review }
 
   /api/v1/referrals/{id}/cancel:
     parameters: [{ $ref: '#/components/parameters/Id' }]
     post:
       tags: [Referrals]
       summary: Cancel a referral
-      description: Admin only. Idempotent. Frees its place in the session.
+      description: >
+        Admin only. Idempotent. Frees its place in the session.
+
+        A **rejected** referral is a `409`, not a cancellation. The two are
+        different things that happened, and `reviewComment` is the only record
+        of why the charity turned the household away — relabelling the status
+        would leave that comment on a referral that no longer says a review took
+        place.
       requestBody:
         content:
           application/json:
@@ -760,6 +843,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Referral' }
+        '409': { description: That referral was rejected }
 
   # ----------------------------------------------------------------- stock --
   /api/v1/stock/levels:
@@ -1665,7 +1749,6 @@ paths:
                   templatesConsidered: { type: integer }
                   occurrencesPlanned: { type: integer }
                   sessionsCreated: { type: integer }
-                  editKeysPurged: { type: integer }
                   referralsPurged: { type: integer }
 
 components:
@@ -1678,14 +1761,6 @@ components:
         `Authorization: Bearer <accessToken>`. Expires after 15 minutes, or
         when the eight-hour sign-in ends if that comes first; see the refresh
         flow in API.md.
-    referralKey:
-      type: apiKey
-      in: header
-      name: x-referral-key
-      description: >
-        Returned once when a referral is submitted. Authorises amending or
-        withdrawing that one referral, for fifteen minutes.
-
   parameters:
     Id:
       in: path
@@ -1697,11 +1772,6 @@ components:
       name: sessionId
       required: true
       schema: { type: string, format: uuid }
-    ReferralKey:
-      in: header
-      name: x-referral-key
-      required: true
-      schema: { type: string }
 
   responses:
     BadRequest:
@@ -1860,9 +1930,13 @@ components:
         booked:
           type: integer
           description: >
-            Active referrals on this session — households, so directly
+            Referrals holding a place on this session — households, so directly
             comparable with `capacity`. Derived by summing referrals, never
-            stored. Cancelled referrals do not occupy a place. An admin may
+            stored.
+
+            **A referral awaiting review counts.** It has not been looked at
+            yet, but the household may well turn up, so it holds its place;
+            cancelled and rejected referrals give theirs back. An admin may
             deliberately exceed capacity when moving someone, so this can be
             greater than `capacity`.
         status: { type: string, enum: [planned, in_progress, confirmed, cancelled] }
@@ -1889,16 +1963,66 @@ components:
     ReferralSubmission:
       type: object
       required:
-        [sessionId, reasonId, referrerEmail, refereeName, refereeAddress, refereePostcode, adults]
+        [
+          sessionId,
+          reasonId,
+          referrerName,
+          referrerEmail,
+          referrerOrganisation,
+          refereeFirstName,
+          refereeSurname,
+          refereeDateOfBirth,
+          refereeAddress,
+          refereePostcode,
+          adults,
+        ]
       properties:
         sessionId: { type: string, format: uuid }
         reasonId: { type: string, format: uuid }
-        referrerEmail: { type: string, format: email }
+        referrerName: { type: string, maxLength: 200 }
+        referrerEmail:
+          type: string
+          format: email
+          description: >-
+            Still checked against the authorised list, but an address that is
+            not on it no longer refuses the referral — it makes it
+            `pending_review`.
+        referrerOrganisation:
+          type: string
+          maxLength: 200
+          description: >
+            **Supplied by you, not derived.** An unrecognised referrer has no
+            authorised-referrer row to derive an organisation from, which is why
+            the form asks: the dropdown from `GET /public/organisations` for one
+            on the list, the free-text box for one that is not.
+
+            When the address *is* authorised, pre-fill it from `POST
+            /public/referrers/check` so the value matches what the server would
+            have derived. The server still records its own match separately, so
+            this string never decides which organisation a referral is credited
+            to.
         referrerPhone: { type: string, minLength: 5, maxLength: 30 }
-        refereeName: { type: string, maxLength: 200 }
+        refereeFirstName: { type: string, maxLength: 100 }
+        refereeSurname:
+          type: string
+          maxLength: 100
+          description: >-
+            Held apart from the first name because it is what a list sorts by
+            and what a volunteer matches a bag to.
+        refereeDateOfBirth:
+          type: string
+          format: date
+          description: '`YYYY-MM-DD`. A date, not an age — an age is wrong a year later.'
         refereeAddress: { type: string, maxLength: 500 }
         refereePostcode: { type: string, minLength: 2, maxLength: 12 }
         refereePhone: { type: string, minLength: 5, maxLength: 30 }
+        needsFuelHelp:
+          type: boolean
+          default: false
+          description: >-
+            A column rather than an answer, because the charity reports on it.
+            The two questions that follow from it — pre-payment meter,
+            permission to ring — are ordinary answers and belong in `answers`.
         adults:
           type: integer
           minimum: 1
@@ -1926,42 +2050,49 @@ components:
           maxProperties: 100
           additionalProperties: true
 
-    ReferralSelfAmend:
+    ReferralAmend:
       type: object
       minProperties: 1
-      description: Any subset. Amending does not extend the fifteen-minute window.
+      description: >
+        Any subset. **Admin only** — there is no self-service amendment; a
+        referrer who needs a change phones the food bank.
+
+        `referrerEmail` is deliberately absent. It is what the authorisation
+        decision was made on, so editing it would leave a referral whose status
+        no longer follows from its address.
       properties:
-        refereeName: { type: string }
+        referrerName: { type: string }
+        referrerPhone: { type: [string, 'null'] }
+        refereeFirstName: { type: string }
+        refereeSurname: { type: string }
+        refereeDateOfBirth: { type: string, format: date }
         refereeAddress: { type: string }
         refereePostcode: { type: string }
         refereePhone: { type: [string, 'null'] }
-        referrerPhone: { type: [string, 'null'] }
         adults: { type: integer, minimum: 1 }
         children: { type: integer, minimum: 0 }
         isDelivery: { type: boolean }
+        needsFuelHelp: { type: boolean }
         reasonId: { type: string, format: uuid }
         answers: { type: object, additionalProperties: true }
 
+    ReferralReview:
+      type: object
+      description: >
+        The administrator's note on why a referral was let through or turned
+        away. One short line; it replaces any earlier note, and there is no
+        review history and no review timestamp. `Referral.referredAt` is the
+        timestamp the charity asked for — when the referrer submitted.
+      properties:
+        comment: { type: string, minLength: 1, maxLength: 200 }
+
     ReferralReceipt:
       type: object
-      required: [id, sessionId, status, adults, children, isDelivery, editKey, editKeyExpiresAt]
-      properties:
-        id: { type: string, format: uuid }
-        sessionId: { type: string, format: uuid }
-        status: { type: string }
-        adults: { type: integer }
-        children: { type: integer }
-        isDelivery: { type: boolean }
-        editKey:
-          type: string
-          description: >
-            Returned once and never again. Hold it in memory to allow amending
-            within fifteen minutes.
-        editKeyExpiresAt: { type: integer, description: Epoch seconds. }
-
-    SelfServiceReferral:
-      type: object
-      description: The referrer's own view. Never includes the edit key.
+      description: >
+        What the referrer gets back. This is the whole of their relationship
+        with the system now: there is no key and no window, so show it as a
+        confirmation. **Read `status`** — `pending_review` means the referral is
+        waiting to be looked at, not that a place is booked and settled.
       required:
         [
           id,
@@ -1970,32 +2101,39 @@ components:
           adults,
           children,
           isDelivery,
-          refereeName,
+          needsFuelHelp,
+          refereeFirstName,
+          refereeSurname,
           refereeAddress,
           refereePostcode,
-          refereePhone,
-          answers,
+          referredAt,
         ]
       properties:
         id: { type: string, format: uuid }
         sessionId: { type: string, format: uuid }
-        status: { type: string }
+        status: { type: string, enum: [pending_review, active] }
         adults: { type: integer }
         children: { type: integer }
         isDelivery: { type: boolean }
-        refereeName: { type: [string, 'null'] }
+        needsFuelHelp: { type: boolean }
+        refereeFirstName: { type: [string, 'null'] }
+        refereeSurname: { type: [string, 'null'] }
         refereeAddress: { type: [string, 'null'] }
         refereePostcode: { type: [string, 'null'] }
-        refereePhone: { type: [string, 'null'] }
-        answers: { type: object, additionalProperties: true }
+        referredAt: { type: string, format: date-time }
 
     Referral:
       type: object
       description: |
-        The staff view. **The last three fields are admin-only** — a team lead
+        The staff view. **The last four fields are admin-only** — a team lead
         receives the object without them, so treat them as optional.
+
+        **A team lead does not see rejected referrals at all.** They are absent
+        from the list, and fetching one by id is a `404`. Pending ones they do
+        see, marked by `status`, because a household awaiting review may well
+        turn up and the team lead is the person in the hall when they do.
       # The referee fields and piiPurgedAt are always emitted (they are in the
-      # mapper's `base` object, nullable rather than absent). Only the three
+      # mapper's `base` object, nullable rather than absent). Only the four
       # admin-only fields below are conditional, so only those stay optional.
       required:
         [
@@ -2007,8 +2145,12 @@ components:
           children,
           householdSize,
           isDelivery,
+          needsFuelHelp,
           referrerOrganisation,
-          refereeName,
+          referrerName,
+          refereeFirstName,
+          refereeSurname,
+          refereeDateOfBirth,
           refereeAddress,
           refereePostcode,
           refereePhone,
@@ -2018,14 +2160,35 @@ components:
       properties:
         id: { type: string, format: uuid }
         sessionId: { type: string, format: uuid }
-        status: { type: string, enum: [active, cancelled] }
-        referredAt: { type: string, format: date-time }
+        status:
+          type: string
+          enum: [pending_review, active, rejected, cancelled]
+          description: >
+            `pending_review` — the referrer's address was not recognised and an
+            administrator has not yet looked at it. It **holds its place** on
+            the session, so it counts against capacity, but it never reaches a
+            pick list, a printed sheet or the household grid.
+
+            `rejected` — an administrator turned it away. Its place is released.
+        referredAt:
+          type: string
+          format: date-time
+          description: >-
+            When the referrer submitted. There is no separate review timestamp.
         adults: { type: integer }
         children: { type: integer }
         householdSize: { type: integer }
         isDelivery: { type: boolean }
-        referrerOrganisation: { type: string }
-        refereeName: { type: [string, 'null'] }
+        needsFuelHelp: { type: boolean }
+        referrerOrganisation:
+          type: string
+          description: >-
+            As the referrer gave it. For an unrecognised referrer there was no
+            authorised-referrer row to derive it from.
+        referrerName: { type: [string, 'null'] }
+        refereeFirstName: { type: [string, 'null'] }
+        refereeSurname: { type: [string, 'null'] }
+        refereeDateOfBirth: { type: [string, 'null'], format: date }
         refereeAddress: { type: [string, 'null'] }
         refereePostcode: { type: [string, 'null'] }
         refereePhone: { type: [string, 'null'] }
@@ -2039,8 +2202,13 @@ components:
           type: [string, 'null']
           format: date-time
           description: >
-            When set, the identifying fields above are null by design, and
+            When set, the **referee's** fields above are null by design and
             `answers` is empty.
+
+            The referrer's own details are **not** purged — `referrerName`,
+            `referrerEmail`, `referrerPhone` and `reviewComment` all survive.
+            The retention period exists to forget the household that needed
+            feeding, not the professional who referred them.
           x-assumed: >-
             Q12 — that a purge drops the dynamic answers whole. The server no
             longer holds a form definition, so it cannot tell a personal answer
@@ -2057,6 +2225,12 @@ components:
         referrerPhone:
           type: [string, 'null']
           description: '**Admin only.**'
+        reviewComment:
+          type: [string, 'null']
+          description: >-
+            **Admin only.** The reviewing administrator's one line. It can name a
+            referrer or record a suspicion, which is not a team lead's business.
+            Who reviewed is stored but never returned — no screen asks.
 
     StockItem:
       type: object
@@ -2124,7 +2298,18 @@ components:
     Parcel:
       type: object
       required:
-        [id, referralId, pickNumber, adults, children, householdSize, attendance, notes, lines]
+        [
+          id,
+          referralId,
+          pickNumber,
+          adults,
+          children,
+          householdSize,
+          attendance,
+          notes,
+          answers,
+          lines,
+        ]
       properties:
         id: { type: string, format: uuid }
         referralId: { type: string, format: uuid }
@@ -2136,6 +2321,20 @@ components:
         householdSize: { type: integer }
         attendance: { type: string, enum: [pending, attended, no_show, cancelled] }
         notes: { type: [string, 'null'] }
+        answers:
+          type: object
+          additionalProperties: true
+          description: >
+            The referral's answers, **whole and unfiltered**, for the
+            preferences half of the pick-list maintenance screen.
+
+            Which of them are preferences is yours to know: you own the form
+            definition and the `preference` flag on each question, so filter
+            this map yourself. The server holds no definition and will not
+            guess — the four hard-coded dietary keys this replaced were exactly
+            that guess, and none of them is a key in the real form.
+
+            Empty once the referral's personal data has been purged.
         lines:
           type: array
           items: { $ref: '#/components/schemas/ParcelLine' }
@@ -2143,18 +2342,24 @@ components:
     PrintParcel:
       type: object
       description: >
-        Deliberately narrow. No reason for referral, ever. No name or address
-        unless it is a delivery.
+        Deliberately narrow. **No reason for referral, ever**, and no answers —
+        by print time the decision they informed is in `lines`.
+
+        The pick number and the household's name are on every sheet: the person
+        carrying the bag has to hand it to somebody. The address, postcode and
+        phone number appear **only** for a delivery.
       required:
         [
           pickNumber,
           householdSize,
           adults,
           children,
+          refereeFirstName,
+          refereeSurname,
           isDelivery,
-          deliveryName,
           deliveryAddress,
-          dietaryNotes,
+          deliveryPostcode,
+          deliveryPhone,
           notes,
           lines,
         ]
@@ -2163,16 +2368,20 @@ components:
         householdSize: { type: integer }
         adults: { type: integer }
         children: { type: integer }
-        isDelivery: { type: boolean }
-        deliveryName: { type: [string, 'null'] }
+        refereeFirstName: { type: [string, 'null'] }
+        refereeSurname: { type: [string, 'null'] }
+        isDelivery:
+          type: boolean
+          description: Print the word `DELIVERY` when this is true.
         deliveryAddress:
           type: [string, 'null']
           description: >-
             Where to drive to. This is the referee's own address — a delivery
             never goes anywhere else — and is null for a collection.
-        dietaryNotes:
+        deliveryPostcode: { type: [string, 'null'] }
+        deliveryPhone:
           type: [string, 'null']
-          description: Included because the picker is the only person who can act on it.
+          description: For the driver who cannot find the door. Null for a collection.
         notes: { type: [string, 'null'] }
         lines:
           type: array

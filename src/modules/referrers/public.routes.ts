@@ -24,6 +24,27 @@ export function publicReferrerRoutes(): Hono<AppEnv> {
   });
 
   /**
+   * The organisations that may refer, for the dropdown on page one of the form.
+   *
+   * Beside it the form has a free-text box for an organisation that is not on
+   * the list — which is also the path that produces a referral awaiting review,
+   * since an address the list does not recognise is exactly the case this box
+   * exists for.
+   *
+   * It reveals which organisations are authorised. That is organisational
+   * rather than personal information, and the form cannot offer a dropdown
+   * without it, but it is still an enumeration surface — hence the rate limit,
+   * and hence names only, never the match rules behind them.
+   */
+  routes.get('/organisations', rateLimit('PUBLIC_LIMITER'), async (c) => {
+    const organisationNames = await createReferrersRepository(
+      c.get('db'),
+    ).listActiveOrganisationNames();
+
+    return c.json({ organisations: organisationNames.map((name) => ({ name })) });
+  });
+
+  /**
    * Whether an address may refer.
    *
    * Returns the organisation name so the form can pre-fill it. It reveals

@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { fixedClock } from '../src/core/clock.ts';
 import { createDatabase } from '../src/db/client.ts';
 import { parcelLines, parcels, pickLists } from '../src/db/schema/pick-lists.ts';
-import { auditEvents, referralEditKeys, referrals } from '../src/db/schema/referrals.ts';
+import { auditEvents, referrals } from '../src/db/schema/referrals.ts';
 import { authorisedReferrers, referralReasons } from '../src/db/schema/referrers.ts';
 import { modelParcels, parcelGrid } from '../src/db/schema/rules.ts';
 import { recurringSessions, sessions } from '../src/db/schema/sessions.ts';
@@ -97,7 +97,6 @@ beforeEach(async () => {
   await db.delete(parcelGrid);
   await db.delete(modelParcels);
   await db.delete(auditEvents);
-  await db.delete(referralEditKeys);
   await db.delete(referrals);
   await db.delete(referralReasons);
   await db.delete(authorisedReferrers);

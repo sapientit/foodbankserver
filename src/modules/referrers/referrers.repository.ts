@@ -36,6 +36,24 @@ export function createReferrersRepository(db: Database) {
         .where(inArray(authorisedReferrers.matchValue, matchValues));
     },
 
+    /**
+     * The distinct organisations that may refer, for the public dropdown.
+     *
+     * Active rows only, and only the name — this is unauthenticated, so it must
+     * not become a way of reading the match rules themselves. `DISTINCT` in SQL
+     * because one organisation commonly has both a domain rule and a handful of
+     * named addresses, and the dropdown wants it once.
+     */
+    async listActiveOrganisationNames(): Promise<string[]> {
+      const rows = await db
+        .selectDistinct({ organisationName: authorisedReferrers.organisationName })
+        .from(authorisedReferrers)
+        .where(eq(authorisedReferrers.isActive, 1))
+        .orderBy(asc(authorisedReferrers.organisationName));
+
+      return rows.map((row) => row.organisationName);
+    },
+
     async list(): Promise<AuthorisedReferrer[]> {
       return db
         .select()

@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { fixedClock } from '../src/core/clock.ts';
 import { createDatabase } from '../src/db/client.ts';
 import { parcelLines, parcels, pickLists } from '../src/db/schema/pick-lists.ts';
-import { auditEvents, referralEditKeys, referrals } from '../src/db/schema/referrals.ts';
+import { auditEvents, referrals } from '../src/db/schema/referrals.ts';
 import { authorisedReferrers, referralReasons } from '../src/db/schema/referrers.ts';
 import { modelParcels, parcelGrid } from '../src/db/schema/rules.ts';
 import { recurringSessions, sessions } from '../src/db/schema/sessions.ts';
@@ -18,6 +18,7 @@ import {
   saveGrid,
   setUpPickingWorld,
   submitReferral,
+  UNKNOWN_REFERRER,
   type PickingWorld,
 } from './helpers/picking-fixtures.ts';
 
@@ -40,7 +41,6 @@ beforeEach(async () => {
   await db.delete(modelParcels);
   await db.delete(parcelGrid);
   await db.delete(auditEvents);
-  await db.delete(referralEditKeys);
   await db.delete(referrals);
   await db.delete(referralReasons);
   await db.delete(authorisedReferrers);
@@ -122,6 +122,62 @@ describe('generating a pick list', () => {
 
     const [parcel] = await db.select().from(parcels);
     expect(parcel?.referralId).toBe(keep.id);
+  });
+
+  it('excludes a referral nobody has reviewed yet', async () => {
+    const { testApp, token, world: w } = await world();
+    const keep = await submitReferral(testApp, w, { adults: 1, children: 0 });
+    await submitReferral(testApp, w, { adults: 1, children: 0, ...UNKNOWN_REFERRER });
+
+    // A pending referral holds a place on the session, but a parcel picked for
+    // a household that may yet be turned away is stock and volunteer time spent
+    // on nobody. It must not reach the warehouse until somebody has accepted it.
+    const { parcelsCreated } = await generatePickList(testApp, token, w.sessionId);
+    expect(parcelsCreated).toBe(1);
+
+    const [parcel] = await db.select().from(parcels);
+    expect(parcel?.referralId).toBe(keep.id);
+  });
+
+  it('excludes a rejected referral', async () => {
+    const { testApp, token, world: w } = await world();
+    const keep = await submitReferral(testApp, w, { adults: 1, children: 0 });
+    const drop = await submitReferral(testApp, w, {
+      adults: 1,
+      children: 0,
+      ...UNKNOWN_REFERRER,
+    });
+
+    await testApp.request(`/api/v1/referrals/${drop.id}/reject`, {
+      method: 'POST',
+      headers: authHeaders(token),
+    });
+
+    const { parcelsCreated } = await generatePickList(testApp, token, w.sessionId);
+    expect(parcelsCreated).toBe(1);
+
+    const [parcel] = await db.select().from(parcels);
+    expect(parcel?.referralId).toBe(keep.id);
+  });
+
+  it('picks a referral once it has been accepted', async () => {
+    const { testApp, token, world: w } = await world();
+    const { id } = await submitReferral(testApp, w, {
+      adults: 1,
+      children: 0,
+      ...UNKNOWN_REFERRER,
+    });
+
+    await testApp.request(`/api/v1/referrals/${id}/accept`, {
+      method: 'POST',
+      headers: authHeaders(token),
+    });
+
+    const { parcelsCreated } = await generatePickList(testApp, token, w.sessionId);
+    expect(parcelsCreated).toBe(1);
+
+    const [parcel] = await db.select().from(parcels);
+    expect(parcel?.referralId).toBe(id);
   });
 
   it('generates an empty pick list when nobody has been referred', async () => {
@@ -434,7 +490,7 @@ describe('the printed sheet', () => {
     expect(text).not.toContain(w.reasonId);
   });
 
-  it('withholds the name and address for a collection', async () => {
+  it('names the household on a collection sheet but withholds the address', async () => {
     const { testApp, token, world: w } = await world();
     await submitReferral(testApp, w, { adults: 1, children: 0 });
     const { id } = await generatePickList(testApp, token, w.sessionId);
@@ -444,17 +500,29 @@ describe('the printed sheet', () => {
     });
     const text = await response.text();
     const body = JSON.parse(text) as {
-      parcels: { deliveryName: string | null; deliveryAddress: string | null }[];
+      parcels: {
+        refereeFirstName: string | null;
+        refereeSurname: string | null;
+        deliveryAddress: string | null;
+        deliveryPostcode: string | null;
+        deliveryPhone: string | null;
+      }[];
     };
 
-    expect(body.parcels[0]?.deliveryName).toBeNull();
+    // The person carrying the bag has to hand it to somebody.
+    expect(body.parcels[0]?.refereeFirstName).toBe('Alice');
+    expect(body.parcels[0]?.refereeSurname).toBe('Wintergreen');
+
+    // Nothing else identifying reaches a sheet that gets left on a table.
     expect(body.parcels[0]?.deliveryAddress).toBeNull();
-    // Nothing identifying reaches a sheet that gets left on a table.
-    expect(text).not.toContain('Alice Wintergreen');
+    expect(body.parcels[0]?.deliveryPostcode).toBeNull();
+    expect(body.parcels[0]?.deliveryPhone).toBeNull();
     expect(text).not.toContain('12 Bramble Cottages');
+    expect(text).not.toContain('GU1 4AA');
+    expect(text).not.toContain('07700 900123');
   });
 
-  it("gives the picker the referee's own address for a delivery", async () => {
+  it("gives the driver the referee's own address, postcode and phone for a delivery", async () => {
     const { testApp, token, world: w } = await world();
     await submitReferral(testApp, w, { adults: 1, children: 0, isDelivery: true });
     const { id } = await generatePickList(testApp, token, w.sessionId);
@@ -465,16 +533,22 @@ describe('the printed sheet', () => {
     const body: {
       parcels: {
         isDelivery: boolean;
-        deliveryName: string | null;
+        refereeFirstName: string | null;
+        refereeSurname: string | null;
         deliveryAddress: string | null;
+        deliveryPostcode: string | null;
+        deliveryPhone: string | null;
       }[];
     } = await response.json();
 
     // A delivery goes to the referee's own address, so a driver must never be
     // handed a sheet with no address on it.
     expect(body.parcels[0]?.isDelivery).toBe(true);
-    expect(body.parcels[0]?.deliveryName).toBe('Alice Wintergreen');
+    expect(body.parcels[0]?.refereeFirstName).toBe('Alice');
+    expect(body.parcels[0]?.refereeSurname).toBe('Wintergreen');
     expect(body.parcels[0]?.deliveryAddress).toBe('12 Bramble Cottages');
+    expect(body.parcels[0]?.deliveryPostcode).toBe('GU1 4AA');
+    expect(body.parcels[0]?.deliveryPhone).toBe('07700 900123');
   });
 
   it('ignores a delivery address a client sends, rather than driving there', async () => {
@@ -497,21 +571,60 @@ describe('the printed sheet', () => {
     expect(text).not.toContain('4 Riverside Flats');
   });
 
-  it('surfaces dietary needs, which only the picker can act on', async () => {
+  it('carries no answers, because by print time the decision is in the lines', async () => {
     const { testApp, token, world: w } = await world();
     await submitReferral(testApp, w, {
       adults: 1,
       children: 0,
-      answers: { dietary_needs: 'no pork' },
+      answers: { Dietary: 'no pork', Pets: 'two cats' },
     });
     const { id } = await generatePickList(testApp, token, w.sessionId);
 
     const response = await testApp.request(`/api/v1/pick-lists/${id}/print`, {
       headers: authHeaders(token),
     });
-    const body: { parcels: { dietaryNotes: string | null }[] } = await response.json();
+    const text = await response.text();
 
-    expect(body.parcels[0]?.dietaryNotes).toBe('no pork');
+    // The preferences belong on the maintenance screen, where somebody is still
+    // deciding what goes in the parcel. `dietaryNotes` guessed at four keys the
+    // real form does not have, so it is gone rather than silently null.
+    expect(text).not.toContain('dietaryNotes');
+    expect(text).not.toContain('no pork');
+    expect(text).not.toContain('two cats');
+  });
+});
+
+describe('preferences on the pick-list maintenance screen', () => {
+  it('gives the whole answers map, for the client to filter to its own preferences', async () => {
+    const { testApp, token, world: w } = await world();
+    const answers = { Dietary: 'no pork', 'Tea/Coffee': 'Both', Other: 'no tin opener' };
+    await submitReferral(testApp, w, { adults: 1, children: 0, answers });
+    const { id } = await generatePickList(testApp, token, w.sessionId);
+
+    // Both routes that feed the maintenance screen.
+    for (const path of [`/api/v1/pick-lists/${id}`, `/api/v1/sessions/${w.sessionId}/pick-list`]) {
+      const response = await testApp.request(path, { headers: authHeaders(token) });
+      const body: { parcels: { answers: Record<string, unknown> }[] } = await response.json();
+
+      // Whole and unfiltered: which of these are preferences is the client's to
+      // know, because it owns the form definition.
+      expect(body.parcels[0]?.answers).toEqual(answers);
+    }
+  });
+
+  it('gives an empty map once the referral has been purged', async () => {
+    const { testApp, token, world: w } = await world();
+    await submitReferral(testApp, w, { adults: 1, children: 0, answers: { Dietary: 'no pork' } });
+    const { id } = await generatePickList(testApp, token, w.sessionId);
+
+    await db.update(referrals).set({ answersJson: null });
+
+    const response = await testApp.request(`/api/v1/pick-lists/${id}`, {
+      headers: authHeaders(token),
+    });
+    const body: { parcels: { answers: Record<string, unknown> }[] } = await response.json();
+
+    expect(body.parcels[0]?.answers).toEqual({});
   });
 });
 

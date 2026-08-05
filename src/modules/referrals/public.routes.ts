@@ -1,8 +1,6 @@
 import { Hono, type Context } from 'hono';
-import { UnauthorizedError } from '../../core/errors.ts';
-import { sha256Hex } from '../../core/crypto/tokens.ts';
 import type { AppEnv } from '../../http/types.ts';
-import { parseJsonBody, parseOptionalJsonBody } from '../../http/validate.ts';
+import { parseJsonBody } from '../../http/validate.ts';
 import { rateLimit } from '../../http/middleware/rate-limit.ts';
 import { requireTurnstile, TURNSTILE_HEADER } from '../security/turnstile.ts';
 import { createReferrersRepository } from '../referrers/referrers.repository.ts';
@@ -10,25 +8,21 @@ import { createReferrersService } from '../referrers/referrers.service.ts';
 import { createSessionsRepository } from '../sessions/sessions.repository.ts';
 import { createReferralsRepository } from './referrals.repository.ts';
 import { createReferralsService } from './referrals.service.ts';
-import {
-  toReceiptResponse,
-  toSelfServiceResponse,
-  type ReferralReceiptResponse,
-} from './referrals.mapper.ts';
-import {
-  cancelReferralSchema,
-  referralSelfAmendSchema,
-  referralSubmissionSchema,
-} from './referrals.schema.ts';
-
-export const REFERRAL_KEY_HEADER = 'x-referral-key';
+import { toReceiptResponse, type ReferralReceiptResponse } from './referrals.mapper.ts';
+import { referralSubmissionSchema } from './referrals.schema.ts';
 
 /**
- * Unauthenticated referral routes.
+ * The unauthenticated referral route. There is exactly one.
  *
- * The submission endpoint is the most exposed surface in the system: an open
- * write that stores names and addresses. It needs rate limiting and Turnstile
- * before go-live — tracked in CLAUDE.md.
+ * Submission is the most exposed surface in the system: an open write that
+ * stores names and addresses. Rate limiting and Turnstile are both applied
+ * below; Turnstile is inert until a secret is configured, which `config/env.ts`
+ * allows only outside production. See STATUS.md.
+ *
+ * There is no self-service read, amend or withdraw. The fifteen-minute window
+ * those served has been withdrawn: a referrer confirms what they sent on the
+ * spot and phones the food bank if it needs changing, which is what they
+ * already did once the window closed.
  */
 export function publicReferralRoutes(): Hono<AppEnv> {
   const routes = new Hono<AppEnv>();
@@ -45,59 +39,15 @@ export function publicReferralRoutes(): Hono<AppEnv> {
     });
 
     const input = await parseJsonBody(c, referralSubmissionSchema);
-    const { referral, editKey, editKeyExpiresAt } = await serviceFor(c).submit(input);
+    const referral = await serviceFor(c).submit(input);
 
-    // The key appears in this response and nowhere else, ever.
-    return c.json<ReferralReceiptResponse>(
-      toReceiptResponse(referral, editKey, editKeyExpiresAt),
-      201,
-    );
-  });
-
-  routes.get('/referrals/:id', rateLimit('PUBLIC_LIMITER'), async (c) => {
-    const referral = await serviceFor(c).authoriseByEditKey(c.req.param('id'), requireKey(c));
-    return c.json(toSelfServiceResponse(referral));
-  });
-
-  routes.patch('/referrals/:id', rateLimit('PUBLIC_LIMITER'), async (c) => {
-    const service = serviceFor(c);
-    const key = requireKey(c);
-
-    const referral = await service.authoriseByEditKey(c.req.param('id'), key);
-    const input = await parseJsonBody(c, referralSelfAmendSchema);
-    const updated = await service.applyAmendment(referral, input, {
-      kind: 'referral_key',
-      userId: null,
-    });
-
-    return c.json(toSelfServiceResponse(updated));
-  });
-
-  routes.delete('/referrals/:id', rateLimit('PUBLIC_LIMITER'), async (c) => {
-    const service = serviceFor(c);
-    const key = requireKey(c);
-
-    const referral = await service.authoriseByEditKey(c.req.param('id'), key);
-    await parseOptionalJsonBody(c, cancelReferralSchema);
-    await service.withdraw(referral, await sha256Hex(key));
-
-    return c.body(null, 204);
+    // 201 whether or not the address was recognised. An unrecognised referrer
+    // is not turned away — the referral waits for an administrator, and
+    // `status` is how the confirmation screen says so.
+    return c.json<ReferralReceiptResponse>(toReceiptResponse(referral), 201);
   });
 
   return routes;
-}
-
-/**
- * The key travels in a header, never a URL — query strings land in access logs
- * — and never a cookie, which would create a CSRF surface on an endpoint that
- * has no other authentication.
- */
-function requireKey(c: Context<AppEnv>): string {
-  const key = c.req.header(REFERRAL_KEY_HEADER);
-  if (key === undefined || key.trim() === '') {
-    throw new UnauthorizedError('This request needs the edit key returned when you referred');
-  }
-  return key.trim();
 }
 
 function serviceFor(c: Context<AppEnv>) {

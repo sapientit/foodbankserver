@@ -42,10 +42,26 @@ export interface ParcelResponse {
   readonly householdSize: number;
   readonly attendance: string;
   readonly notes: string | null;
+  /**
+   * The referral's answers, whole and unfiltered.
+   *
+   * The pick-list maintenance screen shows the household's preferences beside
+   * the parcel, and **which answers are preferences is the client's to know**:
+   * it owns the form definition and marks each question `preference: true`.
+   * The server holds no definition, so any attempt to pick out the relevant
+   * keys here would be a guess — which is exactly what the four hard-coded
+   * dietary keys this replaced turned out to be. Empty once the referral has
+   * been purged, or if the referral has since been deleted from under the
+   * parcel.
+   */
+  readonly answers: Record<string, unknown>;
   readonly lines: ParcelLineResponse[];
 }
 
-export function toParcelResponse({ parcel, lines }: ParcelWithLines): ParcelResponse {
+export function toParcelResponse(
+  { parcel, lines }: ParcelWithLines,
+  referral: Referral | undefined,
+): ParcelResponse {
   return {
     id: parcel.id,
     referralId: parcel.referralId,
@@ -55,6 +71,7 @@ export function toParcelResponse({ parcel, lines }: ParcelWithLines): ParcelResp
     householdSize: parcel.adults + parcel.children,
     attendance: parcel.attendance,
     notes: parcel.notes,
+    answers: parseAnswers(referral?.answersJson ?? null),
     lines: lines.map((line) => ({
       stockItemId: line.stockItemId,
       name: line.item.name,
@@ -68,41 +85,45 @@ export function toParcelResponse({ parcel, lines }: ParcelWithLines): ParcelResp
 /**
  * One printable sheet per parcel.
  *
- * The frontend renders this; the server only decides what belongs on it. Two
- * deliberate omissions and one deliberate inclusion:
+ * The frontend renders this; the server only decides what belongs on it.
  *
+ * - **The pick number and the household's name go on every sheet.** The name
+ *   used to be withheld unless the parcel was a delivery. The charity asked for
+ *   it on all of them: the person carrying the bag has to hand it to somebody,
+ *   and a number alone does not do that. The surname is separate because it is
+ *   what a volunteer matches against.
+ * - **`DELIVERY`, the address, postcode and phone number appear only when
+ *   `isDelivery`.** A delivery goes to the referee's own address — there is no
+ *   other one — so these are the referee's own fields, named for what the driver
+ *   uses them for. A collection sheet carries none of them.
  * - **No reason for referral**, ever — not even for an admin. A sheet gets
  *   carried round a hall and left on tables. Why someone is hungry is not
  *   picking information.
- * - **No referee name or address unless it is a delivery**, where the address
- *   is the whole point. A delivery goes to the referee's own address — there is
- *   no other one — so `deliveryAddress` here is `refereeAddress`, named for what
- *   the driver uses it for.
- * - **Dietary needs are included** when the form captured them, because the
- *   picker is the only person who can act on them, and the alternative is a
- *   parcel that cannot be eaten.
+ * - **No answers.** The preferences belong on the maintenance screen, where
+ *   somebody is deciding what goes in the parcel; by print time that decision
+ *   is in `lines`.
  */
 export interface PrintParcelResponse {
   readonly pickNumber: number;
   readonly householdSize: number;
   readonly adults: number;
   readonly children: number;
+  readonly refereeFirstName: string | null;
+  readonly refereeSurname: string | null;
   readonly isDelivery: boolean;
-  readonly deliveryName: string | null;
   readonly deliveryAddress: string | null;
-  readonly dietaryNotes: string | null;
+  readonly deliveryPostcode: string | null;
+  readonly deliveryPhone: string | null;
   readonly notes: string | null;
   readonly lines: ParcelLineResponse[];
 }
-
-const DIETARY_KEYS = ['dietary_needs', 'dietary_requirements', 'food_preferences', 'allergies'];
 
 export function toPrintParcelResponse(
   entry: ParcelWithLines,
   referral: Referral | undefined,
 ): PrintParcelResponse {
-  // Bind the narrowed referral once: the name and address are only ever read
-  // for a delivery, so there is no path where they leak onto a collection sheet.
+  // Bind the narrowed referral once: the address and phone number are only ever
+  // read for a delivery, so there is no path where they reach a collection sheet.
   const delivery = referral?.isDelivery === 1 ? referral : undefined;
 
   return {
@@ -110,38 +131,26 @@ export function toPrintParcelResponse(
     householdSize: entry.parcel.adults + entry.parcel.children,
     adults: entry.parcel.adults,
     children: entry.parcel.children,
+    refereeFirstName: referral?.refereeFirstName ?? null,
+    refereeSurname: referral?.refereeSurname ?? null,
     isDelivery: delivery !== undefined,
-    // Only a delivery needs a name and address on the sheet.
-    deliveryName: delivery?.refereeName ?? null,
     deliveryAddress: delivery?.refereeAddress ?? null,
-    dietaryNotes: dietaryNotesOf(referral),
+    deliveryPostcode: delivery?.refereePostcode ?? null,
+    deliveryPhone: delivery?.refereePhone ?? null,
     notes: entry.parcel.notes,
-    lines: toParcelResponse(entry).lines,
+    lines: toParcelResponse(entry, undefined).lines,
   };
 }
 
-/**
- * Pulls dietary information out of the dynamic answers.
- *
- * The form belongs to the client, so the key is not ours to fix — several
- * plausible names are checked rather than assuming one. Anything found is
- * passed through verbatim; the picker needs the actual words.
- */
-function dietaryNotesOf(referral: Referral | undefined): string | null {
-  if (referral?.answersJson == null) return null;
-
+function parseAnswers(answersJson: string | null): Record<string, unknown> {
+  if (answersJson === null) return {};
   try {
-    const parsed: unknown = JSON.parse(referral.answersJson);
-    if (typeof parsed !== 'object' || parsed === null) return null;
-
-    const answers = parsed as Record<string, unknown>;
-    const found = DIETARY_KEYS.map((key) => answers[key])
-      .filter((value): value is string => typeof value === 'string' && value.trim() !== '')
-      .join('; ');
-
-    return found === '' ? null : found;
+    const parsed: unknown = JSON.parse(answersJson);
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
   } catch {
-    return null;
+    return {};
   }
 }
 

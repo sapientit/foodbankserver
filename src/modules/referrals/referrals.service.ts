@@ -1,11 +1,8 @@
-import { REFERRAL_EDIT_KEY_TTL_SECONDS } from '../../config/constants.ts';
 import type { Actor } from '../../core/actor.ts';
 import type { Clock } from '../../core/clock.ts';
-import { mintSecret, sha256Hex } from '../../core/crypto/tokens.ts';
 import {
   BadRequestError,
   ConflictError,
-  ForbiddenError,
   NotFoundError,
   UnprocessableError,
 } from '../../core/errors.ts';
@@ -17,14 +14,7 @@ import type { ReferrersRepository } from '../referrers/referrers.repository.ts';
 import type { ReferrersService } from '../referrers/referrers.service.ts';
 import type { SessionsRepository } from '../sessions/sessions.repository.ts';
 import type { ReferralListFilter, ReferralsRepository } from './referrals.repository.ts';
-import type { ReferralSelfAmend, ReferralSubmission } from './referrals.schema.ts';
-
-export interface SubmittedReferral {
-  readonly referral: Referral;
-  /** Plaintext, returned exactly once. Only its hash is stored. */
-  readonly editKey: string;
-  readonly editKeyExpiresAt: number;
-}
+import type { ReferralAmend, ReferralSubmission } from './referrals.schema.ts';
 
 export interface ReferralsServiceDeps {
   readonly db: Database;
@@ -45,6 +35,37 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
       throw new NotFoundError('Referral not found');
     }
     return referral;
+  }
+
+  /**
+   * The same read, narrowed to what the caller is allowed to know exists.
+   *
+   * **A team lead sees a pending referral but not a rejected one.** A pending
+   * referral is a household that may well turn up, and the lead is the person
+   * standing in the hall when they do — being unable to answer "am I expecting
+   * the Robinsons?" helps nobody. A rejected one is not their concern, and the
+   * reason it was rejected lives in `reviewComment`, which is admin-only; the
+   * screen could show the refusal without ever being able to explain it.
+   *
+   * `404`, not `403`: a team lead has no business learning that a rejected
+   * referral exists, and a refusal that distinguishes the two says so.
+   */
+  async function viewReferral(id: string, actor: Actor): Promise<Referral> {
+    const referral = await getReferral(id);
+    if (referral.status === 'rejected' && actor.role !== 'admin') {
+      throw new NotFoundError('Referral not found');
+    }
+    return referral;
+  }
+
+  /** The list, with the same visibility rule applied in SQL. */
+  async function listReferrals(filter: ReferralListFilter, actor: Actor): Promise<Referral[]> {
+    if (actor.role === 'admin') return repository.list(filter);
+
+    // A team lead asking for rejected referrals by name gets an empty list
+    // rather than an error: the status simply is not one of theirs.
+    if (filter.status === 'rejected') return [];
+    return repository.list({ ...filter, excludeStatuses: ['rejected'] });
   }
 
   /**
@@ -77,7 +98,7 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     }
     if (allowOverCapacity) return;
 
-    const booked = await repository.countActiveForSession(sessionId);
+    const booked = await repository.countHoldingAPlace(sessionId);
     if (booked >= session.capacity) {
       throw new ConflictError('That session is full', {
         details: { capacity: session.capacity, booked },
@@ -88,22 +109,23 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
   /**
    * Submits a referral. Unauthenticated.
    *
-   * Three gates, in the order that fails cheapest first: the referrer must be
-   * authorised, the session must be open and not full, and the reason must
-   * still be offered.
+   * **An unrecognised referrer is not refused.** The address is still checked,
+   * but the answer decides the *status* rather than whether the referral is
+   * taken at all: a recognised address is `active` immediately, an unrecognised
+   * one waits as `pending_review` for an administrator to accept or reject it.
+   * The charity would rather look at a referral it did not expect than turn
+   * away a household that needs feeding.
    *
-   * The dynamic answers are **not** a fourth gate. The referral form is client
+   * Two gates remain, cheapest first: the session must be open and not full,
+   * and the reason must still be offered. Both apply to a pending referral too,
+   * because a pending referral holds its place on the session.
+   *
+   * The dynamic answers are **not** a third gate. The referral form is client
    * configuration, so the server holds no definition to check them against and
    * stores what it is given.
    */
-  async function submit(input: ReferralSubmission): Promise<SubmittedReferral> {
+  async function submit(input: ReferralSubmission): Promise<Referral> {
     const authorisation = await referrersService.checkAuthorisation(input.referrerEmail);
-    if (!authorisation.authorised) {
-      // Deliberately not "your address is not on the list" — that would confirm
-      // which organisations are authorised to anyone who asks.
-      logger.info('rejected referral from an unauthorised referrer');
-      throw new ForbiddenError('That email address is not authorised to make referrals');
-    }
 
     await assertSessionAccepts(input.sessionId, false);
 
@@ -113,27 +135,33 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     }
 
     const now = clock.nowIso();
-    const issuedAt = clock.nowEpochSeconds();
-    const expiresAt = issuedAt + REFERRAL_EDIT_KEY_TTL_SECONDS;
     const referralId = crypto.randomUUID();
-    const editKey = mintSecret();
 
     const referral: NewReferral = {
       id: referralId,
       sessionId: input.sessionId,
-      status: 'active',
+      status: authorisation.authorised ? 'active' : 'pending_review',
       referredAt: now,
       cancelledAt: null,
       cancelledReason: null,
-      referrerOrganisation: authorisation.organisationName ?? 'Unknown',
+      reviewComment: null,
+      reviewedByUserId: null,
+      // Taken from the submission, because an unrecognised referrer has no row
+      // to derive it from. The matched id below is still the server's own, so a
+      // submitted string never decides which organisation gets the credit.
+      referrerOrganisation: input.referrerOrganisation,
       authorisedReferrerId: authorisation.matchedId,
       adults: input.adults,
       children: input.children,
       isDelivery: input.isDelivery ? 1 : 0,
       reasonId: input.reasonId,
+      needsFuelHelp: input.needsFuelHelp ? 1 : 0,
+      referrerName: input.referrerName,
       referrerEmail: input.referrerEmail.trim().toLowerCase(),
       referrerPhone: input.referrerPhone ?? null,
-      refereeName: input.refereeName,
+      refereeFirstName: input.refereeFirstName,
+      refereeSurname: input.refereeSurname,
+      refereeDateOfBirth: input.refereeDateOfBirth,
       refereeAddress: input.refereeAddress,
       refereePostcode: input.refereePostcode,
       refereePhone: input.refereePhone ?? null,
@@ -144,19 +172,10 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
       updatedAt: now,
     };
 
-    // Referral, edit key and audit entry in one batch — there is no
-    // transaction, and a referral without its key would strand the referrer.
+    // Referral and audit entry in one batch — there is no transaction, and a
+    // referral nobody can account for is worse than no referral.
     await db.batch([
       repository.buildInsertReferral(referral),
-      repository.buildInsertEditKey({
-        id: crypto.randomUUID(),
-        referralId,
-        keyHash: await sha256Hex(editKey),
-        issuedAt,
-        expiresAt,
-        consumedAt: null,
-        useCount: 0,
-      }),
       repository.buildAudit({
         id: crypto.randomUUID(),
         occurredAt: now,
@@ -171,59 +190,96 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
 
     logger.info('referral submitted', { referralId, sessionId: input.sessionId });
 
-    const created = await getReferral(referralId);
-    return { referral: created, editKey, editKeyExpiresAt: expiresAt };
-  }
-
-  /**
-   * Resolves an edit key to the referral it authorises.
-   *
-   * A key that belongs to a *different* referral is a 403, not a 404: the
-   * caller demonstrably holds a valid key, so telling them the referral exists
-   * reveals nothing they could not already infer, and 404 would send them
-   * chasing a phantom. Expiry is checked against server time only.
-   */
-  async function authoriseByEditKey(referralId: string, presentedKey: string): Promise<Referral> {
-    const key = await repository.findEditKeyByHash(await sha256Hex(presentedKey));
-    if (key === undefined) {
-      throw new ForbiddenError('That edit key is not valid');
-    }
-    if (key.referralId !== referralId) {
-      logger.warn('edit key presented against a different referral', { referralId });
-      throw new ForbiddenError('That edit key is not valid for this referral');
-    }
-    if (key.consumedAt !== null) {
-      throw new ForbiddenError('That edit key has already been used to delete this referral');
-    }
-    if (key.expiresAt <= clock.nowEpochSeconds()) {
-      throw new ConflictError(
-        'The 15-minute window for changing this referral has closed. Please phone the food bank.',
-      );
-    }
-
-    await repository.recordEditKeyUse(key.id, key.useCount + 1);
     return getReferral(referralId);
   }
 
-  /** Applies an amendment. Shared by the self-service and admin paths. */
-  async function applyAmendment(
-    referral: Referral,
-    input: ReferralSelfAmend,
-    actor: { kind: 'user' | 'referral_key'; userId: string | null },
+  /**
+   * Accepts or rejects a referral that is waiting to be looked at.
+   *
+   * Only from `pending_review`: reviewing an active referral would be a way of
+   * quietly reinstating a cancelled one, and reviewing a rejected one twice
+   * says nothing new. The comment is overwritten rather than appended — the
+   * charity asked for one line per review, not a history.
+   *
+   * The "still pending" check is **in the statement, not here**. Checking it in
+   * TypeScript first would be a read-then-write on a database with no
+   * interactive transactions, so two administrators working the same queue
+   * could both pass it and the second would silently overwrite the first — an
+   * accept undoing a reject with nobody told.
+   */
+  async function review(
+    referralId: string,
+    outcome: 'active' | 'rejected',
+    comment: string | null,
+    actor: Actor,
   ): Promise<Referral> {
+    const now = clock.nowIso();
+    const updated = await repository.reviewIfPending(referralId, {
+      status: outcome,
+      reviewComment: comment,
+      reviewedByUserId: actor.userId,
+      updatedAt: now,
+    });
+
+    if (updated === undefined) {
+      // Nothing matched: either there is no such referral, or it is no longer
+      // pending. Tell those two apart so an admin is not sent chasing a ghost.
+      await getReferral(referralId);
+      throw new ConflictError('That referral is not waiting to be reviewed');
+    }
+
+    await repository.recordAudit({
+      id: crypto.randomUUID(),
+      occurredAt: now,
+      actorKind: 'user',
+      actorUserId: actor.userId,
+      entityType: 'referral',
+      entityId: referralId,
+      action: outcome === 'active' ? 'accepted' : 'rejected',
+      detailJson: null,
+    });
+
+    logger.info('referral reviewed', { referralId, userId: actor.userId });
+    return updated;
+  }
+
+  /**
+   * A referral that is finished with cannot be changed.
+   *
+   * Shared by amending and moving because `PATCH /referrals/{id}` does both,
+   * and refusing one while allowing the other on the same object is incoherent
+   * — a move *is* an amendment, and there is no path that reinstates a referral
+   * so moving a dead one only relocates a dead record.
+   */
+  function assertOpenToChange(referral: Referral): void {
     if (referral.status === 'cancelled') {
       throw new ConflictError('That referral has been cancelled');
     }
+    if (referral.status === 'rejected') {
+      throw new ConflictError('That referral was rejected');
+    }
+  }
+
+  /** Applies an amendment. Admin only — there is no self-service path. */
+  async function applyAmendment(
+    referral: Referral,
+    input: ReferralAmend,
+    actor: { kind: 'user'; userId: string | null },
+  ): Promise<Referral> {
+    assertOpenToChange(referral);
 
     const patch: Patch<NewReferral> = { updatedAt: clock.nowIso() };
     const changed: string[] = [];
 
     for (const field of [
-      'refereeName',
+      'referrerName',
+      'referrerPhone',
+      'refereeFirstName',
+      'refereeSurname',
+      'refereeDateOfBirth',
       'refereeAddress',
       'refereePostcode',
       'refereePhone',
-      'referrerPhone',
       'adults',
       'children',
     ] as const) {
@@ -234,9 +290,12 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
       }
     }
 
-    if (input.isDelivery !== undefined) {
-      patch.isDelivery = input.isDelivery ? 1 : 0;
-      changed.push('isDelivery');
+    for (const field of ['isDelivery', 'needsFuelHelp'] as const) {
+      const value = input[field];
+      if (value !== undefined) {
+        Object.assign(patch, { [field]: value ? 1 : 0 });
+        changed.push(field);
+      }
     }
 
     if (input.reasonId !== undefined) {
@@ -283,12 +342,24 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     return updated;
   }
 
+  /**
+   * Cancels a referral. Idempotent, but not a way of relabelling a rejection.
+   *
+   * A rejected referral is refused rather than quietly becoming `cancelled`:
+   * the two are different things that happened, and `reviewComment` is the only
+   * record of *why* the charity turned the household away. Overwriting the
+   * status would leave that comment attached to a referral whose status no
+   * longer says a review ever took place.
+   */
   async function cancel(
     referral: Referral,
     reason: string | null,
-    actor: { kind: 'user' | 'referral_key'; userId: string | null },
+    actor: { kind: 'user'; userId: string | null },
   ): Promise<Referral> {
     if (referral.status === 'cancelled') return referral; // Idempotent.
+    if (referral.status === 'rejected') {
+      throw new ConflictError('That referral was rejected');
+    }
 
     const now = clock.nowIso();
     const updated = await repository.update(referral.id, {
@@ -316,16 +387,6 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     return updated;
   }
 
-  /** Self-service delete consumes the key, so it cannot be replayed. */
-  async function withdraw(referral: Referral, keyHash: string): Promise<void> {
-    await cancel(referral, 'Withdrawn by the referrer', { kind: 'referral_key', userId: null });
-
-    const key = await repository.findEditKeyByHash(keyHash);
-    if (key !== undefined) {
-      await repository.consumeEditKey(key.id, clock.nowEpochSeconds());
-    }
-  }
-
   /** Admin move between sessions. Over-capacity requires explicit acknowledgement. */
   async function move(
     referral: Referral,
@@ -334,6 +395,7 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     actor: Actor,
   ): Promise<Referral> {
     if (referral.sessionId === sessionId) return referral;
+    assertOpenToChange(referral);
 
     await assertSessionAccepts(sessionId, acknowledgeOverCapacity);
 
@@ -361,11 +423,11 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
   return {
     submit,
     getReferral,
-    listReferrals: (filter: ReferralListFilter) => repository.list(filter),
-    authoriseByEditKey,
+    viewReferral,
+    listReferrals,
+    review,
     applyAmendment,
     cancel,
-    withdraw,
     move,
   };
 }

@@ -98,6 +98,85 @@ function pathsInSpec(spec) {
   return documented;
 }
 
+/**
+ * Request bodies typed `object` that never say which fields they hold.
+ *
+ * Such a body is valid OpenAPI and generates an unusable type — the client gets
+ * an empty object and has to cast its way past it, so the contract is silently
+ * doing nothing for the one endpoint that most needed it. `minProperties: 1`
+ * without `properties:` is the shape this has taken in practice.
+ */
+function bodiesWithoutFields(spec) {
+  const lines = spec.split('\n');
+  const start = lines.indexOf('paths:');
+  if (start === -1) throw new Error('no `paths:` block in openapi.yaml');
+
+  // A shape is declared by naming fields, deferring to a component, composing
+  // other schemas, or explicitly allowing anything through.
+  const DECLARES_SHAPE = /^\s*(properties|allOf|oneOf|anyOf|additionalProperties|\$ref):/;
+
+  const offenders = [];
+  let path = null;
+  let verb = null;
+  let pending = null; // a `schema:` block being read, once known to be an object
+
+  // Only an object owes us fields; an array or a scalar says everything it has to.
+  const flush = () => {
+    if (pending !== null && pending.isObject && !pending.declaresShape)
+      offenders.push(pending.where);
+    pending = null;
+  };
+
+  for (const line of lines.slice(start + 1)) {
+    if (line.trim() !== '' && /^\S/.test(line)) break;
+
+    const pathLine = /^ {2}(\/\S*):\s*$/.exec(line);
+    if (pathLine !== null) {
+      flush();
+      path = pathLine[1];
+      continue;
+    }
+
+    const verbLine = /^ {4}([a-z]+):\s*$/.exec(line);
+    if (verbLine !== null && VERBS.includes(verbLine[1])) {
+      flush();
+      verb = verbLine[1];
+      continue;
+    }
+
+    // A schema block ends at the first line indented no further than it.
+    if (pending !== null) {
+      const indent = line.search(/\S/);
+      if (indent !== -1 && indent <= pending.indent) flush();
+      else {
+        if (DECLARES_SHAPE.test(line)) pending.declaresShape = true;
+        if (/^\s*type:\s*object\s*$/.test(line)) pending.isObject = true;
+      }
+    }
+
+    const schemaLine = /^(\s*)schema:(.*)$/.exec(line);
+    if (schemaLine === null) continue;
+    flush();
+
+    const [, indent, inline] = schemaLine;
+    const where = `${(verb ?? '?').toUpperCase()} ${path ?? '?'}`;
+
+    // `schema: { type: object, minProperties: 1 }` — the whole thing on one line.
+    if (inline.trim() !== '') {
+      if (
+        /type:\s*object/.test(inline) &&
+        !DECLARES_SHAPE.test(` ${inline.replace(/[{},]/g, ' ')}`)
+      )
+        offenders.push(where);
+      continue;
+    }
+    pending = { where, indent: indent.length, declaresShape: false, isObject: false };
+  }
+  flush();
+
+  return [...new Set(offenders)].sort();
+}
+
 /** Component `$ref`s that point at nothing — the spec parses, but a generator would fail. */
 function danglingRefs(spec) {
   const lines = spec.split('\n');
@@ -135,6 +214,7 @@ const documented = pathsInSpec(spec);
 const undocumented = [...code].filter((route) => !documented.has(route)).sort();
 const phantom = [...documented].filter((route) => !code.has(route)).sort();
 const dangling = danglingRefs(spec);
+const shapeless = bodiesWithoutFields(spec);
 
 const report = (heading, entries) => {
   if (entries.length === 0) return;
@@ -145,8 +225,9 @@ const report = (heading, entries) => {
 report('In the code but missing from openapi.yaml', undocumented);
 report('In openapi.yaml but not served by any route', phantom);
 report('$ref pointing at an undefined component', dangling);
+report('Object schema with no fields — generates an unusable type', shapeless);
 
-if (undocumented.length > 0 || phantom.length > 0 || dangling.length > 0) {
+if (undocumented.length > 0 || phantom.length > 0 || dangling.length > 0 || shapeless.length > 0) {
   console.error('\nopenapi.yaml is out of date. Update it in the same commit as the route.');
   process.exit(1);
 }

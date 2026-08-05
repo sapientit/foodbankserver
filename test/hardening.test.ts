@@ -5,7 +5,7 @@ import { fixedClock } from '../src/core/clock.ts';
 import { loadConfig } from '../src/config/env.ts';
 import { createDatabase } from '../src/db/client.ts';
 import { parcelLines, parcels, pickLists } from '../src/db/schema/pick-lists.ts';
-import { auditEvents, referralEditKeys, referrals } from '../src/db/schema/referrals.ts';
+import { auditEvents, referrals } from '../src/db/schema/referrals.ts';
 import { authorisedReferrers, referralReasons } from '../src/db/schema/referrers.ts';
 import { modelParcels, parcelGrid } from '../src/db/schema/rules.ts';
 import { recurringSessions, sessions } from '../src/db/schema/sessions.ts';
@@ -27,7 +27,6 @@ beforeEach(async () => {
   await db.delete(parcelGrid);
   await db.delete(modelParcels);
   await db.delete(auditEvents);
-  await db.delete(referralEditKeys);
   await db.delete(referrals);
   await db.delete(referralReasons);
   await db.delete(authorisedReferrers);
@@ -207,7 +206,9 @@ describe('CORS', () => {
     });
 
     expect(allowed.status).toBe(204);
-    expect(allowed.headers.get('access-control-allow-headers')).toContain('x-referral-key');
+    expect(allowed.headers.get('access-control-allow-headers')).toContain('cf-turnstile-response');
+    // The self-service edit window is gone, so its header is no longer allowed.
+    expect(allowed.headers.get('access-control-allow-headers')).not.toContain('x-referral-key');
     expect(refused.status).toBe(403);
   });
 });
@@ -246,11 +247,11 @@ describe('purging personal data', () => {
 
     expect(result.purged).toBe(0);
     const [row] = await db.select().from(referrals).where(eq(referrals.id, id));
-    expect(row?.refereeName).toBe('Alice Wintergreen');
+    expect(row?.refereeSurname).toBe('Wintergreen');
     expect(row?.piiPurgedAt).toBeNull();
   });
 
-  it('removes every identifying column once it does', async () => {
+  it("removes every one of the referee's own columns once it does", async () => {
     const { id } = await seedOldReferral();
 
     const result = await purgeReferralPii(deps(365));
@@ -258,13 +259,26 @@ describe('purging personal data', () => {
     expect(result.purged).toBe(1);
     const [row] = await db.select().from(referrals).where(eq(referrals.id, id));
 
-    expect(row?.refereeName).toBeNull();
+    expect(row?.refereeFirstName).toBeNull();
+    expect(row?.refereeSurname).toBeNull();
+    expect(row?.refereeDateOfBirth).toBeNull();
     expect(row?.refereeAddress).toBeNull();
     expect(row?.refereePostcode).toBeNull();
     expect(row?.refereePhone).toBeNull();
-    expect(row?.referrerEmail).toBeNull();
-    expect(row?.referrerPhone).toBeNull();
     expect(row?.piiPurgedAt).toEqual(expect.any(String));
+  });
+
+  it("keeps the referrer's own details, which the purge is not aimed at", async () => {
+    const { id } = await seedOldReferral();
+
+    await purgeReferralPii(deps(365));
+    const [row] = await db.select().from(referrals).where(eq(referrals.id, id));
+
+    // The retention period exists to stop holding details of the household that
+    // needed feeding, not to lose track of the professional who referred them.
+    expect(row?.referrerName).toBe('Jane Fieldsworth');
+    expect(row?.referrerEmail).toBe('jane@guildford.gov.uk');
+    expect(row?.referrerPhone).toBe('01483 000111');
   });
 
   it('keeps what reporting needs, because it is no longer personal data', async () => {
@@ -277,6 +291,7 @@ describe('purging personal data', () => {
     expect(row?.adults).toBe(2);
     expect(row?.children).toBe(3);
     expect(row?.reasonId).toEqual(expect.any(String));
+    expect(row?.needsFuelHelp).toBe(0);
     expect(row?.referrerOrganisation).toBe('Guildford Borough Council');
     expect(row?.sessionId).toEqual(expect.any(String));
   });
@@ -302,7 +317,7 @@ describe('purging personal data', () => {
 
     expect(result.purged).toBe(0);
     const [row] = await db.select().from(referrals).where(eq(referrals.id, id));
-    expect(row?.refereeName).toBe('Alice Wintergreen');
+    expect(row?.refereeSurname).toBe('Wintergreen');
   });
 
   it('is idempotent — a second run purges nothing further', async () => {

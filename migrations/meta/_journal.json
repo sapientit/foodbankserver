@@ -85,6 +85,20 @@
       "when": 1785436000000,
       "tag": "0011_stock-movement-types-reduced",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1785910924698,
+      "tag": "0012_referrals-gain-review-and-split-name",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1785910935160,
+      "tag": "0013_referee-name-splits",
+      "breakpoints": true
     }
   ]
 }

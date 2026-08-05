@@ -14,11 +14,13 @@ import {
   cancelReferralSchema,
   referralAdminAmendSchema,
   referralListQuerySchema,
+  reviewReferralSchema,
 } from './referrals.schema.ts';
 
 /**
  * Reads are open to any account — a team lead needs the list to run a session,
- * and the mapper withholds the reason from them. Writes are admin-only.
+ * and the mapper withholds the reason and the review comment from them. Writes,
+ * including the review decision, are admin-only.
  */
 export function referralRoutes(): Hono<AppEnv> {
   const routes = new Hono<AppEnv>();
@@ -31,8 +33,8 @@ export function referralRoutes(): Hono<AppEnv> {
       status: c.req.query('status'),
     });
 
-    const referrals = await serviceFor(c).listReferrals(query);
     const actor = actorOf(c);
+    const referrals = await serviceFor(c).listReferrals(query, actor);
 
     return c.json<{ referrals: ReferralResponse[] }>({
       referrals: referrals.map((referral) => toReferralResponse(referral, actor)),
@@ -40,8 +42,9 @@ export function referralRoutes(): Hono<AppEnv> {
   });
 
   routes.get('/referrals/:id', ...readers, async (c) => {
-    const referral = await serviceFor(c).getReferral(c.req.param('id'));
-    return c.json(toReferralResponse(referral, actorOf(c)));
+    const actor = actorOf(c);
+    const referral = await serviceFor(c).viewReferral(c.req.param('id'), actor);
+    return c.json(toReferralResponse(referral, actor));
   });
 
   routes.patch('/referrals/:id', ...admins, async (c) => {
@@ -67,6 +70,21 @@ export function referralRoutes(): Hono<AppEnv> {
     return c.json(toReferralResponse(referral, actor));
   });
 
+  /**
+   * The two halves of reviewing a referral that arrived from an unrecognised
+   * address. Both refuse anything that is not waiting to be reviewed.
+   *
+   * Written out rather than looped because `check:openapi` reads the routes
+   * out of this file as text, and a route it cannot see is a route the contract
+   * stops being checked against.
+   */
+  routes.post('/referrals/:id/accept', ...admins, async (c) =>
+    review(c, c.req.param('id'), 'active'),
+  );
+  routes.post('/referrals/:id/reject', ...admins, async (c) =>
+    review(c, c.req.param('id'), 'rejected'),
+  );
+
   routes.post('/referrals/:id/cancel', ...admins, async (c) => {
     const service = serviceFor(c);
     const actor = actorOf(c);
@@ -82,6 +100,18 @@ export function referralRoutes(): Hono<AppEnv> {
   });
 
   return routes;
+}
+
+async function review(c: Context<AppEnv>, id: string, outcome: 'active' | 'rejected') {
+  const service = serviceFor(c);
+  const actor = actorOf(c);
+
+  const { comment } = await parseOptionalJsonBody(c, reviewReferralSchema);
+  // No read first: the "still pending" guard is in the UPDATE itself, so a
+  // read here would only add a query and a race window. See the service.
+  const reviewed = await service.review(id, outcome, comment ?? null, actor);
+
+  return c.json(toReferralResponse(reviewed, actor));
 }
 
 function actorOf(c: Context<AppEnv>): Actor {

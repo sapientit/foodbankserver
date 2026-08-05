@@ -32,9 +32,6 @@ export const JWT_AUDIENCE = 'foodbank-web';
 export const REFRESH_COOKIE_NAME = 'foodbank_refresh';
 export const REFRESH_COOKIE_PATH = '/api/v1/auth';
 
-/** A referral may be amended by its edit key for this long, and no longer. */
-export const REFERRAL_EDIT_KEY_TTL_SECONDS = 15 * 60;
-
 /** How far ahead the cron materialises sessions from recurring templates. */
 export const SESSION_HORIZON_WEEKS = 6;
 

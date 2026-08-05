@@ -63,10 +63,11 @@ export function pickListRoutes(): Hono<AppEnv> {
     const service = serviceFor(c);
     const pickList = await service.getOrGenerate(c.req.param('sessionId'), actorOf(c));
     const parcels = await service.listParcelsWithLines(pickList.pickList.id);
+    const byId = await referralsBySession(c, pickList.pickList.sessionId);
 
     return c.json<{ pickList: ReturnType<typeof toPickListResponse>; parcels: ParcelResponse[] }>({
       pickList: toPickListResponse(pickList.pickList),
-      parcels: parcels.map(toParcelResponse),
+      parcels: parcels.map((entry) => toParcelResponse(entry, byId.get(entry.parcel.referralId))),
     });
   });
 
@@ -74,10 +75,11 @@ export function pickListRoutes(): Hono<AppEnv> {
     const service = serviceFor(c);
     const pickList = await service.getPickList(c.req.param('id'));
     const parcels = await service.listParcelsWithLines(pickList.id);
+    const byId = await referralsBySession(c, pickList.sessionId);
 
     return c.json({
       pickList: toPickListResponse(pickList),
-      parcels: parcels.map(toParcelResponse),
+      parcels: parcels.map((entry) => toParcelResponse(entry, byId.get(entry.parcel.referralId))),
     });
   });
 
@@ -99,11 +101,7 @@ export function pickListRoutes(): Hono<AppEnv> {
     const pickList = await service.getPickList(c.req.param('id'));
     const parcels = await service.listParcelsWithLines(pickList.id);
 
-    // One query for every referral involved rather than one per parcel.
-    const referrals = await createReferralsRepository(c.get('db')).list({
-      sessionId: pickList.sessionId,
-    });
-    const byId = new Map(referrals.map((referral) => [referral.id, referral]));
+    const byId = await referralsBySession(c, pickList.sessionId);
 
     return c.json<{
       pickList: ReturnType<typeof toPickListResponse>;
@@ -178,6 +176,19 @@ export function pickListRoutes(): Hono<AppEnv> {
   });
 
   return routes;
+}
+
+/**
+ * Every referral on a session, by id, in **one** query rather than one per
+ * parcel — 25 parcels on a plan that allows 50 queries leaves no room for it.
+ *
+ * No status filter: a parcel exists because the referral was active when the
+ * list was generated, and a referral cancelled since must still resolve, or its
+ * sheet would silently lose the name it is picked against.
+ */
+async function referralsBySession(c: Context<AppEnv>, sessionId: string) {
+  const rows = await createReferralsRepository(c.get('db')).list({ sessionId });
+  return new Map(rows.map((referral) => [referral.id, referral]));
 }
 
 function actorOf(c: Context<AppEnv>): Actor {

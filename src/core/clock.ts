@@ -2,7 +2,7 @@
  * Time as a dependency.
  *
  * Services never call `new Date()` or `Date.now()` directly — they take a
- * `Clock`. That is what makes the 15-minute edit window, token expiry and the
+ * `Clock`. That is what makes token expiry, the eight-hour sign-in and the
  * 6-week session horizon testable without fake timers, which do not work in
  * the Workers test runner.
  *

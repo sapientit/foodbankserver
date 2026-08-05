@@ -1,0 +1,108 @@
+# D1 limits are design constraints, not trivia
+
+The mandatory rules are in [`.claude/rules/database.md`](../../.claude/rules/database.md). This file
+is why they exist. Each one has already shaped the design, and ignoring one produces code that
+passes tests and fails in production.
+
+## No interactive transactions
+
+`BEGIN` is an error on D1. `db.batch()` is the only atomicity primitive: statements commit
+sequentially and non-concurrently, and any failure rolls back the whole sequence. **You cannot read,
+decide in TypeScript, then write, atomically.**
+
+The repository contract follows directly:
+
+> For a multi-write operation, the repository exposes a **statement builder** returning an array of
+> statements. The service composes them and executes **exactly one** `db.batch([...])`. A repository
+> method that writes and then reads its own write is impossible — restructure so every value the
+> write needs is known before the batch is composed.
+
+Where an invariant genuinely needs atomicity, enforce it with a single conditional statement or a
+unique index and have the service check the result. Two live examples: the stock ledger idempotency
+guard, and `updateLeavingAnotherAdmin`, which carries "and another active admin exists" into the
+`UPDATE` because counting first and writing second has a gap.
+
+## 100 bound parameters per statement
+
+A multi-row `INSERT ... VALUES` blows the limit at about 14 rows. Bind the rows as one JSON
+parameter and expand with `json_each`: one statement and one parameter regardless of row count.
+
+Drizzle has no builder for that, **and its `db.batch()` only accepts Drizzle query builders** — a
+raw `db.run(sql)` is not a batchable item and fails at runtime with a confusing
+`Cannot read properties of undefined (reading 'bind')`. So bulk inserts use raw D1 prepared
+statements through `db.$client.batch()`. That is confined to `pick-lists.repository.ts` and covered
+by integration tests; everything else stays in Drizzle.
+
+## 50 queries per Worker invocation on the free plan
+
+1,000 on paid. We develop against free and deploy to paid. No N+1, ever: load reference data once
+and evaluate in memory. The pick-list generation path has a test that asserts its query count.
+
+## 100 columns per table
+
+Part of why dynamic referral answers are a JSON column rather than generic spare columns.
+
+## No `ALTER COLUMN`, no `DROP CONSTRAINT`
+
+Changing a column type or constraint means a full table rebuild. Two consequences, both deliberate
+and both easy to "tidy up" by mistake:
+
+- **Every PII column is nullable in SQL and required in Zod.** Requiredness lives in the schema
+  module, not the DDL. Write `NOT NULL` on a PII column and it can never be purged.
+- **Enums are CHECK constraints.** They were once enumerated generously, on the reasoning that
+  adding a value later is expensive. That reasoning did not survive contact: `stock_ledger.movement_type`
+  shipped with nine guessed values and migration `0011` rebuilt the table to get down to the six the
+  charity actually wanted. Generosity bought a rebuild rather than avoiding one. **Ask instead.**
+
+## Dropping a column is usually not a rebuild
+
+SQLite refuses `ALTER TABLE ... DROP COLUMN` only for a column named in an index, a `CHECK`, a
+`FOREIGN KEY`, a generated column or the primary key. Migrations `0009` and `0010` are both
+one-liners for that reason.
+
+drizzle-kit generates a drop-and-recreate anyway and will justify it in a comment with "the table is
+empty" — which is true of a fresh database, and of the test run, and of nothing else. On a
+foreign-key parent that is the difference between a migration and a data loss.
+
+**Read `migrations/0008_client-owned-referral-form.sql` before accepting a generated rebuild.** It
+is the worked example of a safe rebuild on D1 and it records two traps found the hard way:
+
+1. `PRAGMA foreign_keys=OFF` is a **silent no-op** on D1 — SQLite ignores it inside a transaction,
+   and D1 runs implicit ones.
+2. Even with `PRAGMA defer_foreign_keys=on`, SQLite's deferred-violation **counter only decrements
+   on inserts into the parent**. Copying rows out before `DROP TABLE` never clears it, so the
+   migration rolls back with `FOREIGN KEY constraint failed`. The fix is to park rows in a temp
+   table, rebuild, rename, then re-insert.
+
+A rebuild also fires `ON DELETE CASCADE` on children. `0008` accepted losing in-flight 15-minute
+referral edit keys for that reason; know what yours will take with it.
+
+**Emptying the children first is the other way to settle the counter**, and it is only available
+when the rows are expendable. `0012` rebuilt `referrals` that way — `DELETE FROM parcel_lines`, then
+`DELETE FROM parcels`, then `DROP TABLE referrals` — because Pete confirmed no table held data worth
+keeping. Read the header of `0012` before copying it: with real data in the database the park-and-
+re-insert dance in `0008` is the only correct shape, and `0012` would destroy pick lists.
+
+## Time Travel is the backup
+
+30 days on paid, whole-database restore only. **You cannot restore one table.**
+
+## Two database-error traps, both silent
+
+### 1. The constraint name is not on the thrown error, and SQLite names columns, not indexes
+
+Drizzle wraps D1 failures. `error.message` is `Failed query: insert into …`; the SQLite text is
+further down the `cause` chain. And even for a named unique index, SQLite reports
+`UNIQUE constraint failed: table.column, table.column`. **Matching on an index name never fires** —
+the guard appears to work and never triggers, which for the stock ledger would mean stock moving
+twice. `isUniqueViolation` walks the chain and matches on columns; always name **every** column of a
+composite index so it cannot match a different constraint on the same table.
+
+### 2. Drizzle's error message contains the bound parameters — that is, the row
+
+On `referrals` those are a referee's name, address and phone number. Unhandled errors are logged in
+full and Workers Logs are not EU-pinned, so this is a data-protection failure rather than
+untidiness. `toSafeError` redacts everything after `params:`.
+
+`test/db-errors.test.ts` pins both behaviours against a real D1 failure rather than a hand-written
+`Error`, because assuming the error's shape is exactly what caused the bugs.

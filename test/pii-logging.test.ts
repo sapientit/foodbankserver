@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fixedClock } from '../src/core/clock.ts';
 import { toSafeError } from '../src/core/log.ts';
 import { createDatabase } from '../src/db/client.ts';
-import { auditEvents, referralEditKeys, referrals } from '../src/db/schema/referrals.ts';
+import { auditEvents, referrals } from '../src/db/schema/referrals.ts';
 import { authorisedReferrers, referralReasons } from '../src/db/schema/referrers.ts';
 import { recurringSessions, sessions } from '../src/db/schema/sessions.ts';
 import { refreshTokens, users } from '../src/db/schema/users.ts';
@@ -22,11 +22,23 @@ const db = createDatabase(env.DB);
  * These are the values seeded by the fixtures; every one of them is personal
  * data and none may appear in log output or in an error response.
  */
+/**
+ * Every personal value in the referral fixture, exactly as it is stored.
+ *
+ * The referee's name is two columns, so it is matched as two values — a single
+ * `'Alice Wintergreen'` would never appear and the assertion would pass for the
+ * wrong reason. The referrer's details are here too: they survive a retention
+ * purge, but "never log personal data" is not about retention, and Workers Logs
+ * are not EU-pinned.
+ */
 const PII_VALUES = [
-  'Alice Wintergreen',
+  'Alice',
+  'Wintergreen',
+  '1985-03-14',
   '12 Bramble Cottages',
   'GU1 4AA',
   '07700 900123',
+  'Jane Fieldsworth',
   'jane@guildford.gov.uk',
   '01483 000111',
 ];
@@ -40,7 +52,6 @@ beforeEach(async () => {
   });
 
   await db.delete(auditEvents);
-  await db.delete(referralEditKeys);
   await db.delete(referrals);
   await db.delete(referralReasons);
   await db.delete(authorisedReferrers);
@@ -84,7 +95,7 @@ describe('personal data never reaches the logs', () => {
     expect(logged.join('\n')).toContain('referral submitted');
   });
 
-  it('logs nothing identifying when a submission is rejected', async () => {
+  it('logs nothing identifying when a submission goes for review', async () => {
     const testApp = buildTestApp({
       clock: fixedClock('2026-08-04T09:00:00.000Z'),
       bindings: { LOG_LEVEL: 'debug' },
@@ -98,10 +109,11 @@ describe('personal data never reaches the logs', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(submission(world, { referrerEmail: 'stranger@example.org' })),
     });
-    expect(response.status).toBe(403);
+    // Taken, not refused — but the address that was not recognised must not
+    // reach a log any more than an accepted one does.
+    expect(response.status).toBe(201);
 
-    assertNoPii(logged.join('\n'), 'rejection logs');
-    // Not even the address that was refused.
+    assertNoPii(logged.join('\n'), 'pending-review logs');
     expect(logged.join('\n')).not.toContain('stranger@example.org');
   });
 
@@ -156,7 +168,8 @@ describe('personal data never reaches the logs', () => {
 
     expect(thrown).toBeInstanceOf(Error);
     // The raw error really does carry the personal data — that is the hazard.
-    expect((thrown as Error).message).toContain('Alice Wintergreen');
+    // The name is bound as two parameters now, so match one of them.
+    expect((thrown as Error).message).toContain('Wintergreen');
 
     // ...and everything that reaches a log or a client must not.
     const safe = toSafeError(thrown);
@@ -189,16 +202,16 @@ describe('personal data never reaches the logs', () => {
     await testApp.request(`/api/v1/referrals/${id}`, {
       method: 'PATCH',
       headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ refereeName: 'Bernadette Newname', refereePhone: '07700 900999' }),
+      body: JSON.stringify({ refereeSurname: 'Newname', refereePhone: '07700 900999' }),
     });
 
     const rows = await db.select().from(auditEvents);
     const serialised = JSON.stringify(rows);
 
     assertNoPii(serialised, 'audit trail');
-    expect(serialised).not.toContain('Bernadette Newname');
+    expect(serialised).not.toContain('Newname');
     expect(serialised).not.toContain('07700 900999');
     // But it does record what changed.
-    expect(serialised).toContain('refereeName');
+    expect(serialised).toContain('refereeSurname');
   });
 });

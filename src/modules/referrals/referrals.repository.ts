@@ -1,15 +1,13 @@
-import { and, asc, count, eq, gte, lt, type SQL } from 'drizzle-orm';
+import { and, asc, count, eq, inArray, notInArray, type SQL } from 'drizzle-orm';
 import type { Database } from '../../db/client.ts';
 import { expectAtMostOne } from '../../db/expect.ts';
 import {
   auditEvents,
-  referralEditKeys,
   referrals,
+  REFERRAL_STATUSES_HOLDING_A_PLACE,
   type NewAuditEvent,
   type NewReferral,
-  type NewReferralEditKey,
   type Referral,
-  type ReferralEditKey,
   type ReferralStatus,
 } from '../../db/schema/referrals.ts';
 import type { Patch } from '../../core/types.ts';
@@ -17,6 +15,8 @@ import type { Patch } from '../../core/types.ts';
 export interface ReferralListFilter {
   readonly sessionId?: string | undefined;
   readonly status?: ReferralStatus | undefined;
+  /** Statuses the caller is not allowed to know exist. See the service. */
+  readonly excludeStatuses?: readonly ReferralStatus[] | undefined;
 }
 
 export function createReferralsRepository(db: Database) {
@@ -31,6 +31,9 @@ export function createReferralsRepository(db: Database) {
       if (filter.sessionId !== undefined)
         conditions.push(eq(referrals.sessionId, filter.sessionId));
       if (filter.status !== undefined) conditions.push(eq(referrals.status, filter.status));
+      if (filter.excludeStatuses !== undefined && filter.excludeStatuses.length > 0) {
+        conditions.push(notInArray(referrals.status, [...filter.excludeStatuses]));
+      }
 
       return db
         .select()
@@ -40,16 +43,22 @@ export function createReferralsRepository(db: Database) {
     },
 
     /**
-     * Households booked onto a session.
+     * Households occupying a place on a session.
      *
-     * Capacity counts referrals, not people. One aggregate query rather than
-     * fetching rows to count them in TypeScript.
+     * Capacity counts referrals, not people, and a referral awaiting review
+     * counts — see `REFERRAL_STATUSES_HOLDING_A_PLACE`. One aggregate query
+     * rather than fetching rows to count them in TypeScript.
      */
-    async countActiveForSession(sessionId: string): Promise<number> {
+    async countHoldingAPlace(sessionId: string): Promise<number> {
       const rows = await db
         .select({ booked: count() })
         .from(referrals)
-        .where(and(eq(referrals.sessionId, sessionId), eq(referrals.status, 'active')));
+        .where(
+          and(
+            eq(referrals.sessionId, sessionId),
+            inArray(referrals.status, [...REFERRAL_STATUSES_HOLDING_A_PLACE]),
+          ),
+        );
       return rows[0]?.booked ?? 0;
     },
 
@@ -65,47 +74,27 @@ export function createReferralsRepository(db: Database) {
       return expectAtMostOne(rows);
     },
 
-    // ---- Edit keys ----
-
-    async findEditKeyByHash(keyHash: string): Promise<ReferralEditKey | undefined> {
-      const rows = await db
-        .select()
-        .from(referralEditKeys)
-        .where(eq(referralEditKeys.keyHash, keyHash))
-        .limit(1);
-      return expectAtMostOne(rows);
-    },
-
-    async recordEditKeyUse(id: string, useCount: number): Promise<void> {
-      await db.update(referralEditKeys).set({ useCount }).where(eq(referralEditKeys.id, id));
-    },
-
-    async consumeEditKey(id: string, at: number): Promise<void> {
-      await db.update(referralEditKeys).set({ consumedAt: at }).where(eq(referralEditKeys.id, id));
-    },
-
     /**
-     * Deletes keys that expired before `before`.
+     * Records a review decision, but **only** on a referral still awaiting one.
      *
-     * The caller leaves a grace period so a key that expired recently is still
-     * present, which is what lets the handler answer 410 Gone ("your window
-     * closed") rather than 403 ("no such key") for a day. Much kinder to a
-     * referrer who was slow filling the form in.
+     * The condition travels with the write rather than being checked in the
+     * service first. D1 has no interactive transactions, so a read-then-write
+     * would let two administrators working the same queue — or one
+     * double-clicking — both see `pending_review` and both write, and the last
+     * one silently wins. An accept quietly overwriting a reject is the outcome
+     * that matters: nobody is told, and a household the charity turned away is
+     * back on the session. Same shape as `updateLeavingAnotherAdmin`.
+     *
+     * Returns `undefined` when nothing matched, which the service reads as
+     * "somebody else got there first".
      */
-    async deleteExpiredEditKeys(before: number): Promise<number> {
-      const result = await db
-        .delete(referralEditKeys)
-        .where(lt(referralEditKeys.expiresAt, before))
-        .returning({ id: referralEditKeys.id });
-      return result.length;
-    },
-
-    async countEditKeysExpiringAfter(instant: number): Promise<number> {
+    async reviewIfPending(id: string, patch: Patch<NewReferral>): Promise<Referral | undefined> {
       const rows = await db
-        .select({ remaining: count() })
-        .from(referralEditKeys)
-        .where(gte(referralEditKeys.expiresAt, instant));
-      return rows[0]?.remaining ?? 0;
+        .update(referrals)
+        .set(patch)
+        .where(and(eq(referrals.id, id), eq(referrals.status, 'pending_review')))
+        .returning();
+      return expectAtMostOne(rows);
     },
 
     async recordAudit(value: NewAuditEvent): Promise<void> {
@@ -124,10 +113,6 @@ export function createReferralsRepository(db: Database) {
 
     buildInsertReferral(value: NewReferral) {
       return db.insert(referrals).values(value);
-    },
-
-    buildInsertEditKey(value: NewReferralEditKey) {
-      return db.insert(referralEditKeys).values(value);
     },
 
     buildAudit(value: NewAuditEvent) {

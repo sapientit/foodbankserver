@@ -7,7 +7,11 @@ The pick list can then be modified before being printed.  Once printed, further 
 #Session maintenance
 Standard sessions repeat weekly.  They have a default capacity of 25.  It is possible for the administrator to change the time of an individual session, cancel a session or add new ad hoc session.  Fields are date, time, duration, location and capacity.   Recurring meetings or individual meetings can be created or changed.
 
-Capacity counts households, not people.  A session of capacity 25 takes 25 referrals however large the households are, so it may well feed a hundred people.  A referral occupies one place whether it is a single person or a family of six, because it is one parcel to pick and one person coming to collect it.  A cancelled referral gives its place back.
+The sessions in the calendar are real occurrences that have been generated ahead of time, not dates worked out on the fly whenever somebody looks.  That is what makes each one editable in its own right.  Once an administrator has re-timed or cancelled a particular week, that change stands: generating the calendar again never writes over an occurrence that already exists, so an amendment made today is still there next week and nobody has to make it twice.
+
+Capacity counts households, not people.  A session of capacity 25 takes 25 referrals however large the households are, so it may well feed a hundred people.  A referral occupies one place whether it is a single person or a family of six, because it is one parcel to pick and one person coming to collect it.  A cancelled referral gives its place back, and so does a rejected one.
+
+A referral waiting to be reviewed holds its place just like any other.  Nobody has looked at it yet, but the household may well be coming, and the food bank would rather see a session fill up with people it might have to feed than tell a team leader on the morning of a session that five more have just been let in and there is no parcel for them.  So the public list stops offering a session once the referrals it has - reviewed or not - reach its capacity.
 
 A list of available sessions for the next 2 weeks can be made without signon. A session is not available if it is at or over capacity.
 
@@ -18,6 +22,10 @@ The two week public list is therefore longer than the team leader's six days, wh
 #Authorised referrers
 Referrers can be authorised either by full email address or a star and domain name.(*@guildford.gov.uk).  There is no check that they are who they say they are - only that the email address they enter is valid.
 
+An address that is not on the list no longer stops the referral being made.  The food bank would rather look at a referral it was not expecting than turn away a household that needs feeding on the strength of a list that is always slightly out of date - a new social worker, a charity nobody has added yet, somebody using their home address because they are working from home.  The referral is taken and waits for an administrator, who accepts it or rejects it.  Until then it is not picked and does not appear on anything the warehouse works from.
+
+The organisation names on the list are also offered to the referrer as a dropdown when they fill the form in, with a free text box beside it for an organisation that is not there.  Typing into that box is the ordinary way a referral comes to be waiting for review.
+
 #referral
 The referral is currently a Google Form because it does change periodically.  Like Google forms, the questions have a column key and validation rules.  There will be some columns that are fixed, but many of the columns will have to be generic names in the database.
 
@@ -25,16 +33,42 @@ The form is held as a configuration file belonging to the referral application, 
 
 The server does not hold the questions and does not check the answers against them.  It stores the dynamic answers exactly as they are given and hands them back the same way, so a referral captured under an older version of the form stays readable - each answer arrives with the key it was asked under.  The fixed columns below are the only part of a referral the server has an opinion about.
 
-The fixed columns are: date of referral, session id, email id of referrer, organisation of referrer, phone number of referrer, name of referee, address of referee, phone number of referee, number of adults, number of children, whether a delivery is needed, reason for referral.  All other columns are dynamic.
+The fixed columns are: date of referral, session id, name of referrer, email id of referrer, organisation of referrer, phone number of referrer, first name of referee, surname of referee, date of birth of referee, address of referee, postcode of referee, phone number of referee, number of adults, number of children, whether a delivery is needed, whether the household needs help with gas or electricity, and reason for referral.  All other columns are dynamic.
+
+The referee's name is held as a first name and a surname rather than one line.  The surname is what a list is sorted by and what a volunteer reads when they are matching a bag to the person standing in front of them, and a name that has been run together cannot be taken apart again afterwards.
+
+The referee's date of birth is held rather than their age, because an age is wrong a year after it is written down.
+
+The organisation of the referrer is what the referrer said it was.  A referrer the food bank does not recognise has no entry to take it from, which is the whole reason the form asks.
+
+Whether the household needs help with gas or electricity is a fixed column because the food bank reports on it.  The two questions that follow from it - whether they are on a pre-payment meter, and whether they will let us ring them about it - are ordinary questions on the form and are not reported on in the same way.
 
 A delivery goes to the referee's own address.  There is no separate delivery address, and none is wanted - the one address held on the referral is both where the referee lives and where a delivery is taken.  So the referral asks only whether a delivery is needed, and the driver's round is made up from the addresses already on the referrals.
 
 There is a maximum capacity on each session, so referrals cannot be made to a full session.
 
-Note that the referral is done without authentication (other than checking the entered email address).  At that point, a secure key is returned to the client.  They can amend or delete the referral for 15 minutes by returning that key.
+Note that the referral is done without authentication (other than checking the entered email address).  Once it is submitted it cannot be changed by the referrer.  They are shown a confirmation of what they sent, with the fixed answers on it so they can see it is right, and that is the end of their part in it.  A referrer who then needs a change rings the food bank and an administrator makes it.
+
+The reason for referral is chosen from a list the administrators maintain rather than typed in.  It is there to be reported on - how many households came for which reason - and free text cannot be counted.  It also means the reason can be kept after the personal details have been removed, because a reason from a fixed list says nothing about who the person was.
+
+#Forgetting a referral
+After a while the food bank stops holding the household's details.  What is removed is the referee's own information and nothing else: their name, their date of birth, their address and postcode, their phone number, and every answer they gave on the form.  How long "a while" is has not been settled yet.
+
+What is kept is the number of adults and children, whether it was a delivery, whether they needed help with fuel, and the reason they were referred, because once the name and address have gone those are counts rather than people, and they are what the food bank reports on.
+
+The referrer's own details are kept as well - their name, their email address, their phone number - along with the reason an administrator gave for accepting or rejecting the referral.  The point of forgetting is to stop holding details of a household that needed feeding, not to lose track of the professional who sent them or of who made the decision.
+
+#Reviewing a referral
+A referral from an address that is not on the authorised list is held for an administrator, who either accepts it or rejects it.  An accepted referral is from then on an ordinary referral.  A rejected one is finished with: it releases its place on the session and it never reaches a picking list, a printed sheet or the household grid, because a parcel picked for somebody who was turned away is stock and volunteer time spent on nobody.  A rejected referral cannot then be cancelled either.  Being rejected and being cancelled are different things that happened, and the comment explaining the rejection is the only record of why the food bank said no - calling it a cancellation afterwards would leave that comment on a referral that no longer says anybody ever reviewed it.
+
+Each review carries a single line of comment - why it was let through, or why it was not.  It is not a history: reviewing the same referral again replaces what was there.  The comment is not timestamped.  The referral itself is timestamped, at the moment the referrer submitted it, and that is the time the food bank cares about.
+
+The comment is seen by administrators only.  It can name a referrer or set down a suspicion about one, and that is not something to put in front of the volunteer running the session.
+
+Team leaders do see referrals that are waiting to be reviewed, marked as not yet confirmed.  A team leader is the person standing in the hall when a household arrives, and being unable to answer "are you expecting us?" helps nobody.  They do not see rejected referrals at all - a rejected referral is not their concern, and the only thing that would explain it is the comment they are not shown.
 
 #Referral maintenance.
-Administrators can amend or cancel referrals or move them to another session (even if that exceeds capacity with a client generated warning). 
+Administrators can amend or cancel referrals or move them to another session (even if that exceeds capacity with a client generated warning).  A referral that has been cancelled or rejected cannot be amended, and cannot be moved either - there is nothing that brings a referral back, so moving a finished one only shifts a dead record from one session to another.  The referrer's email address is not amendable, because it is what the decision to accept the referral was made on.
 
 #Login
 Authentication will eventually be via a Google id.  Initial version will be a dummy signon page with no validation, but this should still generate an expiring security token, with refresh tokens etc.
@@ -68,12 +102,20 @@ Stock moves in six ways and only these six, because they are the ones the charit
 Against a session there will be an option to view picking list.  If that picking list has not been created yet, then it will be done at this point.  For each referral, the number of adults and children will result via a series of rules into a model picking list. 
 This picking list can be easily modified (add new items, change quantities).  This generates a printable picking list page per referral, with a referral number and the stock items they require and quantities.
 
+The screen on which the picking list is maintained shows the household's preferences beside the parcel, because whoever is deciding what goes in the bag is the only person who can act on them - a parcel that cannot be eaten is no use to anybody.  The preferences are those questions on the referral form that are marked as preferences; the rest of the answers are not shown, because they are not about what goes in the parcel.  Which questions those are is decided by the form, so the server hands over all the answers and the screen picks out the ones it asked as preferences.
+
+The screen is split down the middle: the parcel on one side, the preferences on the other, and each side pages on its own, because a long parcel and a long list of preferences do not run out at the same time.
+
+On the printed sheet there is the picking number and the household's name.  Every sheet has the name on it, not only the deliveries - the person carrying the bag has to hand it to somebody, and a number does not do that.  If it is a delivery the sheet also says DELIVERY and carries the address, the postcode and the phone number, so the driver can find the door and ring the bell.  The reason for referral is never printed.
+
 After picking is complete, modifications can be made to the list.
 
 #Model parcels and the household grid
 The "series of rules" that turns a household into a model picking list is a lookup, not a calculation.
 
 There is a table of model picking lists.  Each has a name as its key and its contents as JSON - the stock items and quantities that make up that parcel.
+
+The name of a model picking list cannot be changed once it exists, because the grid refers to it by that name.  A model that is wrongly named is deleted and set up again, which forces somebody to go back to the grid and say what each household size should now get - which is the point, since a rename that silently left the grid pointing at the old name would be the same mistake made quietly.
 
 Separately there is a grid of every possible household size.  Adults run from 1 to 5 and children from 0 to 5, so there are 30 entries.  A household larger than 5 adults counts as 5, and more than 5 children counts as 5.  Each grid entry holds just the name of the model picking list to use for that household size, so several household sizes can share one model parcel and changing that parcel updates all of them.  The grid is maintained as a whole and updated in one go, so it can be stored as a single row.
 

@@ -1,5 +1,18 @@
-import { and, asc, count, eq, gte, isNotNull, isNull, lt, lte, or, type SQL } from 'drizzle-orm';
-import { referrals } from '../../db/schema/referrals.ts';
+import {
+  and,
+  asc,
+  count,
+  eq,
+  gte,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  lte,
+  or,
+  type SQL,
+} from 'drizzle-orm';
+import { referrals, REFERRAL_STATUSES_HOLDING_A_PLACE } from '../../db/schema/referrals.ts';
 import type { Database } from '../../db/client.ts';
 import { expectAtMostOne } from '../../db/expect.ts';
 import {
@@ -13,6 +26,15 @@ import {
 } from '../../db/schema/sessions.ts';
 import type { PlainDate } from '../../core/time/plain-date.ts';
 import type { Patch } from '../../core/types.ts';
+
+/**
+ * Referrals that occupy a place, for every capacity count in this file.
+ *
+ * A referral awaiting review holds its place, so a session fills with everyone
+ * who might come. Cancelled and rejected referrals give their place back.
+ * Written once so the three places that count capacity cannot drift apart.
+ */
+const holdsAPlace = inArray(referrals.status, [...REFERRAL_STATUSES_HOLDING_A_PLACE]);
 
 export interface SessionListFilter {
   readonly from?: PlainDate | undefined;
@@ -101,9 +123,9 @@ export function createSessionsRepository(db: Database) {
      * minus the `HAVING` — an admin needs to see full sessions, not have them
      * filtered out.
      *
-     * Cancelled referrals do not occupy a place, hence the status condition
-     * inside the join rather than in the `WHERE`: putting it outside would drop
-     * sessions whose only referrals are cancelled.
+     * Cancelled and rejected referrals do not occupy a place, hence the status
+     * condition inside the join rather than in the `WHERE`: putting it outside
+     * would drop sessions whose only referrals are cancelled.
      */
     async list(filter: SessionListFilter): Promise<SessionWithBooked[]> {
       const conditions: SQL[] = [];
@@ -114,10 +136,7 @@ export function createSessionsRepository(db: Database) {
       return db
         .select({ session: sessions, booked: count(referrals.id) })
         .from(sessions)
-        .leftJoin(
-          referrals,
-          and(eq(referrals.sessionId, sessions.id), eq(referrals.status, 'active')),
-        )
+        .leftJoin(referrals, and(eq(referrals.sessionId, sessions.id), holdsAPlace))
         .where(conditions.length === 0 ? undefined : and(...conditions))
         .groupBy(sessions.id)
         .orderBy(asc(sessions.startsAtUtc));
@@ -128,7 +147,7 @@ export function createSessionsRepository(db: Database) {
       const rows = await db
         .select({ booked: count() })
         .from(referrals)
-        .where(and(eq(referrals.sessionId, sessionId), eq(referrals.status, 'active')));
+        .where(and(eq(referrals.sessionId, sessionId), holdsAPlace));
       return rows[0]?.booked ?? 0;
     },
 
@@ -141,17 +160,15 @@ export function createSessionsRepository(db: Database) {
      * does the capacity filter in SQL rather than fetching every session and
      * counting referrals per row.
      *
-     * Capacity counts referrals (households), not people — cancelled ones do
-     * not occupy a place, hence the status condition inside the join.
+     * Capacity counts referrals (households), not people — cancelled and
+     * rejected ones do not occupy a place, and one awaiting review does, hence
+     * the status condition inside the join.
      */
     async listPubliclyAvailable(fromUtc: string, toUtc: string): Promise<Session[]> {
       const rows = await db
         .select({ session: sessions, booked: count(referrals.id) })
         .from(sessions)
-        .leftJoin(
-          referrals,
-          and(eq(referrals.sessionId, sessions.id), eq(referrals.status, 'active')),
-        )
+        .leftJoin(referrals, and(eq(referrals.sessionId, sessions.id), holdsAPlace))
         .where(
           and(
             eq(sessions.status, 'planned'),

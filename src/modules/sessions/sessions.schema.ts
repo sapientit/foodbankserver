@@ -6,8 +6,18 @@ import { isPlainTime } from '../../core/time/london.ts';
 const plainDate = z.string().refine(isPlainDate, 'must be a real YYYY-MM-DD date');
 const plainTime = z.string().refine(isPlainTime, 'must be a HH:MM time');
 
-/** London wall clock, not an instant — see core/time/london.ts. */
-export const recurringSessionInputSchema = z.object({
+const capacity = z.number().int().min(0).max(1000);
+const activeUntil = plainDate.nullable();
+
+/**
+ * London wall clock, not an instant — see core/time/london.ts.
+ *
+ * The defaults live on the create schema alone. A patch schema derived with
+ * `.partial()` keeps them, and an optional-with-a-default field still produces
+ * its default from an absent key — so amending only the name would rewrite the
+ * capacity and clear the end date.
+ */
+const recurringSessionFields = z.object({
   name: z.string().min(1).max(120),
   weekday: z.number().int().min(1).max(7),
   startTime: plainTime,
@@ -17,12 +27,22 @@ export const recurringSessionInputSchema = z.object({
     .positive()
     .max(24 * 60),
   location: z.string().min(1).max(200),
-  capacity: z.number().int().min(0).max(1000).default(DEFAULT_SESSION_CAPACITY),
+  capacity,
   activeFrom: plainDate,
-  activeUntil: plainDate.nullable().default(null),
+  activeUntil,
 });
 
-export const recurringSessionPatchSchema = recurringSessionInputSchema.partial();
+export const recurringSessionInputSchema = recurringSessionFields.extend({
+  capacity: capacity.default(DEFAULT_SESSION_CAPACITY),
+  activeUntil: activeUntil.default(null),
+});
+
+// The empty patch is refused rather than treated as a no-op: the service stamps
+// `updatedAt` on every amendment, so an empty body would otherwise touch the row
+// and report success without changing anything the caller asked about.
+export const recurringSessionPatchSchema = recurringSessionFields
+  .partial()
+  .refine((value) => Object.keys(value).length > 0, 'at least one field must be supplied');
 
 /** An ad hoc session, belonging to no template. */
 export const adHocSessionSchema = z.object({
