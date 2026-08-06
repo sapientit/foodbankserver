@@ -135,7 +135,7 @@ Two roles. Use them for menus; **never for access control.**
 | Run a session: pick lists, printing, attendance | ✅      | ✅          |
 | Read sessions, stock, referrals, model parcels  | ✅      | ✅          |
 | See the session list more than six days ahead   | ✅      | ❌          |
-| Shops, stock takes, stock corrections           | ✅      | ✅          |
+| The weekly stock take                           | ✅      | ✅          |
 | Create or amend sessions and referrals          | ✅      | ❌          |
 | Maintain the stock item list                    | ✅      | ❌          |
 | Model parcels and the household grid            | ✅      | ❌          |
@@ -191,10 +191,11 @@ The public window being **longer** than the team lead's is deliberate, not a
 bug: a referrer needs notice to book somebody in, a team lead needs the shift
 in front of them.
 
-**Not capped:** `GET /api/v1/sessions/{id}` and every pick-list route. A team
-lead holding a session id can still open it and its pick list however far out
-it is. That is Q14 in `OPEN-QUESTIONS.md` and unsettled — do not build a
-screen that relies on either reading.
+**Not capped, and settled that way:** `GET /api/v1/sessions/{id}` and every
+pick-list route. A team lead holding a session id can still open it and its pick
+list however far out it is. Preparing a fortnight's picking in advance is the
+job, so the horizon shapes the list a team lead is shown and is not a wall
+around the sessions beyond it.
 
 ---
 
@@ -222,8 +223,9 @@ but it decides the referral's `status`, not whether it is taken at all:
 
 A `pending_review` referral **holds its place on the session**, so it counts
 against capacity and `GET /public/sessions` stops offering a session once the
-places are gone, reviewed or not. It never reaches a pick list, a printed sheet
-or the household grid until an administrator accepts it.
+places are gone, reviewed or not. It receives a parcel and appears on the pick
+list and printed sheet, so the run-session client has the same households as SMS
+reminders. It stays out only once cancelled or rejected.
 
 So call step 3 as the referrer types their address, but not to block them — use
 it to pre-fill `referrerOrganisation` when it comes back authorised, and to warn
@@ -275,6 +277,25 @@ of them. The referrer's name, email and phone survive, as does `reviewComment`:
 the point of the purge is to stop holding the household's details, not to lose
 track of who referred them.
 
+### Deliveries can be switched off per session
+
+`Session` and `PublicSession` both carry **`deliveriesAllowed`**. False means
+that session has nobody to drive.
+
+**The server does not enforce it.** A referral with `isDelivery: true` to such a
+session is still accepted today — so until that lands, _the form is the only
+thing stopping it_. Do not offer the delivery option when `deliveriesAllowed` is
+false. The gap is deliberate and recorded in `STATUS.md`; when the server starts
+refusing, it will be a `422`, so a form that already hides the option will not
+notice the change.
+
+`Session` also carries **`deliveryTime`** (`HH:MM` London, or null for "the same
+as `startTime`") — the time the food bank tells a household to expect a
+delivery, because the van does not go out when the hall opens. It is a time to
+show and to put in a text message; **nothing is scheduled or routed from it**,
+which is why there is no `deliversAtUtc` beside it. It is absent from
+`PublicSession` deliberately: an unauthenticated caller has no use for it.
+
 ### Turnstile
 
 `POST /public/referrals` requires a Turnstile token in the
@@ -301,45 +322,130 @@ fields back so the referrer can see what they sent, plus `status` — show them
 plainly that a `pending_review` referral is waiting to be checked rather than
 letting them assume a place is settled.
 
-### Reviewing (admin only)
+### Deciding and reading a referral (admin only)
+
+**These are two different passes and the status now says which has happened.**
+Deciding settles a referral the referrer's address held up; reading is the pass
+an administrator makes over _every_ referral.
 
 ```
-POST /api/v1/referrals/{id}/accept   { comment?: string }  → Referral (active)
-POST /api/v1/referrals/{id}/reject   { comment?: string }  → Referral (rejected)
+POST /api/v1/referrals/{id}/accept   { comment?, authoriseReferrer? }  → Referral (active)
+POST /api/v1/referrals/{id}/reject   { comment?: string }              → Referral (rejected)
+POST /api/v1/referrals/{id}/review   (no body)                         → Referral (reviewed)
 ```
 
-Both are `409` if the referral is not `pending_review`. `comment` is one line,
-at most 200 characters, and **replaces** any earlier one — there is no review
-history and no review timestamp. `referredAt` is the timestamp, and it is the
-referrer's submission, not the review. Who reviewed is recorded but never
-returned.
+Accept and reject are `409` if the referral is not `pending_review`; review is a
+`409` if it is not `active`. `comment` is one line, at most 200 characters, and
+**replaces** any earlier one — there is no decision history and no decision
+timestamp. `referredAt` is the timestamp, and it is the referrer's submission.
+Who decided or read it is recorded but never returned.
 
 Accepting cannot fail for a full session: the referral was already holding its
 place. Rejecting releases it.
+
+**`status: "reviewed"` is `active` in every respect that matters to a screen.**
+It holds its place, it is picked, it is on the listener sheet, and it is on the
+printed sheet. The only thing it adds is that somebody has read it — which makes
+`GET /referrals?status=active` the pile still to read, and that is what the
+charity asked for the status for.
+
+> **Filter on `active` and `reviewed` together wherever you mean "coming".**
+> This is the one place a previously-shipped screen goes quietly wrong: treating
+> `active` alone as the live set makes a household vanish from a list the moment
+> an administrator reads their referral. The server-side sets have all been
+> widened; yours have not.
+
+### The second accept button
+
+`referral details.txt` asked for "approve (once)" and "approve (authorise
+referrer)". The second is `authoriseReferrer` on the accept body:
+
+```
+POST /api/v1/referrals/{id}/accept
+{ "authoriseReferrer": { "organisationName": "Guildford Borough Council" } }
+```
+
+It accepts this referral _and_ adds the referrer to the authorised list, so the
+next referral from that address is not held up. Three things to build around:
+
+- **The address only, never the domain.** One person the charity has decided to
+  trust is not everybody who works where they work. There is no domain option on
+  this endpoint on purpose; a domain rule is a deliberate trip to the authorised
+  referrers screen.
+- **`organisationName` is required, and the administrator types it.** Do not
+  pre-fill it silently from `referrerOrganisation` — that is free text the
+  referrer chose, and it is how the list ends up holding "Guildford BC",
+  "Guildford Borough Council" and "guildford borough council" as three
+  organisations. Offering the existing names as suggestions is the useful shape;
+  the charity asked for the administrator to key it and confirm.
+- **A `409` means nothing happened.** If that address is already on the list the
+  referral is _not_ accepted either, so the next step is plain accept. A `422`
+  means the referral has no referrer address to authorise at all.
+
+### Amending a referral — the surface has narrowed
+
+**Breaking.** `PATCH /api/v1/referrals/{id}` used to accept the referee's name,
+date of birth, address, postcode and phone, the referrer's name and phone, the
+household counts, the delivery and fuel flags, the reason and the answers. It now
+accepts **`sessionId` (a move) and `answers`, and nothing else.** Any other field
+is a `400`.
+
+That is the charity's decision, not a tidy-up. A referral records what somebody
+asked for, and a correction taken over the phone goes into the form's **other
+information** answer instead of being edited into the record silently. The reason
+it works that way is where the answers surface: beside the parcel on the picking
+screen, and on the listener sheet. Somebody acting on "they've moved, the address
+is wrong" is standing in the warehouse holding one of those — a quietly corrected
+address field reaches nobody.
+
+**What this means for your screens.** A referral edit form with fifteen fields
+has one field now. The household counts are the loss worth naming: if a family is
+four rather than three, the parcel is the thing to change — the pick list is
+editable per parcel and that is the screen the correction belongs on — and the
+note goes in other information so the picker knows why.
+
+**Which key is "other information" is yours.** The server holds no form
+definition, so it takes the answers as a set and does not police which of them
+moved. `answers` still **replaces** the stored set outright rather than merging,
+so send the complete map, exactly as before.
 
 ---
 
 ## 4. Running a session
 
 ```
-POST /api/v1/sessions/{sessionId}/pick-list     generate (or fetch)
+POST /api/v1/sessions/{sessionId}/pick-list     generate or reconcile
+GET  /api/v1/sessions/{sessionId}/pick-list     read the existing list
 GET  /api/v1/pick-lists/{id}/print              one sheet per parcel
 POST /api/v1/pick-lists/{id}/print              mark printed
      …pick, adjusting lines as stock runs out…
 POST /api/v1/pick-lists/{id}/confirm            lock the list
      …the session happens…
+POST /api/v1/parcels/{id}/review                per household, BEFORE attendance
 POST /api/v1/parcels/{id}/attendance            per household
 POST /api/v1/sessions/{sessionId}/confirm       close the session
 ```
 
+The review step is not optional: attendance on an unreviewed parcel is a `409`.
+
 ### Generating
 
-Generated on first view. `POST` is idempotent — calling it again returns the
-existing list with `parcelsCreated: 0`. Just call it when the picking screen
-opens.
+Generated on first view. `POST` is idempotent — calling it again reconciles any
+household holding a place (`pending_review`, `active` or `reviewed`) which does
+not yet have a parcel, and reports how many it added in `parcelsCreated`. It
+never alters an existing parcel, so
+manual changes and the household snapshot stay intact. Once the list is
+confirmed it creates nothing. Just call it when the picking screen opens and
+tell staff when `parcelsCreated` is non-zero: a previously printed list now
+needs printing again to include those households.
 
-`skipped` lists any referral with no model parcel for its household size. The
-rest are still picked; show these as a warning so an admin can fix the grid.
+Generation is all-or-nothing. If any household holding a place has no model
+parcel for its size, no new parcels are created; show the error and have an
+administrator complete the household grid before trying again.
+
+The session pick-list response identifies each household by name and says
+whether it is a delivery, so the running screen can select a client and label
+attendance accurately. It never carries the referral reason, address or phone.
 
 **Contents are copied at generation.** Editing a model parcel afterwards cannot
 change a list that already exists. That is deliberate — a picker's sheet must
@@ -354,14 +460,19 @@ sheet is printed.
 `PUT /parcels/{id}/lines` with `quantity: 0` **removes** the line — that is how
 "we had none" is recorded.
 
+Before recording either attendance outcome, call `POST /parcels/{id}/review`.
+The session list exposes `reviewedAt` on each parcel so it can distinguish a
+pending review from a reviewed pick list.
+
 ### Divergence
 
-`GET /pick-lists/{id}/divergence` reports referrals that arrived after
-generation, households whose size changed, and referrals since cancelled.
+`GET /pick-lists/{id}/divergence` reports households whose size changed and
+referrals since cancelled. While a list is editable, opening it reconciles
+newly booked households automatically; a confirmed list still reports them as
+missing because it is locked.
 
-Nothing is applied automatically. Show it as a warning and let a human decide —
-there is currently no endpoint that syncs late referrals in, so those are handled
-by hand.
+No existing parcel is ever changed automatically. Show household-size changes
+and cancelled referrals as warnings and let a human decide what to do.
 
 ### Attendance
 
@@ -383,12 +494,16 @@ not expect a third or fourth state.
 that state and stock did not move again. You do not need to disable the button,
 though doing so is kinder.
 
-**The outcome is final.** Submitting the _other_ value afterwards is refused with
-`409` — a confirmed collection or delivery cannot be undone. Putting a mis-tap
-right is a stock adjustment (`POST /stock/adjustments`, which a team lead may
-also do). Surface that message rather than swallowing it, and confirm before
-sending in the first place: this is the one tap in the app that cannot be taken
-back.
+**An outcome can be taken back while the session is open.** Submitting the
+_other_ value puts the parcel's stock back and marks the household the other
+way, and you can flip as often as needed. This is the only way to fix a mis-tap,
+so offer it plainly — no confirmation dialogue is warranted for a tap that is
+reversible.
+
+**Confirming the session ends that.** After `POST /sessions/{sessionId}/confirm`
+a change is a `409`. Disable the control rather than letting someone try, and
+put the weight of the confirmation on the _session_ — that is the tap in this
+app that cannot be taken back.
 
 `POST /sessions/{sessionId}/confirm` closes the session, and refuses while anyone
 is still `pending`, returning `details.pendingPickNumbers` — show those numbers
@@ -397,30 +512,33 @@ one way or the other before the session closes.
 
 ### How stock moves
 
-Six `movementType` values, and there will not quietly be a seventh — they are a
-`CHECK` constraint on a table that cannot be altered without a rebuild.
+**Two `movementType` values, and there will not quietly be a third** — they are a
+`CHECK` constraint on a table that cannot be altered without a rebuild, and that
+column has already been rebuilt three times by guessing.
 
-| Value             | Written by                                               |
-| ----------------- | -------------------------------------------------------- |
-| `opening_balance` | a hand adjustment, when an item first goes on the list   |
-| `purchase`        | `POST /stock/purchases` — a shop                         |
-| `donation`        | a hand adjustment                                        |
-| `parcel_issued`   | attendance, when a household attends or a delivery lands |
-| `wastage`         | a hand adjustment — anything thrown away, for any reason |
-| `correction`      | a hand adjustment, and a stock take's variance           |
+| Value             | Written by                                                       |
+| ----------------- | ---------------------------------------------------------------- |
+| `opening_balance` | `POST /stock/take` — one per counted item, at the counted figure |
+| `parcel_issued`   | attendance, when a household attends or a delivery lands         |
 
-`POST /stock/adjustments` accepts **all six**, not just the hand-typed four:
-stock arriving without a recorded shop, or a parcel handed over outside a
-session, both happen in a warehouse. Every adjustment requires a `reason`.
+There is no shop, no donation, no wastage and no hand correction. The count on
+the shelf next week is what the stock is, whatever happened to it in between.
+
+**Rows are deleted in exactly two places**, and both are deliberate: a stock take
+discards the counted item's rows before writing its new baseline, and taking an
+attendance outcome back discards that parcel's. Nothing else removes them, and a
+row is never edited.
 
 Two things worth knowing when you build a report:
 
-- **Nothing is ever returned to stock.** There is no reversal movement. A parcel
-  that has been issued stays issued and a mistake becomes a `correction`.
-- **A stock take's variance is a `correction`** carrying that stock take's id, so
-  you can still find it — but the movement type alone will not separate it from a
-  team lead's hand correction. Whether it should is **Q13** in
-  `OPEN-QUESTIONS.md`, so do not build a report that depends on the answer yet.
+- **Nothing is ever returned to stock by a new movement.** There is no reversal
+  row: taking an attendance outcome back deletes that parcel's rows instead, and
+  anything else wrong on a shelf is put right by the next count.
+- **A stock take's variance is not recorded anywhere.** The count replaces the
+  item's rows with one `opening_balance` at the counted figure, so the difference
+  between the count and what the system held is gone the moment it is saved.
+  That is the charity's decision, not an omission — do not build a report that
+  needs it.
 
 ---
 
@@ -460,6 +578,239 @@ and the `preference` flag on each question — so filter the map yourself. The
 server holds no definition and will not guess; that guess is exactly what
 `dietaryNotes` was. The map is empty once the referral's personal data has been
 purged.
+
+---
+
+## 5c. The listener sheet
+
+```
+GET /api/v1/sessions/{sessionId}/listener-sheet
+  → 200 { sessionId, households: [ { referralId, refereeFirstName,
+                                     refereeSurname, reason, needsFuelHelp,
+                                     answers } ] }
+```
+
+**One sheet for the whole session**, not one per household. A listener is handed
+a single sheet and scans it for whoever is in front of them, so it comes ordered
+by surname; a purged household sorts last.
+
+Open to a **team leader**, and this is **the only place a team leader is given
+the reason for referral**. Everywhere else it stays with administrators, and
+`Referral.reasonId` is still absent for them — that rule has not been relaxed,
+an exception has been carved out of it. Do not use this endpoint to populate a
+referral screen.
+
+**`reason` is the label, not the id** — the thing to print. It **survives a
+purge**, because the reason sits outside the personal-data block so that
+reporting still works once nobody is identifiable. A reason the charity has
+since retired still appears, because the referral was made under it.
+
+**Cause Details is yours to extract.** `answers` is the referral's dynamic
+answers whole and unfiltered, and _Cause Details_ is one of them. The server
+holds no form definition, so it does not know which key that is and will not
+guess — the same reason `answers` comes through whole on a parcel.
+
+The sheet is deliberately minimal: **no address, postcode, phone, date of birth
+or anything about the referrer.** It ends up on paper in a hall. If a screen
+needs more than these five fields, that is a conversation rather than a field to
+add.
+
+**Who is on it is an assumption**, flagged `x-assumed` against **Q26**: every
+household holding a place appears — awaiting review, accepted and read alike —
+and cancelled and rejected ones do not. If
+your users expect to find somebody who cancelled, say so before building around
+it.
+
+---
+
+## 5d. Text reminders and replies
+
+The run-session screen gains a **Send SMS Reminders** button and a conversation
+per household. Team leader or admin throughout, except the unmatched screen.
+
+```
+POST /api/v1/sessions/{sessionId}/sms-reminders   (no body)
+  → { reminded, failed, alreadyReminded }
+GET  /api/v1/sessions/{sessionId}/sms-summary
+  → { unreadTotal, households: [{ referralId, reminderSentAt, messageCount, unreadCount }] }
+GET  /api/v1/referrals/{id}/sms-messages          → the thread, both directions
+POST /api/v1/referrals/{id}/sms-messages          { body }  → text them back
+POST /api/v1/referrals/{id}/sms-messages/read     → mark that household read
+GET  /api/v1/sms-messages/unmatched               admin only
+POST /api/v1/sms-messages/{id}/read               admin only
+```
+
+### Sending
+
+**Press it as often as you like.** A household already texted for that session
+is skipped, so a second press reaches only households referred since the first —
+and households whose first attempt failed. The response says which happened:
+`reminded`, `failed`, `alreadyReminded`.
+
+**A failure is not a reminder.** No number, a landline, or the provider refusing
+it leaves the household unreminded and puts a `failure` message on their line.
+The next press tries them again — so a permanently wrong number produces a
+failure every time, which is the point: it is the food bank being told.
+
+Show `failed` prominently. Those are households who do not know when to come.
+
+**You do not compose the message.** Collections get date, time and place;
+deliveries get date and the session's `deliveryTime` and no address. Both are
+server-side, because the wording is a data-protection constraint — the provider
+is given a phone number and nothing that identifies whose it is.
+
+### The counts
+
+Poll `sms-summary` while the screen is open; a few seconds is fine. There is no
+push channel and deliberately so — a text reply is not second-critical, and a
+socket per open screen is a new runtime dependency for a number that can be a
+`GET`.
+
+**Counts are inbound only** — replies and failures. Texting a household back
+does not raise their count, because a count that went up when staff answered
+would be counting your own work back at you. The thread shows both directions.
+
+`unreadTotal` is the number to make prominent. Per household, highlight the
+button whenever `unreadCount > 0`.
+
+### Reading and replying
+
+Expanding a household's line should fire `POST .../sms-messages/read`. That is
+what marks them read; there is nothing further for the user to press. It is a
+separate call from the `GET` on purpose — a `GET` that writes gets retried and
+prefetched, and somebody's unread count would clear without anyone looking.
+
+Only `household_reply` is ever unread. A `failure` arrives already read: it needs
+to be visible, but nobody is waiting for an answer.
+
+**A team lead sees these**, which is a deliberate exception to "a team lead is
+not shown why someone was referred" — of the same kind as the listener sheet. A
+household may text something as personal as their reason. The person running the
+session is the one who can act on "running 20 minutes late" or "I can't lift the
+bag", so they get it.
+
+**What staff type is bound by the same rule as the reminder**: no name, no
+address, nothing that says whose number it is. The server cannot enforce that on
+free text. Put it on the screen.
+
+### Unmatched replies (admin)
+
+A reply is matched by phone number to the referral for the **soonest session
+still to come**. A session already past is not a candidate, so a text the morning
+after lands here instead. So does a wrong number, and so does somebody the food
+bank has never heard of.
+
+They are never dropped. `phone` is on every message, but here it is the only
+thing to act on — there is no referral behind a loose reply to look the
+household up by.
+
+### Thirty days
+
+**Every message is deleted thirty days after it arrives** — reminders, replies,
+failures and unmatched alike, nightly and automatically. Do not build anything
+that treats a thread as a permanent record, and do not offer an export that
+implies one.
+
+---
+
+## 5a. Two guards you should enforce in the UI
+
+Both are **new**, both are enforced server-side, and both are things the screen
+should make impossible rather than let someone attempt and be refused. You have
+the data for both already.
+
+### A confirmed session is sealed
+
+Once `session.status === 'confirmed'`, nothing on that session changes. Every
+one of these is now a `409`:
+
+| Call                                      | Was     | Now                        |
+| ----------------------------------------- | ------- | -------------------------- |
+| `PATCH /referrals/{id}` (amend answers)   | allowed | `409` if session confirmed |
+| `PATCH /referrals/{id}` (move to another) | allowed | `409` if session confirmed |
+| `POST /referrals/{id}/cancel`             | allowed | `409` if session confirmed |
+
+The move is the one that used to do real damage: it left the household recorded
+against two sessions and changed the figures of a session already signed off.
+
+**What the screen should do:** disable amend, move and cancel for any referral
+whose session is confirmed. `Referral` carries `sessionId`, not the session's
+status, so you need the session — which a referral screen almost always has
+already, since it shows the date. **If that is awkward for you, say so and we
+will add `sessionStatus` to the referral response**; it is a one-line change on
+our side and we would rather do it than have you fetch a session per row.
+
+### A session with households on it cannot be cancelled
+
+`POST /api/v1/sessions/{id}/cancel` now returns `409` while anybody still holds
+a place, with the count in `details.booked`:
+
+```json
+{
+  "error": {
+    "code": "CONFLICT",
+    "message": "Move or cancel the households on this session before cancelling the session itself",
+    "details": { "booked": 12 }
+  }
+}
+```
+
+The households have to be moved or cancelled one at a time first. Cancelling the
+session out from under them would leave families expecting food that nobody has
+arranged.
+
+**What the screen should do:** `Session` already carries `booked`, so disable
+the cancel action whenever `booked > 0` and say why — ideally with a route to
+the referral list for that session, since that is where the work is. `booked`
+counts every referral holding a place — `pending_review`, `active` and
+`reviewed`: a household awaiting review may still turn up, so it holds a place
+and it blocks the cancel, and reading a referral changes nothing about it.
+
+---
+
+## 5b. The stock simplification — mostly shipped
+
+**These four endpoints are gone. They now return `404`:**
+
+```
+POST /api/v1/stock/purchases         recording a shop
+POST /api/v1/stock/adjustments       wastage, donations, hand corrections
+POST /api/v1/stock/takes             open a stock take
+POST /api/v1/stock/takes/{id}/counts
+POST /api/v1/stock/takes/{id}/commit
+GET  /api/v1/stock/takes             list past takes
+```
+
+In their place there is **one** endpoint, `POST /api/v1/stock/take`, defined in
+`openapi.yaml`. The weekly count is now the single source of truth: for every
+item in the body, whatever the ledger held is discarded and replaced by one
+`opening_balance` at the counted figure.
+
+The parts of the count screen that will catch you out:
+
+- **Send only the items whose number changed.** An item left out is untouched.
+  Sending unchanged rows deletes history the charity expects to keep.
+- **A count of `0` is legitimate** and means the shelf is empty.
+- **Repeating a save is safe** but it is last-write-wins, not apply-once.
+- **The same `stockItemId` twice in one body is a `400`**, not a
+  last-one-wins.
+
+`GET /stock/levels`, `/stock/items`, `/stock/search` and item maintenance are
+unchanged. **Levels can still be negative** — parcels go out between counts.
+
+### Attendance is reversible until the session is confirmed
+
+Shipped. Marking a household a no-show after marking them attended **deletes
+that parcel's stock movements** and puts the goods back; marking them attended
+again takes it again. Flip as often as needed — the level is always the sum of
+what is actually on the shelf.
+
+This is now the **only** way to fix a mis-tap, because the hand correction that
+used to do it has been removed. So the UI should offer it: an outcome on an open
+session is not a commitment.
+
+`POST /sessions/{id}/confirm` is the point of no return. After it, changing an
+outcome is a `409`. Disable the control there rather than letting someone try.
 
 ---
 

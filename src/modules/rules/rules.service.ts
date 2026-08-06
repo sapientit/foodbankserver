@@ -118,9 +118,9 @@ export function createRulesService({ repository, clock }: RulesServiceDeps) {
    * once, so there is one write and no window in which the grid is half
    * updated — which matters on a database with no transactions.
    *
-   * A partly filled grid is allowed while the charity is still setting up. The
-   * consequence is that a household landing on a blank cell cannot be placed,
-   * which generation reports rather than failing on.
+   * A partly filled grid is allowed while the charity is still setting up.
+   * Session generation is all-or-nothing, so it refuses until every active
+   * household can be placed rather than leaving a partial session list.
    */
   async function saveGrid(grid: ParcelGrid): Promise<ParcelGrid> {
     const names = (await repository.listModelParcels()).map((parcel) => parcel.name);

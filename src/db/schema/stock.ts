@@ -1,39 +1,23 @@
 import { relations, sql } from 'drizzle-orm';
-import {
-  check,
-  index,
-  integer,
-  sqliteTable,
-  text,
-  unique,
-  uniqueIndex,
-} from 'drizzle-orm/sqlite-core';
+import { check, index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 import { sessions } from './sessions.ts';
 import { users } from './users.ts';
 
 /**
- * The six ways stock moves, as the charity names them: an opening balance, a
- * shop (`purchase`), a donation, a parcel given to a client (`parcel_issued`),
- * wastage, and a hand correction.
+ * The two ways stock moves: the weekly count setting an opening balance, and a
+ * parcel going to a household.
  *
- * This list is deliberately short rather than generous. It was once nine —
- * `expiry`, `parcel_returned` and `stock_take_adjustment` also — and 0011
- * rebuilt the ledger to take them out. Adding one back costs another rebuild of
- * a table that grows by ~47,000 rows a year, so a seventh needs asking about,
- * not assuming.
+ * There is no shop, no donation, no wastage and no hand correction. The charity
+ * does not track any of them — the count on the shelf next week says what the
+ * stock is, whatever happened to it in between.
+ *
+ * **This column has now been rebuilt three times**: nine values guessed, then
+ * six (migration `0011`), then these two (`0015`). Every one of those rebuilds
+ * was caused by guessing what the charity wanted instead of asking. A third
+ * value needs an answer, not a reasonable-sounding case.
  */
-export const STOCK_MOVEMENT_TYPES = [
-  'opening_balance',
-  'purchase',
-  'donation',
-  'parcel_issued',
-  'wastage',
-  'correction',
-] as const;
+export const STOCK_MOVEMENT_TYPES = ['opening_balance', 'parcel_issued'] as const;
 export type StockMovementType = (typeof STOCK_MOVEMENT_TYPES)[number];
-
-export const STOCK_TAKE_STATUSES = ['open', 'committed', 'abandoned'] as const;
-export type StockTakeStatus = (typeof STOCK_TAKE_STATUSES)[number];
 
 export const stockItems = sqliteTable(
   'stock_items',
@@ -57,93 +41,39 @@ export const stockItems = sqliteTable(
   ],
 );
 
-/** "After a shop": one trip, many lines. */
-export const purchases = sqliteTable('purchases', {
-  id: text('id').primaryKey(),
-  purchasedAt: text('purchased_at').notNull(),
-  note: text('note'),
-  createdByUserId: text('created_by_user_id')
-    .notNull()
-    .references(() => users.id),
-  createdAt: text('created_at').notNull(),
-});
-
-export const purchaseLines = sqliteTable(
-  'purchase_lines',
-  {
-    id: text('id').primaryKey(),
-    purchaseId: text('purchase_id')
-      .notNull()
-      .references(() => purchases.id, { onDelete: 'cascade' }),
-    stockItemId: text('stock_item_id')
-      .notNull()
-      .references(() => stockItems.id),
-    quantity: integer('quantity').notNull(),
-  },
-  (table) => [
-    unique('idx_purchase_lines_item').on(table.purchaseId, table.stockItemId),
-    check('purchase_lines_quantity_positive', sql`${table.quantity} > 0`),
-  ],
-);
-
-export const stockTakes = sqliteTable(
-  'stock_takes',
-  {
-    id: text('id').primaryKey(),
-    countedAt: text('counted_at').notNull(),
-    status: text('status').$type<StockTakeStatus>().notNull().default('open'),
-    note: text('note'),
-    createdByUserId: text('created_by_user_id')
-      .notNull()
-      .references(() => users.id),
-    committedAt: text('committed_at'),
-    createdAt: text('created_at').notNull(),
-    updatedAt: text('updated_at').notNull(),
-  },
-  (table) => [
-    check('stock_takes_status_valid', sql`${table.status} IN ('open', 'committed', 'abandoned')`),
-  ],
-);
-
-export const stockTakeLines = sqliteTable(
-  'stock_take_lines',
-  {
-    id: text('id').primaryKey(),
-    stockTakeId: text('stock_take_id')
-      .notNull()
-      .references(() => stockTakes.id, { onDelete: 'cascade' }),
-    stockItemId: text('stock_item_id')
-      .notNull()
-      .references(() => stockItems.id),
-    countedQuantity: integer('counted_quantity').notNull(),
-    /** The derived level at commit time. Makes the variance auditable. */
-    expectedQuantity: integer('expected_quantity'),
-  },
-  (table) => [
-    unique('idx_stock_take_lines_item').on(table.stockTakeId, table.stockItemId),
-    check('stock_take_lines_counted_valid', sql`${table.countedQuantity} >= 0`),
-  ],
-);
-
 /**
- * The stock ledger. **Append only** — never UPDATE, never DELETE.
+ * The stock ledger: **one period, not a history.** Never UPDATE a row.
  *
- * The current level of an item is `SUM(quantity_delta)`. At roughly 25 parcels
- * × 12 lines × 3 sessions a week the ledger grows by ~47,000 rows a year, and
- * a full-scan SUM over that is milliseconds. **Do not add a balances snapshot
- * table** — that is speculative optimisation, and it introduces a second
- * source of truth that can drift from the ledger.
+ * The current level of an item is `SUM(quantity_delta)`, over whatever rows are
+ * currently here. **Do not add a balances snapshot table** — that is
+ * speculative optimisation, and it introduces a second source of truth that can
+ * drift from the ledger.
  *
- * ## The idempotency guards
+ * ## Two deletes, and only two
+ *
+ * This table was append-only, and the rule changed because the requirement did:
+ * the charity does not want stock history from before the previous weekly
+ * count. So exactly two things delete rows here, both deliberately:
+ *
+ * 1. **A stock take**, which removes the counted item's rows and writes it a
+ *    fresh `opening_balance`. The count supersedes whatever was believed.
+ * 2. **Taking an attendance outcome back**, which removes that parcel's rows
+ *    and puts the goods back on the shelf.
+ *
+ * Anything else deleting from here is a bug. An append-only design that kept
+ * the same behaviour was considered and rejected; the reasoning, including what
+ * it costs, is in `docs/engineering/d1-constraints.md`.
+ *
+ * ## The idempotency guard
  *
  * D1 has no interactive transactions, so "move this stock exactly once" cannot
- * be a read-then-write in a service. It is enforced by the partial unique
- * indexes below: a retried or double-tapped submission violates the index, the
- * service catches that specific violation, and treats it as success.
+ * be a read-then-write in a service. It is enforced by the partial unique index
+ * below: a retried or double-tapped submission violates the index, the service
+ * catches that specific violation, and treats it as success.
  *
- * The parcel one is the reason this table looks like this. It is what stops a
- * team lead's double-tap decrementing stock twice — the failure nobody notices
- * until a stock take will not reconcile.
+ * That guard is the reason this table looks like this. It is what stops a team
+ * lead's double-tap decrementing stock twice — the failure nobody notices until
+ * a stock take will not reconcile.
  */
 export const stockLedger = sqliteTable(
   'stock_ledger',
@@ -157,18 +87,15 @@ export const stockLedger = sqliteTable(
     movementType: text('movement_type').$type<StockMovementType>().notNull(),
 
     /**
-     * No foreign key, deliberately: `parcels` does not exist until the pick
-     * list slice, and SQLite cannot add a constraint to an existing table
-     * without rebuilding it — which for an append-only ledger is exactly the
-     * migration you do not want to run later. The column and its unique index
-     * are created now because slice 8 depends on them.
+     * No foreign key, deliberately: `parcels` did not exist when this column
+     * was created, and SQLite cannot add a constraint without rebuilding the
+     * table. It stays without one — a stock take deletes rows out from under
+     * nothing, but a `parcels` cascade would be a third way rows disappear.
      */
     parcelId: text('parcel_id'),
     sessionId: text('session_id').references(() => sessions.id),
-    purchaseId: text('purchase_id').references(() => purchases.id),
-    stockTakeId: text('stock_take_id').references(() => stockTakes.id),
 
-    reason: text('reason'),
+    /** Only on a `parcel_issued` row, and only ever null on a baseline. */
     actorUserId: text('actor_user_id').references(() => users.id),
     occurredAt: text('occurred_at').notNull(),
     createdAt: text('created_at').notNull(),
@@ -177,24 +104,23 @@ export const stockLedger = sqliteTable(
     index('idx_stock_ledger_item').on(table.stockItemId),
     index('idx_stock_ledger_session').on(table.sessionId),
 
-    // ===== THE IDEMPOTENCY GUARDS =====
-    // `stockItemId` is part of each key because one parcel, purchase or stock
-    // take produces one ledger row *per item*. The partial `WHERE` keeps the
-    // indexes small and lets the other movement kinds ignore them entirely.
+    // ===== THE IDEMPOTENCY GUARD =====
+    // `stockItemId` is part of the key because one parcel produces one ledger
+    // row *per item*. The partial `WHERE` keeps the index small and lets a
+    // baseline row ignore it entirely.
+    //
+    // There were three of these, for parcels, purchases and stock takes. The
+    // other two went with the movements they guarded: a stock take no longer
+    // needs one because a repeated save deletes what the previous save wrote
+    // and rewrites it, which is idempotent without an index to enforce it.
     uniqueIndex('idx_stock_ledger_parcel_movement')
       .on(table.parcelId, table.stockItemId, table.movementType)
       .where(sql`${table.parcelId} IS NOT NULL`),
-    uniqueIndex('idx_stock_ledger_purchase_movement')
-      .on(table.purchaseId, table.stockItemId, table.movementType)
-      .where(sql`${table.purchaseId} IS NOT NULL`),
-    uniqueIndex('idx_stock_ledger_stock_take_movement')
-      .on(table.stockTakeId, table.stockItemId, table.movementType)
-      .where(sql`${table.stockTakeId} IS NOT NULL`),
 
     check('stock_ledger_delta_non_zero', sql`${table.quantityDelta} <> 0`),
     check(
       'stock_ledger_movement_type_valid',
-      sql`${table.movementType} IN ('opening_balance', 'purchase', 'donation', 'parcel_issued', 'wastage', 'correction')`,
+      sql`${table.movementType} IN ('opening_balance', 'parcel_issued')`,
     ),
   ],
 );
@@ -203,19 +129,7 @@ export const stockItemsRelations = relations(stockItems, ({ many }) => ({
   ledger: many(stockLedger),
 }));
 
-export const purchasesRelations = relations(purchases, ({ many }) => ({
-  lines: many(purchaseLines),
-}));
-
-export const stockTakesRelations = relations(stockTakes, ({ many }) => ({
-  lines: many(stockTakeLines),
-}));
-
 export type StockItem = typeof stockItems.$inferSelect;
 export type NewStockItem = typeof stockItems.$inferInsert;
 export type StockLedgerEntry = typeof stockLedger.$inferSelect;
 export type NewStockLedgerEntry = typeof stockLedger.$inferInsert;
-export type Purchase = typeof purchases.$inferSelect;
-export type PurchaseLine = typeof purchaseLines.$inferSelect;
-export type StockTake = typeof stockTakes.$inferSelect;
-export type StockTakeLine = typeof stockTakeLines.$inferSelect;

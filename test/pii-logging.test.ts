@@ -202,7 +202,7 @@ describe('personal data never reaches the logs', () => {
     await testApp.request(`/api/v1/referrals/${id}`, {
       method: 'PATCH',
       headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ refereeSurname: 'Newname', refereePhone: '07700 900999' }),
+      body: JSON.stringify({ answers: { Other: 'Newname now on 07700 900999' } }),
     });
 
     const rows = await db.select().from(auditEvents);
@@ -211,7 +211,9 @@ describe('personal data never reaches the logs', () => {
     assertNoPii(serialised, 'audit trail');
     expect(serialised).not.toContain('Newname');
     expect(serialised).not.toContain('07700 900999');
-    // But it does record what changed.
-    expect(serialised).toContain('refereeSurname');
+    // But it does record what changed. The answers are the only amendable part
+    // of a referral now, and they are exactly where a correction ends up — so
+    // this is the field name that must appear without any of its contents.
+    expect(serialised).toContain('answers');
   });
 });

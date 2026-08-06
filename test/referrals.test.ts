@@ -506,6 +506,261 @@ describe('reviewing a referral', () => {
     // The comment is on the referral, not smeared across the audit table.
     expect(reviewed?.detailJson).toBeNull();
   });
+
+  // --- The second accept button: accept, and authorise the referrer. ---
+
+  it('accepts and puts the referrer on the list, by address and not by domain', async () => {
+    const { testApp, token, world: w, id } = await pending();
+
+    const response = await testApp.request(`/api/v1/referrals/${id}/accept`, {
+      method: 'POST',
+      headers: adminJson(token),
+      body: JSON.stringify({
+        authoriseReferrer: { organisationName: 'A Charity, Properly Named' },
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ status: 'active' });
+
+    const rules = await db.select().from(authorisedReferrers);
+    const added = rules.find((rule) => rule.matchValue === UNKNOWN_REFERRER.referrerEmail);
+
+    expect(added).toMatchObject({
+      matchType: 'email',
+      organisationName: 'A Charity, Properly Named',
+      isActive: 1,
+    });
+    // The whole domain must not have been authorised on the strength of one
+    // referral — that would quietly let in everybody who works there.
+    expect(rules.some((rule) => rule.matchValue === 'notonthelist.example')).toBe(false);
+
+    // And the next referral from that address is no longer held up.
+    const next = await submitReferral(testApp, w, UNKNOWN_REFERRER);
+    expect(next.referralStatus).toBe('active');
+  });
+
+  it('takes the organisation name from the administrator, not from the referral', async () => {
+    const { testApp, token, id } = await pending();
+
+    await testApp.request(`/api/v1/referrals/${id}/accept`, {
+      method: 'POST',
+      headers: adminJson(token),
+      body: JSON.stringify({
+        authoriseReferrer: { organisationName: 'Guildford Borough Council' },
+      }),
+    });
+
+    const [added] = await db
+      .select()
+      .from(authorisedReferrers)
+      .where(eq(authorisedReferrers.matchValue, UNKNOWN_REFERRER.referrerEmail));
+
+    // The referrer typed 'A Charity Nobody Has Added Yet'. What goes on the
+    // list is what the administrator keyed, which is the whole point: the list
+    // is the reporting key and free text fills it with near-duplicates.
+    expect(added?.organisationName).toBe('Guildford Borough Council');
+    expect(added?.organisationName).not.toBe(UNKNOWN_REFERRER.referrerOrganisation);
+  });
+
+  it('refuses without an organisation name', async () => {
+    const { testApp, token, id } = await pending();
+
+    const response = await testApp.request(`/api/v1/referrals/${id}/accept`, {
+      method: 'POST',
+      headers: adminJson(token),
+      body: JSON.stringify({ authoriseReferrer: {} }),
+    });
+
+    expect(response.status).toBe(400);
+    const [stored] = await db.select().from(referrals).where(eq(referrals.id, id));
+    expect(stored?.status).toBe('pending_review');
+  });
+
+  it('leaves the referral pending when the address is already on the list', async () => {
+    const { testApp, token, id } = await pending();
+
+    await testApp.request('/api/v1/authorised-referrers', {
+      method: 'POST',
+      headers: adminJson(token),
+      body: JSON.stringify({
+        matchType: 'email',
+        matchValue: UNKNOWN_REFERRER.referrerEmail,
+        organisationName: 'Added Earlier By Somebody Else',
+      }),
+    });
+
+    const response = await testApp.request(`/api/v1/referrals/${id}/accept`, {
+      method: 'POST',
+      headers: adminJson(token),
+      body: JSON.stringify({ authoriseReferrer: { organisationName: 'A Second Name' } }),
+    });
+
+    expect(response.status).toBe(409);
+
+    // Nothing happened: the referral is untouched, so plain accept is the next
+    // step, and the existing list entry keeps its name.
+    const [stored] = await db.select().from(referrals).where(eq(referrals.id, id));
+    expect(stored?.status).toBe('pending_review');
+
+    const [existing] = await db
+      .select()
+      .from(authorisedReferrers)
+      .where(eq(authorisedReferrers.matchValue, UNKNOWN_REFERRER.referrerEmail));
+    expect(existing?.organisationName).toBe('Added Earlier By Somebody Else');
+  });
+
+  it('does not authorise anybody when the referral is only accepted', async () => {
+    const { testApp, token, id } = await pending();
+
+    await testApp.request(`/api/v1/referrals/${id}/accept`, {
+      method: 'POST',
+      headers: adminJson(token),
+      body: JSON.stringify({ comment: 'Just this once' }),
+    });
+
+    const rules = await db.select().from(authorisedReferrers);
+    expect(rules.some((rule) => rule.matchValue === UNKNOWN_REFERRER.referrerEmail)).toBe(false);
+  });
+});
+
+describe('reading a referral through', () => {
+  function adminJson(token: string): Record<string, string> {
+    return { ...authHeaders(token), 'content-type': 'application/json' };
+  }
+
+  it('moves an active referral to reviewed, and records who read it', async () => {
+    const { testApp, token, world: w } = await world();
+    const { id, referralStatus } = await submitReferral(testApp, w);
+    expect(referralStatus).toBe('active'); // A recognised address: nobody has read it yet.
+
+    const response = await testApp.request(`/api/v1/referrals/${id}/review`, {
+      method: 'POST',
+      headers: authHeaders(token),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ status: 'reviewed' });
+
+    const [stored] = await db.select().from(referrals).where(eq(referrals.id, id));
+    expect(stored?.status).toBe('reviewed');
+    expect(stored?.reviewedByUserId).toEqual(expect.any(String));
+
+    const audit = await db.select().from(auditEvents).where(eq(auditEvents.entityId, id));
+    expect(audit.find((row) => row.action === 'reviewed')?.actorKind).toBe('user');
+  });
+
+  it('is the pile still to read: filtering on active excludes what has been read', async () => {
+    const { testApp, token, world: w } = await world();
+    const first = await submitReferral(testApp, w);
+    await submitReferral(testApp, w, { refereeSurname: 'Ashby' });
+
+    await testApp.request(`/api/v1/referrals/${first.id}/review`, {
+      method: 'POST',
+      headers: authHeaders(token),
+    });
+
+    const unread = await testApp.request('/api/v1/referrals?status=active', {
+      headers: authHeaders(token),
+    });
+    const { referrals: rows }: { referrals: { id: string }[] } = await unread.json();
+
+    expect(rows.map((row) => row.id)).not.toContain(first.id);
+    expect(rows).toHaveLength(1);
+  });
+
+  it('will not read a referral that has not been decided yet', async () => {
+    const { testApp, token, world: w } = await world();
+    const { id } = await submitReferral(testApp, w, UNKNOWN_REFERRER);
+
+    const response = await testApp.request(`/api/v1/referrals/${id}/review`, {
+      method: 'POST',
+      headers: authHeaders(token),
+    });
+
+    expect(response.status).toBe(409);
+    const [stored] = await db.select().from(referrals).where(eq(referrals.id, id));
+    expect(stored?.status).toBe('pending_review');
+  });
+
+  it('refuses a second reading, and refuses one on a cancelled referral', async () => {
+    const { testApp, token, world: w } = await world();
+    const { id } = await submitReferral(testApp, w);
+
+    const read = (referralId: string) =>
+      testApp.request(`/api/v1/referrals/${referralId}/review`, {
+        method: 'POST',
+        headers: authHeaders(token),
+      });
+
+    expect((await read(id)).status).toBe(200);
+    expect((await read(id)).status).toBe(409);
+
+    const other = await submitReferral(testApp, w, { refereeSurname: 'Ashby' });
+    await testApp.request(`/api/v1/referrals/${other.id}/cancel`, {
+      method: 'POST',
+      headers: adminJson(token),
+    });
+    expect((await read(other.id)).status).toBe(409);
+  });
+
+  it('refuses a team lead', async () => {
+    const { testApp, world: w } = await world();
+    const { id } = await submitReferral(testApp, w);
+
+    const lead = buildTestApp({ clock: fixedClock(NOW) });
+    const { accessToken } = await devLogin(lead, {
+      email: 'lead@foodbank.org',
+      role: 'team_lead',
+    });
+
+    const response = await lead.request(`/api/v1/referrals/${id}/review`, {
+      method: 'POST',
+      headers: authHeaders(accessToken),
+    });
+
+    expect(response.status).toBe(403);
+  });
+
+  it('changes nothing else: a read referral still holds its place', async () => {
+    const { testApp, token, world: w } = await world({ capacity: 1 });
+    const { id } = await submitReferral(testApp, w);
+
+    await testApp.request(`/api/v1/referrals/${id}/review`, {
+      method: 'POST',
+      headers: authHeaders(token),
+    });
+
+    // The session is still full, and the public list still does not offer it.
+    expect((await submitReferral(testApp, w)).status).toBe(409);
+
+    const response = await testApp.request('/api/v1/public/sessions');
+    const { sessions: offered }: { sessions: { id: string }[] } = await response.json();
+    expect(offered.map((session) => session.id)).not.toContain(w.sessionId);
+  });
+
+  it('can still be amended, moved and cancelled once read', async () => {
+    const { testApp, token, world: w } = await world();
+    const { id } = await submitReferral(testApp, w);
+
+    await testApp.request(`/api/v1/referrals/${id}/review`, {
+      method: 'POST',
+      headers: authHeaders(token),
+    });
+
+    const amended = await testApp.request(`/api/v1/referrals/${id}`, {
+      method: 'PATCH',
+      headers: adminJson(token),
+      body: JSON.stringify({ answers: { Other: 'Rang about the time' } }),
+    });
+    expect(amended.status).toBe(200);
+
+    const cancelled = await testApp.request(`/api/v1/referrals/${id}/cancel`, {
+      method: 'POST',
+      headers: adminJson(token),
+    });
+    expect(cancelled.status).toBe(200);
+  });
 });
 
 describe('what a team lead may see of a referral under review', () => {
@@ -648,7 +903,7 @@ describe('admin referral management', () => {
     const patch = await lead.request(`/api/v1/referrals/${id}`, {
       method: 'PATCH',
       headers: { ...authHeaders(accessToken), 'content-type': 'application/json' },
-      body: JSON.stringify({ adults: 9 }),
+      body: JSON.stringify({ answers: { Other: 'anything' } }),
     });
     const cancel = await lead.request(`/api/v1/referrals/${id}/cancel`, {
       method: 'POST',
@@ -701,17 +956,70 @@ describe('admin referral management', () => {
     await testApp.request(`/api/v1/referrals/${id}`, {
       method: 'PATCH',
       headers: { ...authHeaders(token), 'content-type': 'application/json' },
-      body: JSON.stringify({ refereeSurname: 'Renamed', adults: 4 }),
+      body: JSON.stringify({ answers: { Other: 'Renamed, and moved to 4 Elm Road' } }),
     });
 
     const audit = await db.select().from(auditEvents).where(eq(auditEvents.entityId, id));
     const amended = audit.find((row) => row.action === 'amended');
 
-    expect(amended?.detailJson).toContain('refereeSurname');
-    expect(amended?.detailJson).toContain('adults');
-    // The whole point: names of fields, never their contents.
+    expect(amended?.detailJson).toContain('answers');
+    // The whole point: names of fields, never their contents. It matters more
+    // now than it did: the answers are where corrections are written, so this
+    // blob is the one most likely to hold a name or an address.
     expect(amended?.detailJson).not.toContain('Renamed');
+    expect(amended?.detailJson).not.toContain('Elm Road');
     expect(amended?.actorKind).toBe('user');
+  });
+
+  it('refuses every field but the answers and the session', async () => {
+    const { testApp, token, world: w } = await world();
+    const { id } = await submitReferral(testApp, w);
+
+    // The charity's decision: a referral records what was asked for, and a
+    // correction goes into the form's "other information" answer, which the
+    // picking screen and the listener sheet actually show. See Q23.
+    for (const body of [
+      { refereeSurname: 'Renamed' },
+      { refereeAddress: '4 Elm Road' },
+      { refereePhone: '07700 900999' },
+      { adults: 4 },
+      { children: 3 },
+      { isDelivery: true },
+      { needsFuelHelp: true },
+      { referrerName: 'Someone Else' },
+      { reasonId: w.reasonId },
+    ]) {
+      const response = await testApp.request(`/api/v1/referrals/${id}`, {
+        method: 'PATCH',
+        headers: { ...authHeaders(token), 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+      expect(response.status, `PATCH ${JSON.stringify(body)}`).toBe(400);
+    }
+
+    const [stored] = await db.select().from(referrals).where(eq(referrals.id, id));
+    expect(stored?.refereeSurname).toBe('Wintergreen');
+    expect(stored?.adults).toBe(2);
+  });
+
+  it('amends the answers, replacing them outright', async () => {
+    const { testApp, token, world: w } = await world();
+    const { id } = await submitReferral(testApp, w);
+
+    const response = await testApp.request(`/api/v1/referrals/${id}`, {
+      method: 'PATCH',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({ answers: { Other: 'Rang: needs the food left in the porch' } }),
+    });
+    expect(response.status).toBe(200);
+
+    const [stored] = await db.select().from(referrals).where(eq(referrals.id, id));
+    const answers: Record<string, unknown> = JSON.parse(stored?.answersJson ?? '{}');
+
+    expect(answers.Other).toBe('Rang: needs the food left in the porch');
+    // Replaced, not merged: the client holds the form and sends the whole set.
+    expect(Object.keys(answers)).toEqual(['Other']);
   });
 
   it('refuses to amend or move a rejected referral', async () => {
@@ -735,7 +1043,7 @@ describe('admin referral management', () => {
     const { id: otherSessionId }: { id: string } = await elsewhere.json();
 
     // A move is an amendment, so both halves of PATCH must refuse it.
-    for (const body of [{ adults: 4 }, { sessionId: otherSessionId }]) {
+    for (const body of [{ answers: { Other: 'anything' } }, { sessionId: otherSessionId }]) {
       const response = await testApp.request(`/api/v1/referrals/${id}`, {
         method: 'PATCH',
         headers: { ...authHeaders(token), 'content-type': 'application/json' },

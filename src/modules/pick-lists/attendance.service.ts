@@ -40,22 +40,28 @@ export function createAttendanceService(deps: AttendanceDeps) {
    *
    * - **Attended** issues the parcel: one `parcel_issued` ledger row per line,
    *   negative, in a single batch with the attendance update.
-   * - **No-show** writes **no ledger entry at all**. Nothing was ever given
-   *   away, so there is nothing to return — the parcel is simply unpacked.
-   * - **The outcome is final.** A collection or delivery that has been
-   *   recorded cannot be undone, so the contradicting outcome is refused and
-   *   the mistake is put right through the audited stock adjustment path.
-   *   Reversing it here would append a compensating ledger entry nobody could
-   *   tell apart from a real movement.
+   * - **No-show** deletes that parcel's movements. Nothing left the building,
+   *   so nothing should have come off the shelves, and the parcel is unpacked.
+   * - **An outcome can be taken back** while the session is open. This is the
+   *   only way to fix a mis-tap: the hand correction that used to do it went
+   *   with the stock simplification, and a team lead must not be left waiting
+   *   for the next count to get a wrong figure put right.
+   * - **Confirming the session ends it.** After that the outcome is fixed,
+   *   because a session that has been signed off must not have its figures
+   *   move underneath it.
    *
-   * ## Why this cannot double-count
+   * ## Why this cannot double-count, and why taking back needs no guard
    *
    * A team lead will double-tap, and a slow request will be retried. There is
-   * no transaction to make "check then write" safe, so exactly-once is
+   * no transaction to make "check then write" safe, so issuing exactly once is
    * enforced by the unique index on
    * `(parcel_id, stock_item_id, movement_type)`: the second attempt violates
    * it, the whole batch rolls back, and this catches that specific violation
-   * and reports success. Idempotent by construction rather than by discipline.
+   * and reports success.
+   *
+   * Taking back needs no such guard, because deleting rows that are already
+   * gone is a no-op. The asymmetry is the point — issuing twice doubles a
+   * movement, un-issuing twice does nothing the first did not already do.
    */
   async function record(
     parcelId: string,
@@ -71,8 +77,8 @@ export function createAttendanceService(deps: AttendanceDeps) {
       // a conflict when someone taps twice.
       return { parcel, stockMoved: false, alreadyRecorded: true };
     }
-    if (parcel.attendance !== 'pending') {
-      throw finalOutcomeConflict(parcelId, parcel.attendance);
+    if (parcel.reviewedAt === null) {
+      throw new ConflictError('Review this pick list before recording attendance');
     }
 
     const pickList = await repository.findById(parcel.pickListId);
@@ -80,13 +86,37 @@ export function createAttendanceService(deps: AttendanceDeps) {
       throw new NotFoundError('Pick list not found');
     }
 
+    // Confirming the session is the end of it. Everything above this line can
+    // be changed and nothing below it can.
+    const session = await sessions.findById(pickList.sessionId);
+    if (session?.status === 'confirmed') {
+      throw new ConflictError(
+        'This session has been confirmed, so its outcomes can no longer be changed',
+        { details: { parcelId, currentAttendance: parcel.attendance } },
+      );
+    }
+
     const now = clock.nowIso();
 
-    // A no-show issued nothing, so there is nothing for the ledger to say.
+    // A no-show gives back whatever the parcel took. Deleting rows that are
+    // not there is a no-op, so this is the same statement whether the outcome
+    // is being recorded for the first time or taken back.
     if (attendance === 'no_show') {
+      await db.$client.batch([
+        repository.buildDeleteParcelIssue(parcelId),
+        repository.buildSetAttendance({ parcelId, attendance, actorUserId: actor.userId, at: now }),
+      ]);
+
+      logger.info('recorded attendance', {
+        parcelId,
+        sessionId: pickList.sessionId,
+        code: attendance,
+        userId: actor.userId,
+      });
+
       return {
-        parcel: await applyWithoutStock(parcelId, attendance, actor, now),
-        stockMoved: false,
+        parcel: await requireParcel(parcelId),
+        stockMoved: parcel.attendance === 'attended',
         alreadyRecorded: false,
       };
     }
@@ -152,13 +182,18 @@ export function createAttendanceService(deps: AttendanceDeps) {
   }
 
   /**
-   * The parcel had already been issued when this request tried to issue it.
+   * The parcel was already issued when this request tried to issue it.
    *
-   * If the parcel now reads as the requested outcome, this was a retry and the
-   * earlier attempt succeeded — report success. If it still reads `pending`,
-   * the ledger row landed without its attendance update, so record the outcome
-   * and leave the append-only ledger alone. Anything else is a contradicting
-   * outcome, which is final and refused.
+   * Two requests raced and both read `pending` before either wrote; the index
+   * let one through. If the parcel now reads as the requested outcome the other
+   * request did this one's job, so report success. If it still reads `pending`,
+   * the ledger rows landed without their attendance update — impossible from an
+   * atomic batch, but the guard is defensive and repairing it costs one write.
+   *
+   * Anything else means the parcel changed to the *other* outcome underneath
+   * this request. That is a real concurrent conflict rather than a mis-tap to
+   * absorb: two people are recording the same household differently at the same
+   * moment, and the one who lost should be told.
    */
   async function handleGuardViolation(
     parcelId: string,
@@ -182,23 +217,9 @@ export function createAttendanceService(deps: AttendanceDeps) {
       };
     }
 
-    throw finalOutcomeConflict(parcelId, current.attendance, cause);
-  }
-
-  /**
-   * A recorded outcome is final: once a collection or delivery is confirmed it
-   * cannot be undone. Point the team lead at the audited adjustment path,
-   * which leaves a correction on the record rather than a reversal that reads
-   * exactly like a real movement.
-   */
-  function finalOutcomeConflict(
-    parcelId: string,
-    recorded: AttendanceStatus,
-    cause?: unknown,
-  ): ConflictError {
-    return new ConflictError(
-      'This parcel has already been recorded and cannot be changed. Correct the stock directly instead.',
-      { cause, details: { parcelId, currentAttendance: recorded } },
+    throw new ConflictError(
+      'Somebody else recorded this household at the same moment. Check the outcome and try again.',
+      { cause, details: { parcelId, currentAttendance: current.attendance } },
     );
   }
 

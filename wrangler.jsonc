@@ -51,10 +51,23 @@
       "namespace_id": "1002",
       "simple": { "limit": 60, "period": 60 },
     },
+    /*
+     * The inbound SMS webhook. Looser than the referral limiter because a
+     * whole session can reply at once and a throttled reply is a reply lost —
+     * but still bounded, because it is a public write into the most sensitive
+     * table in the system. The shared secret is the real gate; this is what
+     * stops somebody hammering the door.
+     */
+    {
+      "name": "SMS_WEBHOOK_LIMITER",
+      "namespace_id": "1003",
+      "simple": { "limit": 120, "period": 60 },
+    },
   ],
 
-  // 02:17 daily. Materialises 6 weeks of sessions, purges expired referral edit
-  // keys, and (once a retention period is set) purges referral personal data.
+  // 02:17 daily. Materialises 6 weeks of sessions, deletes text messages over
+  // thirty days old, and (once a retention period is set) purges referral
+  // personal data.
   "triggers": {
     "crons": ["17 2 * * *"],
   },
@@ -92,6 +105,11 @@
           "name": "PUBLIC_LIMITER",
           "namespace_id": "1002",
           "simple": { "limit": 60, "period": 60 },
+        },
+        {
+          "name": "SMS_WEBHOOK_LIMITER",
+          "namespace_id": "1003",
+          "simple": { "limit": 120, "period": 60 },
         },
       ],
       "triggers": {

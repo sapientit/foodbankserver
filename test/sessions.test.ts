@@ -240,8 +240,11 @@ describe('public session list', () => {
     const response = await testApp.request('/api/v1/public/sessions');
     const body: { sessions: Record<string, unknown>[] } = await response.json();
 
-    // No capacity, no remaining places, no status, no internal flags.
+    // No capacity, no remaining places, no status, no internal flags. The
+    // referral form needs `deliveriesAllowed` to know not to offer delivery,
+    // but not `deliveryTime` — that is only worth reading once one is arranged.
     expect(Object.keys(body.sessions[0] ?? {}).sort()).toEqual([
+      'deliveriesAllowed',
       'durationMinutes',
       'id',
       'location',
@@ -570,6 +573,202 @@ describe('staff session horizon', () => {
       SIX_DAYS_OUT,
       SEVEN_DAYS_OUT,
     ]);
+  });
+});
+
+/**
+ * The delivery time and the delivery flag: read-out fields with no scheduling
+ * effect (see `INITIAL_SPEC1.txt`, "Session maintenance"). Nothing here
+ * enforces the flag against a referral — that is a known, recorded gap.
+ */
+describe('delivery fields', () => {
+  beforeEach(async () => {
+    await db.delete(sessions);
+    await db.delete(recurringSessions);
+    await db.delete(systemJobs);
+    await db.delete(refreshTokens);
+    await db.delete(users);
+  });
+
+  it('creates an ad hoc session with a delivery time and reads it back', async () => {
+    const { testApp, token } = await adminApp();
+
+    const created = await testApp.request('/api/v1/sessions', {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sessionDate: '2026-08-06',
+        startTime: '18:00',
+        durationMinutes: 90,
+        location: 'Community Centre',
+        deliveryTime: '17:00',
+      }),
+    });
+    expect(created.status).toBe(201);
+    const body: { id: string; deliveryTime: string | null } = await created.json();
+    expect(body.deliveryTime).toBe('17:00');
+
+    const fetched = await testApp.request(`/api/v1/sessions/${body.id}`, {
+      headers: authHeaders(token),
+    });
+    const fetchedBody: { deliveryTime: string | null } = await fetched.json();
+    expect(fetchedBody.deliveryTime).toBe('17:00');
+  });
+
+  it('defaults an ad hoc session created without a delivery time to null', async () => {
+    const { testApp, token } = await adminApp();
+
+    const created = await testApp.request('/api/v1/sessions', {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sessionDate: '2026-08-06',
+        startTime: '18:00',
+        durationMinutes: 90,
+        location: 'Community Centre',
+      }),
+    });
+    expect(created.status).toBe(201);
+    const body: { deliveryTime: string | null; deliveriesAllowed: boolean } = await created.json();
+    expect(body.deliveryTime).toBeNull();
+    expect(body.deliveriesAllowed).toBe(true); // default
+  });
+
+  it('patches a delivery time, and clears it back to null explicitly', async () => {
+    const { testApp, token } = await adminApp();
+
+    const created = await testApp.request('/api/v1/sessions', {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sessionDate: '2026-08-06',
+        startTime: '18:00',
+        durationMinutes: 90,
+        location: 'Community Centre',
+      }),
+    });
+    const { id }: { id: string } = await created.json();
+
+    const patched = await testApp.request(`/api/v1/sessions/${id}`, {
+      method: 'PATCH',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({ deliveryTime: '17:30' }),
+    });
+    expect(patched.status).toBe(200);
+    const patchedBody: { deliveryTime: string | null } = await patched.json();
+    expect(patchedBody.deliveryTime).toBe('17:30');
+
+    const cleared = await testApp.request(`/api/v1/sessions/${id}`, {
+      method: 'PATCH',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({ deliveryTime: null }),
+    });
+    expect(cleared.status).toBe(200);
+    const clearedBody: { deliveryTime: string | null } = await cleared.json();
+    expect(clearedBody.deliveryTime).toBeNull();
+  });
+
+  it('can set deliveriesAllowed false at creation and patch it back', async () => {
+    const { testApp, token } = await adminApp();
+
+    const created = await testApp.request('/api/v1/sessions', {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sessionDate: '2026-08-06',
+        startTime: '18:00',
+        durationMinutes: 90,
+        location: 'Community Centre',
+        deliveriesAllowed: false,
+      }),
+    });
+    expect(created.status).toBe(201);
+    const { id, deliveriesAllowed }: { id: string; deliveriesAllowed: boolean } =
+      await created.json();
+    expect(deliveriesAllowed).toBe(false);
+
+    const patched = await testApp.request(`/api/v1/sessions/${id}`, {
+      method: 'PATCH',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({ deliveriesAllowed: true }),
+    });
+    expect(patched.status).toBe(200);
+    const patchedBody: { deliveriesAllowed: boolean } = await patched.json();
+    expect(patchedBody.deliveriesAllowed).toBe(true);
+  });
+
+  it('carries both fields on a recurring template and can amend them', async () => {
+    const { testApp, token } = await adminApp();
+
+    const created = await testApp.request('/api/v1/recurring-sessions', {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Tuesday morning',
+        weekday: 2,
+        startTime: '10:00',
+        durationMinutes: 120,
+        location: 'Church Hall',
+        activeFrom: '2026-01-01',
+        deliveryTime: '09:00',
+        deliveriesAllowed: false,
+      }),
+    });
+    expect(created.status).toBe(201);
+    const template: { id: string; deliveryTime: string | null; deliveriesAllowed: boolean } =
+      await created.json();
+    expect(template.deliveryTime).toBe('09:00');
+    expect(template.deliveriesAllowed).toBe(false);
+
+    const patched = await testApp.request(`/api/v1/recurring-sessions/${template.id}`, {
+      method: 'PATCH',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({ deliveryTime: null, deliveriesAllowed: true }),
+    });
+    expect(patched.status).toBe(200);
+    const patchedBody: { deliveryTime: string | null; deliveriesAllowed: boolean } =
+      await patched.json();
+    expect(patchedBody.deliveryTime).toBeNull();
+    expect(patchedBody.deliveriesAllowed).toBe(true);
+  });
+
+  it('materialises an occurrence carrying the template’s delivery fields', async () => {
+    const { testApp, token } = await adminApp();
+
+    const created = await testApp.request('/api/v1/recurring-sessions', {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Tuesday morning',
+        weekday: 2,
+        startTime: '10:00',
+        durationMinutes: 120,
+        location: 'Church Hall',
+        activeFrom: '2026-01-01',
+        deliveryTime: '09:00',
+        deliveriesAllowed: false,
+      }),
+    });
+    expect(created.status).toBe(201);
+
+    await runMaterialisation(testApp, token);
+
+    const [occurrence] = await db.select().from(sessions).orderBy(sessions.startsAtUtc);
+    expect(occurrence?.deliveryTime).toBe('09:00');
+    expect(occurrence?.deliveriesAllowed).toBe(0);
+  });
+
+  it('exposes deliveriesAllowed but not deliveryTime on the public list', async () => {
+    const { testApp, token } = await adminApp();
+    await createTuesdayTemplate(testApp, token);
+    await runMaterialisation(testApp, token);
+
+    const response = await testApp.request('/api/v1/public/sessions');
+    const body: { sessions: Record<string, unknown>[] } = await response.json();
+
+    const first = body.sessions[0] ?? {};
+    expect(Object.keys(first)).toContain('deliveriesAllowed');
+    expect(Object.keys(first)).not.toContain('deliveryTime');
   });
 });
 

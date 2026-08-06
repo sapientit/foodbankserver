@@ -61,8 +61,10 @@ migration, repository and schema file in full, plus the service that composes th
 
 **Ledger and idempotency**
 
-- **The stock ledger is append-only.** Any `UPDATE` or `DELETE` of a ledger row is Critical. The
-  level is `SUM(quantity_delta)`; a stock take writes an adjustment for the variance.
+- **A ledger row is never `UPDATE`d, and is deleted in exactly two places** — a stock take
+  discarding the counted item's rows, and an attendance outcome being taken back. Any other
+  `UPDATE` or `DELETE` of a ledger row is Critical. The level is `SUM(quantity_delta)`; a stock take
+  writes one `opening_balance` at the counted figure and records no variance.
 - Session materialisation never `UPDATE`s an existing session row.
 - Is the idempotency guard real? A repeated attendance submission must move stock exactly once, and
   the enforcement is the unique index, not a prior read.

@@ -37,9 +37,15 @@ export interface ParcelResponse {
   readonly id: string;
   readonly referralId: string;
   readonly pickNumber: number;
+  /** Enough identity to select a household in the session workspace. */
+  readonly refereeFirstName: string | null;
+  readonly refereeSurname: string | null;
+  /** Chooses collection or delivery attendance language; no address is exposed here. */
+  readonly isDelivery: boolean;
   readonly adults: number;
   readonly children: number;
   readonly householdSize: number;
+  readonly reviewedAt: string | null;
   readonly attendance: string;
   readonly notes: string | null;
   /**
@@ -66,9 +72,13 @@ export function toParcelResponse(
     id: parcel.id,
     referralId: parcel.referralId,
     pickNumber: parcel.pickNumber,
+    refereeFirstName: referral?.refereeFirstName ?? null,
+    refereeSurname: referral?.refereeSurname ?? null,
+    isDelivery: referral?.isDelivery === 1,
     adults: parcel.adults,
     children: parcel.children,
     householdSize: parcel.adults + parcel.children,
+    reviewedAt: parcel.reviewedAt,
     attendance: parcel.attendance,
     notes: parcel.notes,
     answers: parseAnswers(referral?.answersJson ?? null),

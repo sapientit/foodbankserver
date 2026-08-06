@@ -63,10 +63,39 @@ describe('generating a pick list', () => {
 
     const second = await generatePickList(testApp, token, w.sessionId);
     expect(second.id).toBe(first.id);
-    expect(second.parcelsCreated).toBe(0); // not regenerated
+    expect(second.parcelsCreated).toBe(0); // no referral arrived since generation
 
     expect(await db.select().from(pickLists)).toHaveLength(1);
     expect(await db.select().from(parcels)).toHaveLength(2);
+  });
+
+  it('adds a late active referral without changing parcels already picked', async () => {
+    const { testApp, token, world: w } = await world();
+    const firstReferral = await submitReferral(testApp, w, { adults: 1, children: 0 });
+    const first = await generatePickList(testApp, token, w.sessionId);
+    const before = await readPickList(testApp, token, first.id);
+
+    const lateReferral = await submitReferral(testApp, w, { adults: 2, children: 2 });
+    const reconciled = await generatePickList(testApp, token, w.sessionId);
+    const after = await readPickList(testApp, token, first.id);
+
+    expect(reconciled.id).toBe(first.id);
+    expect(reconciled.parcelsCreated).toBe(1);
+    expect(after.parcels).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: before.parcels[0]?.id,
+          referralId: firstReferral.id,
+          pickNumber: 1,
+        }),
+        expect.objectContaining({ referralId: lateReferral.id, pickNumber: 2 }),
+      ]),
+    );
+
+    const divergence = await testApp.request(`/api/v1/pick-lists/${first.id}/divergence`, {
+      headers: authHeaders(token),
+    });
+    expect(await divergence.json()).toMatchObject({ missingParcels: [] });
   });
 
   it('resolves each household through the grid to its model parcel', async () => {
@@ -124,19 +153,31 @@ describe('generating a pick list', () => {
     expect(parcel?.referralId).toBe(keep.id);
   });
 
-  it('excludes a referral nobody has reviewed yet', async () => {
+  it('gives a pending-review household a named parcel, like its SMS reminder does', async () => {
     const { testApp, token, world: w } = await world();
-    const keep = await submitReferral(testApp, w, { adults: 1, children: 0 });
-    await submitReferral(testApp, w, { adults: 1, children: 0, ...UNKNOWN_REFERRER });
+    const pending = await submitReferral(testApp, w, {
+      adults: 1,
+      children: 0,
+      refereeFirstName: 'Pending',
+      refereeSurname: 'Household',
+      ...UNKNOWN_REFERRER,
+    });
 
-    // A pending referral holds a place on the session, but a parcel picked for
-    // a household that may yet be turned away is stock and volunteer time spent
-    // on nobody. It must not reach the warehouse until somebody has accepted it.
-    const { parcelsCreated } = await generatePickList(testApp, token, w.sessionId);
+    const { id, parcelsCreated } = await generatePickList(testApp, token, w.sessionId);
     expect(parcelsCreated).toBe(1);
 
-    const [parcel] = await db.select().from(parcels);
-    expect(parcel?.referralId).toBe(keep.id);
+    const pickList = await testApp.request(`/api/v1/pick-lists/${id}`, {
+      headers: authHeaders(token),
+    });
+    expect(await pickList.json()).toMatchObject({
+      parcels: [
+        {
+          referralId: pending.id,
+          refereeFirstName: 'Pending',
+          refereeSurname: 'Household',
+        },
+      ],
+    });
   });
 
   it('excludes a rejected referral', async () => {
@@ -180,6 +221,49 @@ describe('generating a pick list', () => {
     expect(parcel?.referralId).toBe(id);
   });
 
+  it('picks a referral an administrator has read, exactly as it picks an unread one', async () => {
+    const { testApp, token, world: w } = await world();
+    const read = await submitReferral(testApp, w, { adults: 1, children: 0 });
+    const unread = await submitReferral(testApp, w, { adults: 2, children: 0 });
+
+    // The regression the `reviewed` status risks: reading a referral is an
+    // administrator's pass over the paperwork and must not take a household off
+    // the picking list. Every set that held `active` has to hold `reviewed`.
+    const marked = await testApp.request(`/api/v1/referrals/${read.id}/review`, {
+      method: 'POST',
+      headers: authHeaders(token),
+    });
+    expect(marked.status).toBe(200);
+
+    const { parcelsCreated } = await generatePickList(testApp, token, w.sessionId);
+    expect(parcelsCreated).toBe(2);
+
+    const rows = await db.select().from(parcels);
+    expect(rows.map((parcel) => parcel.referralId).sort()).toEqual([read.id, unread.id].sort());
+  });
+
+  it('reconciles a referral read after the list was generated', async () => {
+    const { testApp, token, world: w } = await world();
+    await submitReferral(testApp, w, { adults: 1, children: 0 });
+    const { id } = await generatePickList(testApp, token, w.sessionId);
+
+    const late = await submitReferral(testApp, w, { adults: 2, children: 0 });
+    await testApp.request(`/api/v1/referrals/${late.id}/review`, {
+      method: 'POST',
+      headers: authHeaders(token),
+    });
+
+    // Divergence must see it as missing, and a second generate must pick it up.
+    const response = await testApp.request(`/api/v1/pick-lists/${id}/divergence`, {
+      headers: authHeaders(token),
+    });
+    const divergence: { missingParcels: string[] } = await response.json();
+    expect(divergence.missingParcels).toEqual([late.id]);
+
+    const { parcelsCreated } = await generatePickList(testApp, token, w.sessionId);
+    expect(parcelsCreated).toBe(1);
+  });
+
   it('generates an empty pick list when nobody has been referred', async () => {
     const { testApp, token, world: w } = await world();
 
@@ -213,7 +297,7 @@ describe('generating a pick list', () => {
     expect(response.status).toBe(422);
   });
 
-  it('reports a referral it could not place rather than failing the whole list', async () => {
+  it('does not create a partial pick list when a household cannot be placed', async () => {
     const { testApp, token, world: w } = await world();
     await submitReferral(testApp, w, { adults: 1, children: 0 });
     await submitReferral(testApp, w, { adults: 5, children: 5 });
@@ -223,11 +307,21 @@ describe('generating a pick list', () => {
     const withHole = Object.fromEntries(Object.entries(partial).filter(([key]) => key !== '5-5'));
     expect((await saveGrid(testApp, token, withHole)).status).toBe(200);
 
-    const result = await generatePickList(testApp, token, w.sessionId);
+    const response = await testApp.request(`/api/v1/sessions/${w.sessionId}/pick-list`, {
+      method: 'POST',
+      headers: authHeaders(token),
+    });
 
-    // One placed, one reported — a single bad cell must not stop the session.
-    expect(result.parcelsCreated).toBe(1);
-    expect(result.skipped).toHaveLength(1);
+    expect(response.status).toBe(422);
+    expect(await response.json()).toMatchObject({
+      error: {
+        message: 'The household grid is incomplete. Complete it before generating pick lists.',
+      },
+    });
+    const pickList = await testApp.request(`/api/v1/sessions/${w.sessionId}/pick-list`, {
+      headers: authHeaders(token),
+    });
+    expect(pickList.status).toBe(404);
   });
 });
 
@@ -286,22 +380,25 @@ describe('copying the contents', () => {
     ]);
   });
 
-  it('snapshots the household, so amending the referral does not change the parcel', async () => {
+  it('snapshots the household, and amending the referral cannot move it', async () => {
     const { testApp, token, world: w } = await world();
     const referral = await submitReferral(testApp, w, { adults: 1, children: 0 });
 
     const { id } = await generatePickList(testApp, token, w.sessionId);
 
-    await testApp.request(`/api/v1/referrals/${referral.id}`, {
+    // The household counts are no longer amendable at all (Q23), so the only
+    // amendment that can reach a referral after generation is its answers —
+    // and that must leave the picker's snapshot exactly where it was.
+    const amended = await testApp.request(`/api/v1/referrals/${referral.id}`, {
       method: 'PATCH',
       headers: { ...authHeaders(token), 'content-type': 'application/json' },
-      body: JSON.stringify({ adults: 3, children: 3 }),
+      body: JSON.stringify({ answers: { Other: 'Two more in the house since Tuesday' } }),
     });
+    expect(amended.status).toBe(200);
 
     const { parcels: rows } = await readPickList(testApp, token, id);
     expect(rows[0]?.adults).toBe(1);
 
-    // ...but the divergence is reported so an admin can act on it deliberately.
     const response = await testApp.request(`/api/v1/pick-lists/${id}/divergence`, {
       headers: authHeaders(token),
     });
@@ -309,9 +406,12 @@ describe('copying the contents', () => {
       changedHouseholds: { was: { adults: number }; now: { adults: number } }[];
     } = await response.json();
 
-    expect(divergence.changedHouseholds).toEqual([
-      { parcelId: rows[0]?.id, was: { adults: 1, children: 0 }, now: { adults: 3, children: 3 } },
-    ]);
+    // `changedHouseholds` can no longer be produced through the API: the
+    // snapshot is taken at generation and nothing may change the counts
+    // afterwards. The comparison is still made rather than removed — whether
+    // that field should stay in the contract is a question for Pete, not a
+    // decision to take here.
+    expect(divergence.changedHouseholds).toEqual([]);
   });
 
   it('reports a referral that arrived after generation', async () => {

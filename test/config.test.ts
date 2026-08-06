@@ -45,10 +45,25 @@ describe('loadConfig', () => {
       // Production also refuses to start without a bot check on the open
       // referral endpoint — see hardening.test.ts.
       TURNSTILE_SECRET_KEY: 'turnstile-secret',
+      SMS_WEBHOOK_SECRET: 'sms-webhook-secret-long-enough',
     });
 
     expect(config.isProduction).toBe(true);
     expect(config.authMode).toBe('google');
+  });
+
+  it('refuses production with an unguarded SMS webhook', () => {
+    // The webhook is the second unauthenticated write in the system and the
+    // only one that lands in `sms_messages`. Without the secret anybody could
+    // post a household's supposed reply into it.
+    expect(() =>
+      loadConfig({
+        AUTH_JWT_SECRET: SECRET,
+        ENVIRONMENT: 'production',
+        AUTH_MODE: 'google',
+        TURNSTILE_SECRET_KEY: 'turnstile-secret',
+      }),
+    ).toThrow(/SMS_WEBHOOK_SECRET is required in production/);
   });
 
   it('memoises per bindings object', () => {

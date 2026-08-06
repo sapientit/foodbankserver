@@ -4,7 +4,7 @@ import { ConflictError, NotFoundError, UnprocessableError } from '../../core/err
 import type { Logger } from '../../core/log.ts';
 import type { Database } from '../../db/client.ts';
 import type { NewParcel, NewParcelLine, PickList } from '../../db/schema/pick-lists.ts';
-import type { Referral } from '../../db/schema/referrals.ts';
+import { REFERRAL_STATUSES_HOLDING_A_PLACE, type Referral } from '../../db/schema/referrals.ts';
 import { isUniqueViolation } from '../../db/unique-violation.ts';
 import { modelParcelNameFor, type ParcelGrid } from '../rules/engine.ts';
 import { parseContents, parseGrid } from '../rules/rules.service.ts';
@@ -27,8 +27,6 @@ export interface GenerationResult {
   readonly pickList: PickList;
   readonly parcelsCreated: number;
   readonly linesCreated: number;
-  /** Referrals with no model parcel for their household size. */
-  readonly skipped: { referralId: string; reason: string }[];
 }
 
 /**
@@ -54,6 +52,8 @@ export async function generatePickList(
   deps: GenerationDeps,
   sessionId: string,
   actor: Actor,
+  existingPickList?: PickList,
+  attempts = 0,
 ): Promise<GenerationResult> {
   const { db, repository, sessions, referrals, rules, clock, logger } = deps;
 
@@ -64,12 +64,25 @@ export async function generatePickList(
   if (session.status === 'cancelled') {
     throw new ConflictError('That session has been cancelled');
   }
+  if (session.status === 'confirmed') {
+    if (existingPickList !== undefined) {
+      return { pickList: existingPickList, parcelsCreated: 0, linesCreated: 0 };
+    }
+    throw new ConflictError('This session has been confirmed and can no longer be changed');
+  }
 
-  const [activeReferrals, modelParcels, gridRow] = await Promise.all([
-    referrals.list({ sessionId, status: 'active' }),
+  // Pick-list eligibility deliberately matches SMS reminders: a household
+  // holding a place may turn up, so it needs a parcel and a named row for the
+  // team running the session. Cancelled and rejected referrals hold no place.
+  const [pickableReferrals, modelParcels, gridRow] = await Promise.all([
+    referrals.list({ sessionId, statuses: REFERRAL_STATUSES_HOLDING_A_PLACE }),
     rules.listModelParcels(),
     rules.findGrid(),
   ]);
+
+  const existingParcels =
+    existingPickList === undefined ? [] : await repository.listParcels(existingPickList.id);
+  const coveredReferrals = new Set(existingParcels.map((parcel) => parcel.referralId));
 
   if (modelParcels.length === 0) {
     throw new UnprocessableError(
@@ -83,22 +96,39 @@ export async function generatePickList(
   );
 
   const now = clock.nowIso();
-  const pickListId = crypto.randomUUID();
+  const pickListId = existingPickList?.id ?? crypto.randomUUID();
 
   const parcelRows: NewParcel[] = [];
   const lineRows: NewParcelLine[] = [];
-  const skipped: { referralId: string; reason: string }[] = [];
-  let pickNumber = 0;
+  const resolvedParcels: { referral: Referral; lines: ResolvedLines }[] = [];
+  const unresolvedHouseholdSizes = new Set<string>();
+  let pickNumber = existingParcels.reduce(
+    (highest, parcel) => Math.max(highest, parcel.pickNumber),
+    0,
+  );
 
-  for (const referral of activeReferrals) {
+  for (const referral of pickableReferrals) {
+    if (coveredReferrals.has(referral.id)) continue;
+
     const resolved = resolveParcel(referral, grid, contentsByName);
     if ('reason' in resolved) {
-      // One unresolvable referral must not stop the other twenty-four being
-      // picked; it is reported instead so an admin can fix the grid.
-      skipped.push({ referralId: referral.id, reason: resolved.reason });
+      unresolvedHouseholdSizes.add(householdSize(referral));
       continue;
     }
 
+    resolvedParcels.push({ referral, lines: resolved.lines });
+  }
+
+  // A session must never leave staff with a partly-generated list. Resolve
+  // every missing household first, then make the single atomic write.
+  if (unresolvedHouseholdSizes.size > 0) {
+    throw new UnprocessableError(
+      'The household grid is incomplete. Complete it before generating pick lists.',
+      { details: { missingHouseholdSizes: [...unresolvedHouseholdSizes].sort() } },
+    );
+  }
+
+  for (const { referral, lines } of resolvedParcels) {
     pickNumber += 1;
     const parcelId = crypto.randomUUID();
 
@@ -114,7 +144,7 @@ export async function generatePickList(
       updatedAt: now,
     });
 
-    for (const line of resolved.lines) {
+    for (const line of lines) {
       lineRows.push({
         id: crypto.randomUUID(),
         parcelId,
@@ -129,19 +159,27 @@ export async function generatePickList(
 
   // One native D1 batch: atomic, and json_each keeps it to three statements
   // however many parcels there are.
+  if (existingPickList !== undefined && parcelRows.length === 0) {
+    return { pickList: existingPickList, parcelsCreated: 0, linesCreated: 0 };
+  }
+
   const statements: D1PreparedStatement[] = [
-    repository.buildInsertPickList({
-      id: pickListId,
-      sessionId,
-      status: 'draft',
-      generatedAt: now,
-      generatedByUserId: actor.userId,
-      firstPrintedAt: null,
-      confirmedAt: null,
-      confirmedByUserId: null,
-      createdAt: now,
-      updatedAt: now,
-    }),
+    ...(existingPickList === undefined
+      ? [
+          repository.buildInsertPickList({
+            id: pickListId,
+            sessionId,
+            status: 'draft',
+            generatedAt: now,
+            generatedByUserId: actor.userId,
+            firstPrintedAt: null,
+            confirmedAt: null,
+            confirmedByUserId: null,
+            createdAt: now,
+            updatedAt: now,
+          }),
+        ]
+      : []),
     ...(parcelRows.length === 0 ? [] : [repository.buildInsertParcels(parcelRows)]),
     ...(lineRows.length === 0 ? [] : [repository.buildInsertParcelLines(lineRows)]),
   ];
@@ -149,13 +187,26 @@ export async function generatePickList(
   try {
     await db.$client.batch(statements);
   } catch (error) {
-    // Two people opening the session at the same moment. The unique index on
-    // pick_lists.session_id decides; the loser reads what the winner made.
+    // The unique indexes decide concurrent reconciliation. A loser re-reads
+    // the list and retries against the now-current parcels, never overwriting
+    // anything a picker has already adjusted.
     if (isUniqueViolation(error, 'pick_lists.session_id')) {
       const existing = await repository.findBySession(sessionId);
       if (existing !== undefined) {
         logger.info('pick list already generated by a concurrent request', { sessionId });
-        return { pickList: existing, parcelsCreated: 0, linesCreated: 0, skipped: [] };
+        return generatePickList(deps, sessionId, actor, existing, attempts + 1);
+      }
+    }
+
+    if (
+      existingPickList !== undefined &&
+      attempts < 3 &&
+      (isUniqueViolation(error, 'parcels.pick_list_id', 'parcels.referral_id') ||
+        isUniqueViolation(error, 'parcels.pick_list_id', 'parcels.pick_number'))
+    ) {
+      const current = await repository.findBySession(sessionId);
+      if (current !== undefined && current.status !== 'confirmed') {
+        return generatePickList(deps, sessionId, actor, current, attempts + 1);
       }
     }
     throw error;
@@ -177,11 +228,17 @@ export async function generatePickList(
     pickList: created,
     parcelsCreated: parcelRows.length,
     linesCreated: lineRows.length,
-    skipped,
   };
 }
 
-type Resolved = { lines: { stockItemId: string; quantity: number }[] } | { reason: string };
+type ResolvedLines = { stockItemId: string; quantity: number }[];
+type Resolved = { lines: ResolvedLines } | { reason: string };
+
+function householdSize(referral: Referral): string {
+  return `${String(referral.adults)} adult${referral.adults === 1 ? '' : 's'}, ${String(
+    referral.children,
+  )} child${referral.children === 1 ? '' : 'ren'}`;
+}
 
 function resolveParcel(
   referral: Referral,

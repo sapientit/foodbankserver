@@ -27,6 +27,26 @@ export const recurringSessions = sqliteTable(
     durationMinutes: integer('duration_minutes').notNull(),
     location: text('location').notNull(),
     capacity: integer('capacity').notNull().default(25),
+    /**
+     * `HH:MM` London wall clock, or null for "the same as `startTime`".
+     *
+     * The van does not go out when the hall opens, so a household expecting a
+     * delivery is told a different time from one collecting. It is a time to
+     * read out and nothing else — nothing is scheduled or routed from it, which
+     * is why there is no derived instant beside it as there is for `startTime`.
+     */
+    deliveryTime: text('delivery_time'),
+    /**
+     * Whether this session takes deliveries at all.
+     *
+     * **No `CHECK (0, 1)`, unlike every other boolean here**, and deliberately.
+     * SQLite cannot add a table-level constraint to an existing table, so the
+     * convention would have cost a rebuild of this table and `sessions` — both
+     * foreign-key parents — to gain a constraint Zod already enforces at the
+     * only place a value enters. Left off the Drizzle schema too, so this file
+     * and the database agree and `db:generate` does not propose that rebuild.
+     */
+    deliveriesAllowed: integer('deliveries_allowed').notNull().default(1),
     /** `YYYY-MM-DD`. */
     activeFrom: text('active_from').notNull(),
     /** `YYYY-MM-DD`, or null for open-ended. */
@@ -72,6 +92,14 @@ export const sessions = sqliteTable(
     durationMinutes: integer('duration_minutes').notNull(),
     location: text('location').notNull(),
     capacity: integer('capacity').notNull(),
+    /**
+     * `HH:MM` London wall clock, or null for "the same as `startTime`". Copied
+     * from the template at materialisation and overridable per occurrence.
+     * See the note on `recurringSessions.deliveryTime`.
+     */
+    deliveryTime: text('delivery_time'),
+    /** See the note on `recurringSessions.deliveriesAllowed` — no `CHECK`, deliberately. */
+    deliveriesAllowed: integer('deliveries_allowed').notNull().default(1),
     status: text('status').$type<SessionStatus>().notNull().default('planned'),
     cancelledReason: text('cancelled_reason'),
     /**

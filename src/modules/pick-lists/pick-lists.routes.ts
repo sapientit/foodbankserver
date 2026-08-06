@@ -55,18 +55,17 @@ export function pickListRoutes(): Hono<AppEnv> {
       ...toPickListResponse(result.pickList),
       parcelsCreated: result.parcelsCreated,
       linesCreated: result.linesCreated,
-      skipped: result.skipped,
     });
   });
 
   routes.get('/sessions/:sessionId/pick-list', ...staff, async (c) => {
     const service = serviceFor(c);
-    const pickList = await service.getOrGenerate(c.req.param('sessionId'), actorOf(c));
-    const parcels = await service.listParcelsWithLines(pickList.pickList.id);
-    const byId = await referralsBySession(c, pickList.pickList.sessionId);
+    const pickList = await service.getPickListForSession(c.req.param('sessionId'));
+    const parcels = await service.listParcelsWithLines(pickList.id);
+    const byId = await referralsBySession(c, pickList.sessionId);
 
     return c.json<{ pickList: ReturnType<typeof toPickListResponse>; parcels: ParcelResponse[] }>({
-      pickList: toPickListResponse(pickList.pickList),
+      pickList: toPickListResponse(pickList),
       parcels: parcels.map((entry) => toParcelResponse(entry, byId.get(entry.parcel.referralId))),
     });
   });
@@ -131,6 +130,11 @@ export function pickListRoutes(): Hono<AppEnv> {
     const updated = await serviceFor(c).setParcelNotes(c.req.param('id'), notes);
 
     return c.json({ id: updated.id, notes: updated.notes });
+  });
+
+  routes.post('/parcels/:id/review', ...staff, async (c) => {
+    const parcel = await serviceFor(c).markParcelReviewed(c.req.param('id'));
+    return c.json({ id: parcel.id, reviewedAt: parcel.reviewedAt });
   });
 
   routes.post('/pick-lists/:id/print', ...staff, async (c) => {

@@ -44,6 +44,14 @@ export interface LogContext {
   readonly stockTakeId?: string;
   readonly formDefinitionId?: string;
   readonly ruleSetId?: string;
+  /**
+   * The row id, and nothing else about a text message.
+   *
+   * There is no field here for a phone number or a message body and there must
+   * not be: `sms_messages` holds a household's own words, and Workers Logs are
+   * not EU-pinned.
+   */
+  readonly smsMessageId?: string;
 
   readonly jobName?: string;
   readonly count?: number;

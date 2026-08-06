@@ -10,7 +10,21 @@
       "Bash(echo \"=== EXIT $? ===\")",
       "Bash(npx vitest *)",
       "Bash(git init *)",
-      "Bash(echo \"=== CHECK EXIT: $? ===\")"
+      "Bash(echo \"=== CHECK EXIT: $? ===\")",
+      "WebFetch(domain:developers.cloudflare.com)",
+      "Bash(echo \"check exit code: $?\")",
+      "Bash(echo \"check exit: $?\")",
+      "Bash(python3 *)",
+      "Bash(perl -0pi -e \"s/        sessionId: w\\\\.sessionId,\\\\n        reason: null,\\\\n/        sessionId: w.sessionId,\\\\n/g; s/      sessionId: w\\\\.sessionId,\\\\n      reason: null,\\\\n/      sessionId: w.sessionId,\\\\n/g\" test/attendance.test.ts)",
+      "Bash(perl -0pi -e \"s/import \\\\{ toReferralResponse, type ReferralResponse \\\\} from '\\\\.\\\\/referrals\\\\.mapper\\\\.ts';/import {\\\\n  toReferralResponse,\\\\n  type ListenerSheetHousehold,\\\\n  type ReferralResponse,\\\\n} from '.\\\\/referrals.mapper.ts';/\" src/modules/referrals/referrals.routes.ts)",
+      "WebFetch(domain:thesmsworks.co.uk)",
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(echo \"TSC EXIT: $?\")",
+      "Bash(git status *)",
+      "Bash(npx drizzle-kit *)",
+      "Bash(npx wrangler *)",
+      "Bash(textutil -convert txt -stdout \"/Users/petebennett/foodbankclient/For Jessica.rtf\")",
+      "Bash(grep -n -i -B6 -A10 \"Generate the pick list\\\\|pick-list$\")"
     ]
   }
 }

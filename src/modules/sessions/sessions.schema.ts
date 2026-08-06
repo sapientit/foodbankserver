@@ -8,6 +8,13 @@ const plainTime = z.string().refine(isPlainTime, 'must be a HH:MM time');
 
 const capacity = z.number().int().min(0).max(1000);
 const activeUntil = plainDate.nullable();
+/**
+ * `HH:MM` London wall clock, or null for "the same as `startTime`" — see the
+ * comment on `recurringSessions.deliveryTime` in the schema. It is read out,
+ * never scheduled or filtered on, so unlike `startTime` there is no derived
+ * instant beside it.
+ */
+const deliveryTime = plainTime.nullable();
 
 /**
  * London wall clock, not an instant — see core/time/london.ts.
@@ -28,12 +35,16 @@ const recurringSessionFields = z.object({
     .max(24 * 60),
   location: z.string().min(1).max(200),
   capacity,
+  deliveryTime,
+  deliveriesAllowed: z.boolean(),
   activeFrom: plainDate,
   activeUntil,
 });
 
 export const recurringSessionInputSchema = recurringSessionFields.extend({
   capacity: capacity.default(DEFAULT_SESSION_CAPACITY),
+  deliveryTime: deliveryTime.default(null),
+  deliveriesAllowed: z.boolean().default(true),
   activeUntil: activeUntil.default(null),
 });
 
@@ -55,6 +66,8 @@ export const adHocSessionSchema = z.object({
     .max(24 * 60),
   location: z.string().min(1).max(200),
   capacity: z.number().int().min(0).max(1000).default(DEFAULT_SESSION_CAPACITY),
+  deliveryTime: deliveryTime.default(null),
+  deliveriesAllowed: z.boolean().default(true),
 });
 
 export const sessionPatchSchema = z
@@ -68,6 +81,8 @@ export const sessionPatchSchema = z
       .max(24 * 60),
     location: z.string().min(1).max(200),
     capacity: z.number().int().min(0).max(1000),
+    deliveryTime,
+    deliveriesAllowed: z.boolean(),
   })
   .partial()
   .refine((value) => Object.keys(value).length > 0, 'at least one field must be supplied');

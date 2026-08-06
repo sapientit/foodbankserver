@@ -64,3 +64,26 @@ export const PUBLIC_SESSION_WINDOW_DAYS = 14;
 export const MAX_ANSWERS = 100;
 export const MAX_ANSWER_KEY_LENGTH = 60;
 export const MAX_ANSWERS_BYTES = 16 * 1024;
+
+/**
+ * How long a text message is kept before the nightly job deletes it.
+ *
+ * **Policy, not configuration** — unlike `PII_RETENTION_DAYS`, which is unset
+ * because the charity has not decided. This one they have: thirty days, for
+ * reminders, replies, failures and loose replies alike. A text is a
+ * conversation about one session and stops being useful within days of it, so
+ * there is nothing to weigh against holding somebody's own words longer.
+ *
+ * That is why it lives here rather than in `env.ts`: an environment that could
+ * set it to 3650 is an environment that can quietly break a stated promise.
+ */
+export const SMS_MESSAGE_RETENTION_DAYS = 30;
+
+/**
+ * How many reminders are in flight to the provider at once.
+ *
+ * A session of 25 households is 25 outbound requests. Sending them one at a
+ * time is slow enough to time out a request; sending all 25 at once is a burst
+ * at the provider for no gain. Five keeps a full session inside a few seconds.
+ */
+export const SMS_SEND_CONCURRENCY = 5;

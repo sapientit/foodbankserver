@@ -84,7 +84,11 @@ Full layout and rationale: [`docs/architecture/module-structure.md`](./docs/arch
   message, and never log a raw database error — Drizzle's message contains the row.
 - **Response mappers are the output allowlist.** Every route returns through `toXxxResponse()`.
   Adding a column to a table must never widen an API response by accident.
-- **The stock ledger is append-only**, and stock moves on attendance and only on attendance.
+- **The stock ledger holds one period only**, and stock moves on attendance and only on attendance.
+  A stock take deletes the counted item's rows and writes it a fresh opening balance; taking an
+  attendance outcome back deletes that parcel's rows. Those two deletes are the only ones, and both
+  are deliberate — **the ledger used to be append-only and no longer is**, because the charity does
+  not want history from before the previous take. Do not restore the old rule from an old comment.
 - **`Europe/London` is the only local timezone**, and services take a `Clock` — never `Date.now()`.
 - **D1 has no interactive transactions.** One `db.batch()` per multi-write operation; you cannot
   read, decide, then write atomically.

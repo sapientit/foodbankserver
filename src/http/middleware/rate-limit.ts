@@ -25,7 +25,7 @@ export class RateLimitedError extends AppError {
  * mandatory for production; this is a defence, not a gate.
  */
 export function rateLimit(
-  bindingName: 'REFERRAL_LIMITER' | 'PUBLIC_LIMITER',
+  bindingName: 'REFERRAL_LIMITER' | 'PUBLIC_LIMITER' | 'SMS_WEBHOOK_LIMITER',
 ): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     const limiter = (c.env as unknown as Record<string, RateLimit | undefined>)[bindingName];

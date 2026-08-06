@@ -228,12 +228,12 @@ export function createPickListsRepository(db: Database) {
         .prepare(
           `INSERT INTO stock_ledger
              (id, stock_item_id, quantity_delta, movement_type, parcel_id, session_id,
-              purchase_id, stock_take_id, reason, actor_user_id, occurred_at, created_at)
+              actor_user_id, occurred_at, created_at)
            SELECT
              json_extract(value, '$.id'),
              json_extract(value, '$.stockItemId'),
              json_extract(value, '$.quantityDelta'),
-             'parcel_issued', ?2, ?3, NULL, NULL, NULL, ?4, ?5, ?5
+             'parcel_issued', ?2, ?3, ?4, ?5, ?5
            FROM json_each(?1)`,
         )
         .bind(
@@ -243,6 +243,22 @@ export function createPickListsRepository(db: Database) {
           input.actorUserId,
           input.occurredAt,
         );
+    },
+
+    /**
+     * Takes a parcel back: removes every movement it wrote.
+     *
+     * This is what makes a mis-tapped outcome fixable now that there is no
+     * hand correction to fix it with. It is safe to run when there is nothing
+     * to delete, which is what makes flipping an outcome idempotent without a
+     * guard — unlike issuing, which needs the unique index.
+     *
+     * Scoped to one `parcel_id`, and that scoping is the whole safety story:
+     * this is one of only two statements in the system that delete ledger
+     * rows, and a wrong `WHERE` here silently loses stock that really went out.
+     */
+    buildDeleteParcelIssue(parcelId: string): D1PreparedStatement {
+      return db.$client.prepare(`DELETE FROM stock_ledger WHERE parcel_id = ?1`).bind(parcelId);
     },
 
     buildSetAttendance(input: {

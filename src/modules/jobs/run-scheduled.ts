@@ -4,6 +4,7 @@ import type { Database } from '../../db/client.ts';
 import { createSessionsRepository } from '../sessions/sessions.repository.ts';
 import { createJobsRepository } from './jobs.repository.ts';
 import { purgeReferralPii, PURGE_PII_JOB } from './purge-pii.ts';
+import { purgeSmsMessages, PURGE_SMS_JOB } from './purge-sms.ts';
 import {
   materialiseSessions,
   MATERIALISE_SESSIONS_JOB,
@@ -12,6 +13,7 @@ import {
 
 export interface ScheduledResult extends MaterialiseResult {
   readonly referralsPurged: number;
+  readonly smsMessagesPurged: number;
 }
 
 export interface ScheduledDeps {
@@ -51,12 +53,21 @@ export async function runScheduledJobs(deps: ScheduledDeps): Promise<ScheduledRe
       retentionDays: deps.piiRetentionDays,
     });
 
+    // Unconditional, unlike the referral purge: thirty days is a settled
+    // requirement rather than a configuration value waiting to be set.
+    const sms = await purgeSmsMessages({
+      db: deps.db,
+      clock: deps.clock,
+      logger: deps.logger,
+    });
+
     await jobs.recordSuccess(MATERIALISE_SESSIONS_JOB, startedAt);
+    await jobs.recordSuccess(PURGE_SMS_JOB, startedAt);
     if (deps.piiRetentionDays !== undefined) {
       await jobs.recordSuccess(PURGE_PII_JOB, startedAt);
     }
 
-    return { ...result, referralsPurged: pii.purged };
+    return { ...result, referralsPurged: pii.purged, smsMessagesPurged: sms.purged };
   } catch (error) {
     const safe = toSafeError(error);
     deps.logger.error('scheduled job failed', {

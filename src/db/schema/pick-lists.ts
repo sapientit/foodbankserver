@@ -71,6 +71,7 @@ export const parcels = sqliteTable(
     pickNumber: integer('pick_number').notNull(),
     adults: integer('adults').notNull(),
     children: integer('children').notNull(),
+    reviewedAt: text('reviewed_at'),
     attendance: text('attendance').$type<AttendanceStatus>().notNull().default('pending'),
     attendanceRecordedAt: text('attendance_recorded_at'),
     attendanceRecordedByUserId: text('attendance_recorded_by_user_id').references(() => users.id),

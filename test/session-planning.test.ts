@@ -15,6 +15,8 @@ const tuesday: RecurrenceTemplate = {
   durationMinutes: 120,
   location: 'Church Hall',
   capacity: 25,
+  deliveryTime: null,
+  deliveriesAllowed: true,
   activeFrom: '2026-01-01',
   activeUntil: null,
 };
@@ -78,6 +80,21 @@ describe('occurrence planning', () => {
     const expired = { ...tuesday, id: 'tpl-old', activeUntil: '2026-01-31' };
 
     expect(planOccurrences([expired], { from: '2026-07-27', horizonWeeks: 6 })).toEqual([]);
+  });
+
+  it('copies the delivery fields from the template onto every occurrence', () => {
+    const withDelivery: RecurrenceTemplate = {
+      ...tuesday,
+      id: 'tpl-delivery',
+      deliveryTime: '09:00',
+      deliveriesAllowed: false,
+    };
+
+    const planned = planOccurrences([withDelivery], { from: '2026-07-27', horizonWeeks: 1 });
+
+    expect(planned).toHaveLength(1);
+    expect(planned[0]?.deliveryTime).toBe('09:00');
+    expect(planned[0]?.deliveriesAllowed).toBe(false);
   });
 
   it('interleaves several templates in chronological order', () => {

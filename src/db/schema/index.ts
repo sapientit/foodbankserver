@@ -17,5 +17,6 @@ export * from './referrals.ts';
 export * from './referrers.ts';
 export * from './rules.ts';
 export * from './sessions.ts';
+export * from './sms.ts';
 export * from './stock.ts';
 export * from './users.ts';

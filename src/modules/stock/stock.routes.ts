@@ -7,13 +7,10 @@ import type { AppEnv } from '../../http/types.ts';
 import { createStockRepository, type StockLevel } from './stock.repository.ts';
 import { createStockService } from './stock.service.ts';
 import {
-  purchaseInputSchema,
-  stockAdjustmentSchema,
   stockItemInputSchema,
   stockItemPatchSchema,
   stockSearchSchema,
   stockTakeCountsSchema,
-  stockTakeInputSchema,
 } from './stock.schema.ts';
 
 interface StockItemResponse {
@@ -28,10 +25,10 @@ interface StockLevelResponse extends StockItemResponse {
 }
 
 /**
- * Team leads handle the stock itself: they read it, shop for it, count it and
- * correct it, because they are the people in the warehouse. Only an admin
- * changes what the stock *list* is — adding a line or moving a shelf number
- * reshapes every pick list and every stock take that follows.
+ * Team leads handle the stock itself: they read it and they count it, because
+ * they are the people in the warehouse. Only an admin changes what the stock
+ * *list* is — adding a line or moving a shelf number reshapes every pick list
+ * and every stock take that follows.
  */
 export function stockRoutes(): Hono<AppEnv> {
   const routes = new Hono<AppEnv>();
@@ -77,59 +74,18 @@ export function stockRoutes(): Hono<AppEnv> {
     return c.json(toItemResponse(updated));
   });
 
-  /** Recording a shop. */
-  routes.post('/stock/purchases', ...staff, async (c) => {
-    const input = await parseJsonBody(c, purchaseInputSchema);
-    const result = await serviceFor(c).recordPurchase(input, actorOf(c));
-
-    return c.json(result, 201);
-  });
-
-  routes.post('/stock/adjustments', ...staff, async (c) => {
-    const input = await parseJsonBody(c, stockAdjustmentSchema);
-    await serviceFor(c).adjust(input, actorOf(c));
-
-    return c.body(null, 204);
-  });
-
-  // ---- Stock takes ----
-
-  routes.get('/stock/takes', ...staff, async (c) => {
-    const takes = await serviceFor(c).listStockTakes();
-    return c.json({
-      stockTakes: takes.map((take) => ({
-        id: take.id,
-        countedAt: take.countedAt,
-        status: take.status,
-        note: take.note,
-        committedAt: take.committedAt,
-      })),
-    });
-  });
-
-  routes.post('/stock/takes', ...staff, async (c) => {
-    const { note } = await parseJsonBody(c, stockTakeInputSchema);
-    const created = await serviceFor(c).openStockTake(note, actorOf(c));
-
-    return c.json({ id: created.id, status: created.status }, 201);
-  });
-
-  routes.post('/stock/takes/:id/counts', ...staff, async (c) => {
+  /**
+   * One saved page of a stock take. The count replaces what the system held.
+   *
+   * Not `/stock/takes` — there is no stock take object to create or to get.
+   * Each page save stands on its own, so the resource is the act of counting
+   * rather than a thing with a lifecycle.
+   */
+  routes.post('/stock/take', ...staff, async (c) => {
     const { counts } = await parseJsonBody(c, stockTakeCountsSchema);
-    await serviceFor(c).recordCounts(c.req.param('id'), counts);
+    const result = await serviceFor(c).recordStockTake(counts, actorOf(c));
 
-    return c.body(null, 204);
-  });
-
-  routes.post('/stock/takes/:id/commit', ...staff, async (c) => {
-    const result = await serviceFor(c).commitStockTake(c.req.param('id'), actorOf(c));
-
-    return c.json({
-      id: result.stockTake.id,
-      status: result.stockTake.status,
-      committedAt: result.stockTake.committedAt,
-      adjustments: result.adjustments,
-    });
+    return c.json(result);
   });
 
   return routes;

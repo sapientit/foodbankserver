@@ -19,8 +19,12 @@ Full reasoning and the history behind each rule: [`docs/engineering/d1-constrain
   before the batch is composed.
 - Where an invariant needs atomicity, enforce it with **a single conditional statement or a unique
   index** and have the service check the result (`updateLeavingAnotherAdmin` is the pattern).
-- **The stock ledger is append-only.** Never `UPDATE` or `DELETE` a ledger row. The level is
-  `SUM(quantity_delta)`; a stock take writes an adjustment for the variance.
+- **The stock ledger holds one period only.** Never `UPDATE` a ledger row; the level is
+  `SUM(quantity_delta)`. There are exactly **two** deletes and no others: a stock take deletes the
+  counted item's rows and writes it a fresh `opening_balance`, and taking an attendance outcome back
+  deletes that parcel's rows. **It used to be append-only** — the charity does not want history from
+  before the previous take, so the rule changed deliberately. Do not restore it from an old comment,
+  and do not add a third delete.
 - **Session materialisation never `UPDATE`s an existing session row** — that is what makes an
   admin's re-timed or cancelled occurrence safe by construction.
 
@@ -30,7 +34,10 @@ Full reasoning and the history behind each rule: [`docs/engineering/d1-constrain
   limit at ~14 rows. Bind rows as one JSON parameter and expand with `json_each`.
 - Drizzle's `db.batch()` **only accepts Drizzle query builders**; a raw `db.run(sql)` fails at
   runtime with `Cannot read properties of undefined (reading 'bind')`. Bulk inserts therefore use
-  raw D1 statements via `db.$client.batch()`, confined to `pick-lists.repository.ts`.
+  raw D1 statements via `db.$client.batch()`, confined to **`pick-lists.repository.ts` and
+  `stock.repository.ts`** — the pick list writes a parcel line per household, the stock take writes
+  a baseline per counted item, and both exceed 100 parameters. Those two files only; a third needs
+  the same justification, not a preference.
 - **50 queries per invocation on the free plan.** No N+1, ever: load reference data once and
   evaluate in memory.
 - 100 columns per table.

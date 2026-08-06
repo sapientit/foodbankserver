@@ -1,19 +1,11 @@
-import { and, asc, eq, like, sql, sum } from 'drizzle-orm';
+import { and, asc, eq, like, sum } from 'drizzle-orm';
 import type { Database } from '../../db/client.ts';
 import { expectAtMostOne } from '../../db/expect.ts';
 import {
-  purchaseLines,
-  purchases,
   stockItems,
   stockLedger,
-  stockTakeLines,
-  stockTakes,
   type NewStockItem,
-  type NewStockLedgerEntry,
-  type Purchase,
   type StockItem,
-  type StockTake,
-  type StockTakeLine,
 } from '../../db/schema/stock.ts';
 import type { Patch } from '../../core/types.ts';
 
@@ -44,8 +36,8 @@ export function createStockRepository(db: Database) {
      * query would be ~40 queries and blow the free-tier budget on a page that
      * gets opened constantly.
      *
-     * The level is `SUM(quantity_delta)` over the append-only ledger — there
-     * is no stored balance to drift.
+     * The level is `SUM(quantity_delta)` over whatever rows the ledger
+     * currently holds — there is no stored balance to drift.
      */
     async listLevels(activeOnly: boolean): Promise<StockLevel[]> {
       const rows = await db
@@ -112,97 +104,57 @@ export function createStockRepository(db: Database) {
         .orderBy(asc(stockLedger.occurredAt));
     },
 
-    // ---- Purchases ----
+    // ---- The stock take. Two raw D1 statements, run as ONE db.$client.batch().
+    //
+    // Raw rather than Drizzle for the reason set out in
+    // `docs/engineering/d1-constraints.md`: D1 allows 100 bound parameters per
+    // statement, and `inArray` binds one per id, so the obvious Drizzle spelling
+    // fails somewhere north of a hundred items. Binding the set as a single JSON
+    // value and expanding it with `json_each` is one parameter whatever the
+    // count. This and `pick-lists.repository.ts` are the only two places that
+    // step outside Drizzle, and both are covered by integration tests.
 
-    async findPurchase(id: string): Promise<Purchase | undefined> {
-      const rows = await db.select().from(purchases).where(eq(purchases.id, id)).limit(1);
-      return expectAtMostOne(rows);
+    /**
+     * **Deletes the counted items' history.** The highest-stakes statement in
+     * this module: what it removes cannot be recovered, because a stock take
+     * supersedes rather than adjusts and D1's Time Travel restores the whole
+     * database or nothing.
+     *
+     * The blast radius is bounded by the next count, which restates every level
+     * from physical stock — that is the trade that was made deliberately when
+     * the ledger stopped being append-only.
+     */
+    buildDeleteHistoryFor(stockItemIds: readonly string[]): D1PreparedStatement {
+      return db.$client
+        .prepare(
+          `DELETE FROM stock_ledger
+            WHERE stock_item_id IN (SELECT value FROM json_each(?))`,
+        )
+        .bind(JSON.stringify(stockItemIds));
     },
 
-    async listPurchaseLines(purchaseId: string) {
-      return db.select().from(purchaseLines).where(eq(purchaseLines.purchaseId, purchaseId));
-    },
-
-    // ---- Stock takes ----
-
-    async findStockTake(id: string): Promise<StockTake | undefined> {
-      const rows = await db.select().from(stockTakes).where(eq(stockTakes.id, id)).limit(1);
-      return expectAtMostOne(rows);
-    },
-
-    async listStockTakes(): Promise<StockTake[]> {
-      return db.select().from(stockTakes).orderBy(asc(stockTakes.countedAt));
-    },
-
-    async listStockTakeLines(stockTakeId: string): Promise<StockTakeLine[]> {
-      return db.select().from(stockTakeLines).where(eq(stockTakeLines.stockTakeId, stockTakeId));
-    },
-
-    async insertStockTake(value: typeof stockTakes.$inferInsert): Promise<StockTake> {
-      const rows = await db.insert(stockTakes).values(value).returning();
-      const inserted = rows[0];
-      if (inserted === undefined) throw new Error('Failed to insert stock take');
-      return inserted;
-    },
-
-    async upsertStockTakeLine(value: typeof stockTakeLines.$inferInsert): Promise<void> {
-      await db
-        .insert(stockTakeLines)
-        .values(value)
-        .onConflictDoUpdate({
-          target: [stockTakeLines.stockTakeId, stockTakeLines.stockItemId],
-          set: { countedQuantity: value.countedQuantity },
-        });
-    },
-
-    async insertLedgerEntry(value: NewStockLedgerEntry): Promise<void> {
-      await db.insert(stockLedger).values(value);
-    },
-
-    // ---- Statement builders. Compose these, then run ONE db.batch(). ----
-
-    buildInsertPurchase(value: typeof purchases.$inferInsert) {
-      return db.insert(purchases).values(value);
-    },
-
-    buildInsertPurchaseLine(value: typeof purchaseLines.$inferInsert) {
-      return db.insert(purchaseLines).values(value);
-    },
-
-    buildInsertLedgerEntry(value: NewStockLedgerEntry) {
-      return db.insert(stockLedger).values(value);
-    },
-
-    buildCommitStockTake(id: string, at: string) {
-      return db
-        .update(stockTakes)
-        .set({ status: 'committed', committedAt: at, updatedAt: at })
-        .where(eq(stockTakes.id, id));
-    },
-
-    buildRecordExpected(stockTakeId: string, stockItemId: string, expected: number) {
-      return db
-        .update(stockTakeLines)
-        .set({ expectedQuantity: expected })
-        .where(
-          and(
-            eq(stockTakeLines.stockTakeId, stockTakeId),
-            eq(stockTakeLines.stockItemId, stockItemId),
-          ),
-        );
-    },
-
-    /** Levels for a set of items, one query. Used when committing a stock take. */
-    async levelsFor(stockItemIds: readonly string[]): Promise<Map<string, number>> {
-      if (stockItemIds.length === 0) return new Map();
-
-      const rows = await db
-        .select({ stockItemId: stockLedger.stockItemId, total: sum(stockLedger.quantityDelta) })
-        .from(stockLedger)
-        .where(sql`${stockLedger.stockItemId} IN ${stockItemIds}`)
-        .groupBy(stockLedger.stockItemId);
-
-      return new Map(rows.map((row) => [row.stockItemId, Number(row.total ?? 0)]));
+    /** One `opening_balance` per counted item, in one statement. */
+    buildInsertBaselines(
+      rows: readonly {
+        id: string;
+        stockItemId: string;
+        quantityDelta: number;
+      }[],
+      input: { actorUserId: string | null; occurredAt: string },
+    ): D1PreparedStatement {
+      return db.$client
+        .prepare(
+          `INSERT INTO stock_ledger
+             (id, stock_item_id, quantity_delta, movement_type, parcel_id, session_id,
+              actor_user_id, occurred_at, created_at)
+           SELECT
+             json_extract(value, '$.id'),
+             json_extract(value, '$.stockItemId'),
+             json_extract(value, '$.quantityDelta'),
+             'opening_balance', NULL, NULL, ?2, ?3, ?3
+           FROM json_each(?1)`,
+        )
+        .bind(JSON.stringify(rows), input.actorUserId, input.occurredAt);
     },
   };
 }

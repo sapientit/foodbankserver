@@ -1,19 +1,19 @@
 import type { Actor } from '../../core/actor.ts';
 import type { Clock } from '../../core/clock.ts';
-import {
-  BadRequestError,
-  ConflictError,
-  NotFoundError,
-  UnprocessableError,
-} from '../../core/errors.ts';
+import { ConflictError, NotFoundError, UnprocessableError } from '../../core/errors.ts';
 import type { Logger } from '../../core/log.ts';
 import type { Patch } from '../../core/types.ts';
 import type { Database } from '../../db/client.ts';
-import type { NewReferral, Referral } from '../../db/schema/referrals.ts';
+import {
+  REFERRAL_STATUSES_HOLDING_A_PLACE,
+  type NewReferral,
+  type Referral,
+} from '../../db/schema/referrals.ts';
 import type { ReferrersRepository } from '../referrers/referrers.repository.ts';
 import type { ReferrersService } from '../referrers/referrers.service.ts';
 import type { SessionsRepository } from '../sessions/sessions.repository.ts';
 import type { ReferralListFilter, ReferralsRepository } from './referrals.repository.ts';
+import { toListenerSheetHousehold, type ListenerSheetHousehold } from './referrals.mapper.ts';
 import type { ReferralAmend, ReferralSubmission } from './referrals.schema.ts';
 
 export interface ReferralsServiceDeps {
@@ -66,6 +66,50 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     // rather than an error: the status simply is not one of theirs.
     if (filter.status === 'rejected') return [];
     return repository.list({ ...filter, excludeStatuses: ['rejected'] });
+  }
+
+  /**
+   * The listener sheet for a session: **one sheet, every household on it.**
+   *
+   * Not one per household — a listener is handed a single sheet and scans it
+   * for whoever is in front of them, so it is ordered by surname rather than by
+   * when the referral arrived.
+   *
+   * **Two queries whatever the session holds**: the referrals, and the reason
+   * list once. A reason lookup per household would be 25+ on a plan that allows
+   * 50, on a page opened at the start of every session.
+   *
+   * Retired reasons are included in that lookup. A referral cites the reason it
+   * was made under, and the charity deactivating that reason afterwards must
+   * not blank it out on the sheet.
+   *
+   * Who appears is `REFERRAL_STATUSES_HOLDING_A_PLACE` — awaiting review,
+   * accepted and read alike, because whether an administrator has got round to
+   * reading a referral says nothing about whether the household is coming. A
+   * cancelled or rejected household is not coming, and handing a
+   * volunteer the name and crisis of somebody the food bank turned away is the
+   * harm this endpoint exists to avoid. **That choice is an assumption**, not a
+   * stated requirement: see Q26.
+   */
+  async function listenerSheet(sessionId: string): Promise<ListenerSheetHousehold[]> {
+    const session = await sessions.findById(sessionId);
+    if (session === undefined) {
+      throw new NotFoundError('Session not found');
+    }
+
+    const [households, reasons] = await Promise.all([
+      repository.list({ sessionId }),
+      referrers.listReasons(false),
+    ]);
+
+    const labelById = new Map(reasons.map((reason) => [reason.id, reason.label]));
+
+    return households
+      .filter((referral) =>
+        REFERRAL_STATUSES_HOLDING_A_PLACE.some((status) => status === referral.status),
+      )
+      .sort(bySurnameThenFirstName)
+      .map((referral) => toListenerSheetHousehold(referral, labelById.get(referral.reasonId)));
   }
 
   /**
@@ -196,25 +240,43 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
   /**
    * Accepts or rejects a referral that is waiting to be looked at.
    *
-   * Only from `pending_review`: reviewing an active referral would be a way of
-   * quietly reinstating a cancelled one, and reviewing a rejected one twice
-   * says nothing new. The comment is overwritten rather than appended — the
-   * charity asked for one line per review, not a history.
+   * Only from `pending_review`: deciding an active referral again would be a
+   * way of quietly reinstating a cancelled one, and rejecting a rejected one
+   * twice says nothing new. The comment is overwritten rather than appended —
+   * the charity asked for one line per decision, not a history.
    *
    * The "still pending" check is **in the statement, not here**. Checking it in
    * TypeScript first would be a read-then-write on a database with no
    * interactive transactions, so two administrators working the same queue
    * could both pass it and the second would silently overwrite the first — an
    * accept undoing a reject with nobody told.
+   *
+   * **Accepting lands on `active`, not `reviewed`.** Deciding a referral the
+   * address held up and reading a referral through are two different passes;
+   * the charity asked for every referral to be read, including the ones nothing
+   * held up.
+   *
+   * `authoriseReferrer` is the second accept button: accept this one *and* put
+   * the referrer on the authorised list so the next one is not held up. It adds
+   * the referrer's own address and never the domain — see `authoriseReferrer`.
    */
   async function review(
     referralId: string,
     outcome: 'active' | 'rejected',
     comment: string | null,
     actor: Actor,
+    authorise?: { organisationName: string },
   ): Promise<Referral> {
+    // Before the accept, not after: the accept is guarded by its own WHERE and
+    // may find nothing, and there is no transaction to undo a list entry with.
+    // Authorising first means the failure an administrator can see (the address
+    // is already on the list) happens while nothing has changed yet.
+    if (authorise !== undefined) {
+      await authoriseReferrer(referralId, authorise.organisationName, actor);
+    }
+
     const now = clock.nowIso();
-    const updated = await repository.reviewIfPending(referralId, {
+    const updated = await repository.updateIfStatus(referralId, 'pending_review', {
       status: outcome,
       reviewComment: comment,
       reviewedByUserId: actor.userId,
@@ -239,85 +301,157 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
       detailJson: null,
     });
 
-    logger.info('referral reviewed', { referralId, userId: actor.userId });
+    logger.info('referral decided', { referralId, userId: actor.userId });
     return updated;
   }
 
   /**
-   * A referral that is finished with cannot be changed.
+   * Adds this referral's referrer to the authorised list, by address.
    *
-   * Shared by amending and moving because `PATCH /referrals/{id}` does both,
-   * and refusing one while allowing the other on the same object is incoherent
-   * — a move *is* an amendment, and there is no path that reinstates a referral
-   * so moving a dead one only relocates a dead record.
+   * **The address only, never the domain.** One person the charity has decided
+   * to trust is not everybody who works where they work, and a domain rule
+   * taken from a single referral would quietly authorise a whole council.
+   *
+   * The organisation name is the administrator's, typed on the screen — not
+   * `referrerOrganisation`, which is free text the referrer chose and is how
+   * the list ends up holding three spellings of one council. The referral's own
+   * `referrerOrganisation` is left exactly as it was submitted; it is a record
+   * of what the referrer said, not a field to tidy.
+   *
+   * `authorisedReferrerId` on the referral is left null too. It records the
+   * match the server made **when the referral arrived**, and no rule matched
+   * then. Backfilling it would make a referral that was held for review read
+   * afterwards as one that never was.
    */
-  function assertOpenToChange(referral: Referral): void {
+  async function authoriseReferrer(
+    referralId: string,
+    organisationName: string,
+    actor: Actor,
+  ): Promise<void> {
+    const referral = await getReferral(referralId);
+    const email = referral.referrerEmail;
+    if (email === null) {
+      throw new UnprocessableError('That referral has no referrer address to authorise');
+    }
+
+    await referrersService.create({ matchType: 'email', matchValue: email, organisationName });
+
+    await repository.recordAudit({
+      id: crypto.randomUUID(),
+      occurredAt: clock.nowIso(),
+      actorKind: 'user',
+      actorUserId: actor.userId,
+      entityType: 'referral',
+      entityId: referralId,
+      action: 'referrer_authorised',
+      detailJson: null,
+    });
+
+    logger.info('referrer authorised from referral', { referralId, userId: actor.userId });
+  }
+
+  /**
+   * Marks a referral as read by an administrator.
+   *
+   * Only from `active`. A referral still waiting for review has not been
+   * decided yet, and one already reviewed, rejected or cancelled has nothing to
+   * add — so the guard rides in the `WHERE` for the same reason the accept
+   * decision does.
+   *
+   * This changes nothing else about the referral: it holds its place, it is
+   * picked, and it appears on the listener sheet exactly as before. The only
+   * thing it says is that somebody has read it.
+   */
+  async function markReviewed(referralId: string, actor: Actor): Promise<Referral> {
+    const now = clock.nowIso();
+    const updated = await repository.updateIfStatus(referralId, 'active', {
+      status: 'reviewed',
+      reviewedByUserId: actor.userId,
+      updatedAt: now,
+    });
+
+    if (updated === undefined) {
+      await getReferral(referralId);
+      throw new ConflictError('That referral is not waiting to be read');
+    }
+
+    await repository.recordAudit({
+      id: crypto.randomUUID(),
+      occurredAt: now,
+      actorKind: 'user',
+      actorUserId: actor.userId,
+      entityType: 'referral',
+      entityId: referralId,
+      action: 'reviewed',
+      detailJson: null,
+    });
+
+    logger.info('referral read', { referralId, userId: actor.userId });
+    return updated;
+  }
+
+  /**
+   * A referral that is finished with cannot be changed, and neither can one on
+   * a session that has been confirmed.
+   *
+   * Shared by amending, moving and cancelling because `PATCH /referrals/{id}`
+   * does the first two and refusing one while allowing the other on the same
+   * object is incoherent — a move *is* an amendment, and there is no path that
+   * reinstates a referral so moving a dead one only relocates a dead record.
+   *
+   * **The session check guards the session the referral is already on.**
+   * `assertSessionAccepts` refuses a referral *arriving* at a confirmed
+   * session; without this, one could still be amended off, cancelled off, or
+   * moved off it afterwards. A move off a confirmed session is the worst of
+   * the three: the household ends up recorded against two sessions, and a
+   * session confirmed with one set of figures quietly acquires another.
+   */
+  async function assertOpenToChange(referral: Referral): Promise<void> {
     if (referral.status === 'cancelled') {
       throw new ConflictError('That referral has been cancelled');
     }
     if (referral.status === 'rejected') {
       throw new ConflictError('That referral was rejected');
     }
+
+    const session = await sessions.findById(referral.sessionId);
+    if (session?.status === 'confirmed') {
+      throw new ConflictError('This session has been confirmed and can no longer be changed');
+    }
   }
 
-  /** Applies an amendment. Admin only — there is no self-service path. */
+  /**
+   * Applies an amendment. Admin only — there is no self-service path.
+   *
+   * **The answers are the only part of a referral that can be changed**, and
+   * moving it to another session is the only other thing that can happen to it.
+   * A referral is a record of what somebody asked for: the names, the date of
+   * birth, the address, the household numbers, the delivery and fuel questions
+   * and the reason all stand as the referrer sent them, and a correction is
+   * written into the form's "other information" answer instead — which is shown
+   * beside the parcel and on the listener sheet, where somebody acting on it is
+   * standing. Quietly editing an address does not reach those people.
+   *
+   * Which answer that is belongs to the form, and the form is the client's. So
+   * this takes the answers as a set and does not police which of them changed;
+   * "only the other-information one may be edited" is a rule only the client
+   * can apply. See `INITIAL_SPEC1.txt`, "Referral maintenance".
+   */
   async function applyAmendment(
     referral: Referral,
     input: ReferralAmend,
     actor: { kind: 'user'; userId: string | null },
   ): Promise<Referral> {
-    assertOpenToChange(referral);
+    await assertOpenToChange(referral);
 
     const patch: Patch<NewReferral> = { updatedAt: clock.nowIso() };
     const changed: string[] = [];
-
-    for (const field of [
-      'referrerName',
-      'referrerPhone',
-      'refereeFirstName',
-      'refereeSurname',
-      'refereeDateOfBirth',
-      'refereeAddress',
-      'refereePostcode',
-      'refereePhone',
-      'adults',
-      'children',
-    ] as const) {
-      const value = input[field];
-      if (value !== undefined) {
-        Object.assign(patch, { [field]: value });
-        changed.push(field);
-      }
-    }
-
-    for (const field of ['isDelivery', 'needsFuelHelp'] as const) {
-      const value = input[field];
-      if (value !== undefined) {
-        Object.assign(patch, { [field]: value ? 1 : 0 });
-        changed.push(field);
-      }
-    }
-
-    if (input.reasonId !== undefined) {
-      const reason = await referrers.findActiveReasonById(input.reasonId);
-      if (reason === undefined) {
-        throw new UnprocessableError('That reason for referral is no longer offered');
-      }
-      patch.reasonId = input.reasonId;
-      changed.push('reasonId');
-    }
 
     if (input.answers !== undefined) {
       // Replaced wholesale, not merged: the client holds the form and sends
       // the complete set of answers, so a key it omits has been removed.
       patch.answersJson = JSON.stringify(input.answers);
       changed.push('answers');
-    }
-
-    const adults = input.adults ?? referral.adults;
-    const children = input.children ?? referral.children;
-    if (adults + children <= 0) {
-      throw new BadRequestError('A household must contain at least one person');
     }
 
     const updated = await repository.update(referral.id, patch);
@@ -357,9 +491,9 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     actor: { kind: 'user'; userId: string | null },
   ): Promise<Referral> {
     if (referral.status === 'cancelled') return referral; // Idempotent.
-    if (referral.status === 'rejected') {
-      throw new ConflictError('That referral was rejected');
-    }
+    // Same guard as amending and moving: a rejection is not a cancellation,
+    // and a confirmed session is closed to all three.
+    await assertOpenToChange(referral);
 
     const now = clock.nowIso();
     const updated = await repository.update(referral.id, {
@@ -395,7 +529,7 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     actor: Actor,
   ): Promise<Referral> {
     if (referral.sessionId === sessionId) return referral;
-    assertOpenToChange(referral);
+    await assertOpenToChange(referral);
 
     await assertSessionAccepts(sessionId, acknowledgeOverCapacity);
 
@@ -422,10 +556,12 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
 
   return {
     submit,
+    listenerSheet,
     getReferral,
     viewReferral,
     listReferrals,
     review,
+    markReviewed,
     applyAmendment,
     cancel,
     move,
@@ -433,3 +569,13 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
 }
 
 export type ReferralsService = ReturnType<typeof createReferralsService>;
+
+/**
+ * Surname first, then first name. A blank name sorts last: a purged referral
+ * has nothing to look up and belongs at the bottom rather than the top.
+ */
+function bySurnameThenFirstName(left: Referral, right: Referral): number {
+  const key = (referral: Referral): string =>
+    `${referral.refereeSurname ?? '\uffff'} ${referral.refereeFirstName ?? ''}`.toLowerCase();
+  return key(left).localeCompare(key(right));
+}

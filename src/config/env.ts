@@ -40,6 +40,29 @@ const configSchema = z
      * guessing one would be worse than doing nothing.
      */
     PII_RETENTION_DAYS: z.coerce.number().int().min(1).max(3650).optional(),
+
+    /**
+     * TheSMSWorks credentials. Worker secrets, never vars.
+     *
+     * `SMS_API_KEY` is the provider's JWT; it does not expire, so treat it as
+     * a long-lived secret and rotate it deliberately. `SMS_SENDER` is the
+     * dedicated reply number households see and text back to — an alphanumeric
+     * sender ID would look tidier and **cannot receive replies**, which would
+     * make half the feature dead code.
+     *
+     * All three are optional so development and CI run without an account:
+     * with no key, sending reports every household as a failure rather than
+     * pretending. The production tripwire below is what stops that shipping.
+     */
+    SMS_API_KEY: z.string().min(1).optional(),
+    SMS_SENDER: z.string().min(1).max(20).optional(),
+    /**
+     * The credentials TheSMSWorks presents on the inbound webhook, as
+     * `user:password`. That route is public and writes personal data, so an
+     * unset secret in production would be an open write into the most
+     * sensitive table in the system.
+     */
+    SMS_WEBHOOK_SECRET: z.string().min(16).optional(),
   })
   .superRefine((value, ctx) => {
     // The dummy provider accepts any email address and issues a real admin
@@ -63,6 +86,17 @@ const configSchema = z
         message: 'TURNSTILE_SECRET_KEY is required in production.',
       });
     }
+
+    // The SMS webhook is the second unauthenticated write in the system and
+    // the only one that lands in `sms_messages`. Without the secret it would
+    // accept anything anybody posted at it.
+    if (value.ENVIRONMENT === 'production' && value.SMS_WEBHOOK_SECRET === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['SMS_WEBHOOK_SECRET'],
+        message: 'SMS_WEBHOOK_SECRET is required in production.',
+      });
+    }
   });
 
 type RawConfig = z.infer<typeof configSchema>;
@@ -75,6 +109,9 @@ export interface AppConfig {
   readonly turnstileSecret: string | undefined;
   readonly allowedOrigins: readonly string[];
   readonly piiRetentionDays: number | undefined;
+  readonly smsApiKey: string | undefined;
+  readonly smsSender: string | undefined;
+  readonly smsWebhookSecret: string | undefined;
   readonly isProduction: boolean;
 }
 
@@ -107,6 +144,9 @@ export function loadConfig(bindings: object): AppConfig {
       .map((origin) => origin.trim())
       .filter((origin) => origin !== ''),
     piiRetentionDays: result.data.PII_RETENTION_DAYS,
+    smsApiKey: result.data.SMS_API_KEY,
+    smsSender: result.data.SMS_SENDER,
+    smsWebhookSecret: result.data.SMS_WEBHOOK_SECRET,
     isProduction: result.data.ENVIRONMENT === 'production',
   };
 

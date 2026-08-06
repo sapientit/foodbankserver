@@ -7,6 +7,12 @@ The pick list can then be modified before being printed.  Once printed, further 
 #Session maintenance
 Standard sessions repeat weekly.  They have a default capacity of 25.  It is possible for the administrator to change the time of an individual session, cancel a session or add new ad hoc session.  Fields are date, time, duration, location and capacity.   Recurring meetings or individual meetings can be created or changed.
 
+A session has a delivery time as well as a start time, because the van does not go out at the moment the hall opens.  It is the time the food bank tells a household to expect their delivery, and it is only that - nothing is scheduled or routed from it.  A session that does not set one delivers at the session time.
+
+A session can also say that it takes no deliveries at all.  Some sessions have nobody to drive, and a household asking for a delivery to one of them is a promise the food bank cannot keep.  For now this is recorded and shown, and the referral form is expected to stop offering delivery for such a session; the server does not yet refuse a delivery referral to one, and that is a known gap rather than a decision.
+
+A session cannot be cancelled while anybody still holds a place on it.  The households have to be dealt with first - moved to another session, or cancelled - and only then can the session itself go.  Cancelling a session out from under the people booked onto it would leave families expecting food that nobody has arranged, and no record that anyone ever decided what to do about them.  Making the administrator move them first means somebody has looked at every household and chosen, rather than a single click quietly stranding twenty-five of them.  It follows that a cancelled session never has referrals attached to it.
+
 The sessions in the calendar are real occurrences that have been generated ahead of time, not dates worked out on the fly whenever somebody looks.  That is what makes each one editable in its own right.  Once an administrator has re-timed or cancelled a particular week, that change stands: generating the calendar again never writes over an occurrence that already exists, so an amendment made today is still there next week and nobody has to make it twice.
 
 Capacity counts households, not people.  A session of capacity 25 takes 25 referrals however large the households are, so it may well feed a hundred people.  A referral occupies one place whether it is a single person or a family of six, because it is one parcel to pick and one person coming to collect it.  A cancelled referral gives its place back, and so does a rejected one.
@@ -17,12 +23,16 @@ A list of available sessions for the next 2 weeks can be made without signon. A 
 
 After signon there is a list of sessions, and how far ahead it reaches depends on who is looking.  An administrator sees the whole six weeks that have been generated, because rearranging the calendar that far ahead is their job and they cannot move a session they cannot see.  A team leader sees six days, counted from today and including it, so they have the week of shifts in front of them and nothing else.  A team leader runs the session that is coming; the calendar six weeks out is a planning tool and it belongs to the administrator.  The six days are a limit on looking forward and not on looking back - the session just gone is still on a team leader's list.
 
+The six days shape the list and nothing else.  A team leader who already has a particular session in hand can still open it and work on its picking list however far out it is, and the food bank does not want that prevented: a team leader getting a fortnight's picking ready in advance is doing their job, not getting round a rule.  In practice a team leader will never be looking more than six days ahead, so this is a matter of showing them the right week rather than of keeping them out of the wrong one, and it is not something the system needs to police.
+
 The two week public list is therefore longer than the team leader's six days, which is deliberate rather than an oversight.  They answer different questions: a referrer needs to know which sessions they can still book somebody onto, and needs enough notice to arrange it, while a team leader needs the shifts they are about to work.
 
 #Authorised referrers
 Referrers can be authorised either by full email address or a star and domain name.(*@guildford.gov.uk).  There is no check that they are who they say they are - only that the email address they enter is valid.
 
-An address that is not on the list no longer stops the referral being made.  The food bank would rather look at a referral it was not expecting than turn away a household that needs feeding on the strength of a list that is always slightly out of date - a new social worker, a charity nobody has added yet, somebody using their home address because they are working from home.  The referral is taken and waits for an administrator, who accepts it or rejects it.  Until then it is not picked and does not appear on anything the warehouse works from.
+An address that is not on the list no longer stops the referral being made.  The food bank would rather look at a referral it was not expecting than turn away a household that needs feeding on the strength of a list that is always slightly out of date - a new social worker, a charity nobody has added yet, somebody using their home address because they are working from home.  The referral is taken and waits for an administrator, who accepts it or rejects it.  Until then it is still picked, so the people running the session have its parcel, referral and name with every household they may text.
+
+An administrator looking at a referral that is waiting because the address was not recognised has two ways of accepting it.  They can accept that one referral and leave the list alone, or they can accept it and put the referrer on the authorised list at the same time, so that the next referral from that person is not held up.  The second of those adds the referrer's own email address and only that address - never the whole domain, because one person the food bank has decided to trust is not the same as everybody who works where they work.  The administrator types the organisation name themselves when they do it, and confirms it, rather than the food bank taking whatever the referrer typed on the form: the authorised list is what organisations are reported on, and it fills up with three spellings of the same council otherwise.
 
 The organisation names on the list are also offered to the referrer as a dropdown when they fill the form in, with a free text box beside it for an organisation that is not there.  Typing into that box is the ordinary way a referral comes to be waiting for review.
 
@@ -47,6 +57,8 @@ A delivery goes to the referee's own address.  There is no separate delivery add
 
 There is a maximum capacity on each session, so referrals cannot be made to a full session.
 
+Households are reminded of their session by text message, and a referral records that a reminder has been sent to it.  Reminders and the replies to them are described under "SMS reminders and replies" below.
+
 Note that the referral is done without authentication (other than checking the entered email address).  Once it is submitted it cannot be changed by the referrer.  They are shown a confirmation of what they sent, with the fixed answers on it so they can see it is right, and that is the end of their part in it.  A referrer who then needs a change rings the food bank and an administrator makes it.
 
 The reason for referral is chosen from a list the administrators maintain rather than typed in.  It is there to be reported on - how many households came for which reason - and free text cannot be counted.  It also means the reason can be kept after the personal details have been removed, because a reason from a fixed list says nothing about who the person was.
@@ -67,8 +79,18 @@ The comment is seen by administrators only.  It can name a referrer or set down 
 
 Team leaders do see referrals that are waiting to be reviewed, marked as not yet confirmed.  A team leader is the person standing in the hall when a household arrives, and being unable to answer "are you expecting us?" helps nobody.  They do not see rejected referrals at all - a rejected referral is not their concern, and the only thing that would explain it is the comment they are not shown.
 
+Every referral is meant to be read by an administrator, not only the ones held because the address was not recognised, and a referral says whether that has happened yet.  So a referral moves on: it is waiting for review if the address was not recognised, then it is accepted, and once an administrator has read it through it is reviewed.  A referral from a recognised address starts as accepted and is still to be read.  The point of it is the list of referrals nobody has looked at yet, so that an administrator can work through them and see the pile go down.
+
+A reviewed referral is an ordinary referral in every other way.  It holds its place on the session exactly as an accepted one does, it is picked, and it appears on the picking list and the listener sheet - the only thing being reviewed says is that somebody has read it.  Cancelling a referral takes it out whether it had been reviewed or not, and the food bank does not need to know afterwards whether a cancelled referral had been read.
+
 #Referral maintenance.
-Administrators can amend or cancel referrals or move them to another session (even if that exceeds capacity with a client generated warning).  A referral that has been cancelled or rejected cannot be amended, and cannot be moved either - there is nothing that brings a referral back, so moving a finished one only shifts a dead record from one session to another.  The referrer's email address is not amendable, because it is what the decision to accept the referral was made on.
+Administrators can cancel referrals or move them to another session (even if that exceeds capacity with a client generated warning).  A referral that has been cancelled or rejected cannot be amended, and cannot be moved either - there is nothing that brings a referral back, so moving a finished one only shifts a dead record from one session to another.
+
+Beyond moving it, the only part of a referral that can be changed is the answers given on the form.  The names, the date of birth, the address, the postcode, the phone numbers, the household numbers, the delivery and fuel questions and the reason for referral all stand as the referrer sent them.  A referral is a record of what somebody asked for, and the food bank would rather read it as it was sent than as somebody has since tidied it up.
+
+Corrections are made by writing them into the "other information" answer on the form.  That answer is shown beside the parcel when the picking list is being worked on and on the listener sheet, which is where somebody acting on a correction is actually standing, so a note there is read by the people who need it in a way that a quietly edited address is not.  The referrer's email address is not amendable either, because it is what the decision to accept the referral was made on.
+
+Which answer is the "other information" one is a matter for the form, so the server takes the answers as a set and does not police which of them changed.
 
 #Login
 Authentication will eventually be via a Google id.  Initial version will be a dummy signon page with no validation, but this should still generate an expiring security token, with refresh tokens etc.
@@ -84,19 +106,28 @@ A new database starts with a single administrator account already in it, because
 #Roles
 There are two roles, administrator and team leader.
 
-Team leaders run the sessions.  That means the picking list, printing it, and marking who attended.  It also means the stock itself - recording a shop, doing a stock take, and correcting stock by hand - because the team leader is the person standing in the warehouse.  They do not see why anyone was referred.
+Team leaders run the sessions.  That means the picking list, printing it, and marking who attended.  It also means the stock itself - doing the weekly stock take - because the team leader is the person standing in the warehouse.  They also see why each household was referred: the listener sheet is a team leader job, not an administrator one, and it needs the reason for referral on it.  The reason is chosen from a fixed list rather than typed, so it says what kind of crisis brought the household in without saying anything about the household itself.
 
 Administrators do everything a team leader does, and additionally maintain the list of stock items, the authorised referrers, the reasons for referral, the model parcels and household grid, the user accounts, and amendments to sessions and referrals.  The referral form itself is not on that list: it is application configuration rather than data, so it changes with a release rather than on a maintenance screen.
 
 The stock item list is the one part of stock that is administrator only.  Adding an item or changing its shelf number changes every picking list and every stock take that follows, so it is a maintenance decision rather than a warehouse one.
 
 #Stock maintenance
-There are about 40 stock items (with a maintenance facility to amend them).  After a shop, there will be a facility to type sug and it will find sugar and autocomplete.  Then a field for how many we bought.  This will add to the existing stock.
-There will also be a list screen with items and current stock that can be maintained for a stock take.
-Stock is maintained in a certain place in the warehouse. So each stock item has a "shelf number" .  The list should be by shelf number.  A stock item is a name and a shelf number and nothing else.  There is no unit held against an item, and no low stock warning: nobody is going to keep forty thresholds up to date, and a warning nobody has set is clutter on a maintenance screen rather than help.
-The shop and the stock take are both done by a team leader.  Amending the item list itself is administrator only.
+There are about 120 stock items, with a maintenance facility to amend them.
+Stock is maintained in a certain place in the warehouse. So each stock item has a "shelf number" .  The list should be by shelf number.  A stock item is a name and a shelf number and nothing else.  There is no unit held against an item, and no low stock warning: nobody is going to keep a hundred and twenty thresholds up to date, and a warning nobody has set is clutter on a maintenance screen rather than help.
+The stock take is done by a team leader.  Amending the item list itself is administrator only.
 
-Stock moves in six ways and only these six, because they are the ones the charity would ever want counted or reported on: an opening balance when an item first goes on the list, a shop, a donation, a parcel given to a client, wastage, and a correction.  A shop and a parcel given to a client are recorded by the screens that do those jobs; the other four are typed in by hand, and a hand correction always carries a reason, because it is the only movement that does not explain itself.  Food thrown away is wastage, whatever the reason it was thrown away.  Nothing is ever given back: a parcel that has been handed over stays handed over, and a mistake is put right by correcting the stock rather than by reversing the movement.
+The weekly stock take is the single source of truth for how much stock the food bank has.  A count supersedes everything the system previously believed about that item: whatever was recorded before it is discarded, and the counted figure becomes the item's opening balance for the week that follows.  The food bank does not want to keep, or to be asked about, any history from before the previous stock take.
+
+The difference between the count and the figure the system had been holding - the variance - is not recorded and is not reported on.  The food bank has no use for it: the count is the truth from that moment, and what the system believed a moment earlier is of no further interest.  Nothing needs to be able to tell a count that came out short from one that came out long, or either from any other way the figure has moved.
+
+The food bank does not track shopping, donations or wastage, and there is no facility to correct a figure by hand.  All of those were once separate things to type in, and none of them earned the effort: the count on the shelf next week says what the stock actually is, whatever happened to it.  So stock moves in two ways only - a stock take setting an opening balance, and a parcel given to a household - and between one take and the next the only thing that reduces stock is a parcel going out.
+
+The count is entered a page at a time, forty items to a page, and each page is saved on its own.  A volunteer counting a hundred and twenty items should not lose the morning's work to one mistake, and should be able to stop halfway and carry on later.
+
+Only the items whose number the volunteer has changed are saved.  An item left alone is not recorded at all, which means it either was counted and found correct or was never counted, and the food bank is content not to be able to tell those apart - it is not worth a volunteer ticking a box a hundred and twenty times to find out.
+
+A stock take is not a thing the system keeps.  There is no record that one started, no record of which pages were done, and nothing to say a count was ever finished.  Nothing else changes the stock while a count is happening; the food bank arranges that between themselves rather than the system enforcing it.
 
 #Picking list
 Against a session there will be an option to view picking list.  If that picking list has not been created yet, then it will be done at this point.  For each referral, the number of adults and children will result via a series of rules into a model picking list. 
@@ -106,7 +137,53 @@ The screen on which the picking list is maintained shows the household's prefere
 
 The screen is split down the middle: the parcel on one side, the preferences on the other, and each side pages on its own, because a long parcel and a long list of preferences do not run out at the same time.
 
-On the printed sheet there is the picking number and the household's name.  Every sheet has the name on it, not only the deliveries - the person carrying the bag has to hand it to somebody, and a number does not do that.  If it is a delivery the sheet also says DELIVERY and carries the address, the postcode and the phone number, so the driver can find the door and ring the bell.  The reason for referral is never printed.
+On the printed sheet there is the picking number and the household's name.  Every sheet has the name on it, not only the deliveries - the person carrying the bag has to hand it to somebody, and a number does not do that.  If it is a delivery the sheet also says DELIVERY and carries the address, the postcode and the phone number, so the driver can find the door and ring the bell.  The reason for referral is never on the picking sheet, which gets carried round a hall and left on tables.  It appears on one document only, and that is the listener sheet.
+
+#SMS reminders and replies
+The team leader running a session can send the households on it a reminder by text message.  It is a button on the screen the session is run from and nothing sends a reminder on its own: whether the session is going ahead, and whether the list of households is settled enough to text them, are things the person running it knows and a timer does not.
+
+Every household on the session is sent one, except those whose referral has been cancelled or rejected - they are not coming, and a reminder telling them to is worse than no reminder at all.  A household still waiting to be reviewed is sent one like anybody else: they hold a place on the session and they may well turn up, so they are told when to come.  The picking list follows the same rule, so the people running a session have a parcel, referral and name for every household they text.
+
+A household that has already been sent a reminder for that session is not sent another however many times the button is pressed, so a second press reaches only the households referred since the first.  The referral records that a reminder was sent to it, and whether one has gone is shown against each household on the session.
+
+Households can reply to the reminder, and the replies come back into the system rather than to somebody's phone.  A reply is matched to a household by the number it was sent from, and recorded against the referral for the soonest session still to come.  A household referred to two sessions has replied about the nearer one, near enough always, and a session that has already happened is not a candidate at all - so a reply that arrives the morning after is a loose reply rather than a note filed against a session nobody will look at again.
+
+A reply from a number with no open referral is not thrown away.  It is kept as a loose reply, on a screen of its own that only administrators see.  Somebody has still texted the food bank and somebody should read it, and a system that silently swallowed those would be worse than one that never took replies at all.
+
+When a reminder cannot be sent, that is recorded against the household in the same place as a reply, so the person running the session sees it where they are already looking rather than in a log they would have to know to open.  A failure is recorded as already read: it needs to be visible, but it is not somebody waiting for an answer.
+
+A household the food bank cannot text at all is treated exactly the same way.  There may be no number on the referral, or the number there may be a perfectly good one that is not a mobile - and the food bank often cannot tell which until it tries.  Either way nothing was delivered, so it is recorded against the household as a failure like any other rather than passed over in silence.  A household nobody can reach is a household somebody may need to ring, and that is only actionable if it is on the screen.
+
+A household whose reminder failed has not been reminded, and the system does not pretend otherwise: pressing the button again tries them again.  A failure is usually the network or the provider having a bad minute, and the food bank would rather text a household twice than let one go without because of it.  A number that is simply wrong will fail on every press, and that is the food bank being told, once per attempt, that the number they hold is no good.
+
+A household collecting and a household having their parcel delivered are told different things.  A collection reminder gives the date, the time and where to come.  A delivery reminder gives the date and the delivery time and no place at all - the household knows where they live, and their address is the one thing the message must not carry.
+
+Staff can text a household back from that same screen, so a household that asks a question gets an answer rather than a reminder that ignores them.  What staff send is held with the rest of the conversation, and it is bound by the same rule as the reminder: no name, and nothing that says who the number belongs to.
+
+The team leader running the session reads the messages and answers them, and so does an administrator.  What a household texts can be as personal as the reason they were referred, which team leaders are otherwise not shown, and that is accepted here for the same reason the listener sheet is: the person on the day is the one who can act on it.  A household who texts to say they are running late, or cannot lift the bag, or are not coming after all, needs the person in the hall to know - not somebody who will read it on Monday.  The loose replies, from numbers with no session behind them, stay with administrators.
+
+Every message is either read or unread.  The screen the session is run from shows the total number of unread messages prominently, and keeps it up to date as they arrive if it can.  Against each household there is a button showing how many messages there are and how many are unread, marked out while any are unread, and pressing it opens that household's messages within the list rather than on another screen.  That count keeps itself up to date as well if it can.
+
+Opening a household's messages marks them read, and there is nothing further to press.  The count is there to say that nobody has looked at this household yet, and once somebody has looked that is no longer true.  Anyone who wants a message kept in front of them writes it down somewhere it will be acted on, which is what they would do anyway.
+
+The counts are of what has come in - replies from the household, and the failures - and not of what the food bank has sent.  A count that went up when staff answered a message would be counting their own work back at them.  What is shown when the messages are opened is the whole conversation in order, both sides of it, because a reply on its own does not say what it was replying to.
+
+Messages are kept for thirty days and then deleted - the reminders, the replies, the failures and the loose replies alike.  A text message is a conversation about one session and it stops being useful within days of that session; keeping a household's own words for longer than the food bank has any use for them is holding personal data for the sake of it.  This happens on its own, nightly, and needs nobody to remember it.
+
+The text messages are sent and received through TheSMSWorks, and the only thing the food bank gives them is the number to text.  Nothing that says whose number it is goes with it - not the household's name, not their address, and nothing in the message itself that would name them.  The reminder says when and where the session is and who it is from, and a household reading it on a lock screen in front of somebody else has not been announced as a food bank customer by name.
+
+What a household texts back is theirs, and it is held with the rest of their details and forgotten with them.
+
+#Listener sheet
+The food bank gives selected volunteers - listeners - the job of talking to households at a session, and the listener sheet is what they are given to do it from.
+
+There is one listener sheet for a session, not one per household, and it is printed.  It carries, for each household: the name, the reason for referral, the "Cause Details" the referrer typed on the form, and whether the household needs help with fuel.  Nothing else - not the address, not the phone number, not what is in the parcel.
+
+Producing the listener sheet is a team leader job, like everything else that happens on the day, and it is the only place a team leader sees the reason for referral.  Everywhere else - the picking list, the printed picking sheet, the referral as a team leader reads it - the reason stays with the administrators.
+
+The listener sheet is the most sensitive thing the food bank prints: a list of named households and what went wrong for each of them.  It is meant for the volunteers chosen to do the listening and for nobody else.
+
+What becomes of the sheet after the session is handled by the food bank as a matter of process, not by the system.  Looking after the paper is something the volunteers are asked to do properly; the system does nothing towards it, and does not keep a record of a sheet having been produced or of who produced it.
 
 After picking is complete, modifications can be made to the list.
 
@@ -119,13 +196,15 @@ The name of a model picking list cannot be changed once it exists, because the g
 
 Separately there is a grid of every possible household size.  Adults run from 1 to 5 and children from 0 to 5, so there are 30 entries.  A household larger than 5 adults counts as 5, and more than 5 children counts as 5.  Each grid entry holds just the name of the model picking list to use for that household size, so several household sizes can share one model parcel and changing that parcel updates all of them.  The grid is maintained as a whole and updated in one go, so it can be stored as a single row.
 
-A referral must have at least one adult, so every referral maps to a real grid entry.
+A referral must have at least one adult, so every referral maps to a real grid entry.  The household grid must provide a model parcel for every household size holding a place before a session pick list can be generated.  Generation is all-or-nothing: if a required grid entry is missing, no parcels are created until an administrator completes the grid.
 
-The model picking lists are not versioned.  When a picking list is created for a session, the contents of the relevant model are copied onto each referral's parcel.  From then on that parcel holds its own contents and is unaffected by any later change to the model or the grid.  The parcel does not record which model it came from - only what is in it.
+The model picking lists are not versioned.  When a picking list is created for a session, the contents of the relevant model are copied onto each referral's parcel.  From then on that parcel holds its own contents and is unaffected by any later change to the model or the grid.  The parcel does not record which model it came from - only what is in it.  Opening an unconfirmed picking list again creates parcels for any referral holding a place which has arrived or been moved into the session since it was first opened, but never changes an existing parcel.  This makes late households visible without silently overwriting a picker's work.  Once the list is confirmed, no further parcels are added.
 
 #Session maintenance
-After the session, each referee is marked as attended or did not show.  A delivery is marked the same way - delivered counts as attended and not in counts as did not show, because they are the same two outcomes under the names the round uses.  If they attended, the stock is updated.  Otherwise the parcel will be unpacked.
+After the session, each referee's pick list is reviewed before an attendance outcome can be recorded. Each referee is then marked as attended or did not show.  A delivery is marked the same way - delivered counts as attended and not in counts as did not show, because they are the same two outcomes under the names the round uses.  If they attended, the stock is updated.  Otherwise the parcel will be unpacked.
 
-There is no correction.  Once a collection or a delivery has been confirmed it cannot be undone, so marking a referee the other way afterwards is refused.  A mis-tap is put right by correcting the stock by hand, which leaves the correction on the record instead of quietly reversing a movement that really happened.  Marking the same outcome again is not a change and is always accepted, because a team leader will tap twice and the stock must still only move once.
+An outcome can be taken back while the session is still open.  Marking a household as not having shown up, after marking them as attended, puts the parcel's stock back: nothing left the building, so nothing should have come off the shelves.  There is no hand correction to put a mis-tap right with any more, so being able to say "no, they did not come after all" is the only way to fix one, and a team leader must not be made to live with a wrong figure until the next count.  Marking the same outcome again is not a change and is always accepted, because a team leader will tap twice and the stock must still only move once.
+
+Confirming the session is the end of it.  Once a session is confirmed no outcome on it can be changed, because a session that has been signed off must not have its figures move underneath it afterwards.
 
 The session is then closed.  Every referee on the session must be marked either attended (or delivered) or absent (or not in) before the session can be closed, so a session is never closed with people unaccounted for and stock figures that do not add up.  If anyone is still unmarked the close is refused and the ones outstanding are named.

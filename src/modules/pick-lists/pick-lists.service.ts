@@ -3,7 +3,7 @@ import type { Clock } from '../../core/clock.ts';
 import { ConflictError, NotFoundError } from '../../core/errors.ts';
 import type { Logger } from '../../core/log.ts';
 import type { Parcel, PickList } from '../../db/schema/pick-lists.ts';
-import type { Referral } from '../../db/schema/referrals.ts';
+import { REFERRAL_STATUSES_HOLDING_A_PLACE, type Referral } from '../../db/schema/referrals.ts';
 import {
   generatePickList,
   type GenerationDeps,
@@ -39,7 +39,7 @@ export interface PickListDivergence {
 }
 
 export function createPickListsService(deps: PickListsServiceDeps) {
-  const { repository, referrals, clock, logger } = deps;
+  const { repository, referrals, sessions, clock, logger } = deps;
 
   async function getPickList(id: string): Promise<PickList> {
     const pickList = await repository.findById(id);
@@ -49,17 +49,25 @@ export function createPickListsService(deps: PickListsServiceDeps) {
     return pickList;
   }
 
+  async function getPickListForSession(sessionId: string): Promise<PickList> {
+    const pickList = await repository.findBySession(sessionId);
+    if (pickList === undefined) {
+      throw new NotFoundError('Pick list not found');
+    }
+    return pickList;
+  }
+
   /**
-   * The pick list for a session, generating it on first view.
-   *
-   * "Generated on first view" is the spec's wording, and it is also what makes
-   * the timing right: the list reflects the referrals as they stood when
-   * someone actually came to pick, not when the session was created.
+   * The pick list for a session, generating it on first view and reconciling
+   * any active referral that arrived before the list is confirmed.
    */
   async function getOrGenerate(sessionId: string, actor: Actor): Promise<GenerationResult> {
     const existing = await repository.findBySession(sessionId);
     if (existing !== undefined) {
-      return { pickList: existing, parcelsCreated: 0, linesCreated: 0, skipped: [] };
+      if (existing.status === 'confirmed') {
+        return { pickList: existing, parcelsCreated: 0, linesCreated: 0 };
+      }
+      return generatePickList(deps, sessionId, actor, existing);
     }
     return generatePickList(deps, sessionId, actor);
   }
@@ -69,6 +77,13 @@ export function createPickListsService(deps: PickListsServiceDeps) {
     const pickList = await getPickList(pickListId);
     if (pickList.status === 'confirmed') {
       throw new ConflictError('This pick list has been confirmed and can no longer be changed');
+    }
+    const session = await sessions.findById(pickList.sessionId);
+    if (session === undefined) {
+      throw new NotFoundError('Session not found');
+    }
+    if (session.status === 'confirmed') {
+      throw new ConflictError('This session has been confirmed and can no longer be changed');
     }
     return pickList;
   }
@@ -123,6 +138,19 @@ export function createPickListsService(deps: PickListsServiceDeps) {
     if (updated === undefined) {
       throw new NotFoundError('Parcel not found');
     }
+    return updated;
+  }
+
+  /** Marks the checked parcel ready for its attendance outcome. Idempotent. */
+  async function markParcelReviewed(parcelId: string): Promise<Parcel> {
+    const parcel = await getParcel(parcelId);
+    await requireEditable(parcel.pickListId);
+    if (parcel.reviewedAt !== null) return parcel;
+    const updated = await repository.updateParcel(parcelId, {
+      reviewedAt: clock.nowIso(),
+      updatedAt: clock.nowIso(),
+    });
+    if (updated === undefined) throw new NotFoundError('Parcel not found');
     return updated;
   }
 
@@ -185,7 +213,11 @@ export function createPickListsService(deps: PickListsServiceDeps) {
 
     return {
       missingParcels: current
-        .filter((referral) => referral.status === 'active' && !covered.has(referral.id))
+        .filter(
+          (referral) =>
+            REFERRAL_STATUSES_HOLDING_A_PLACE.some((status) => status === referral.status) &&
+            !covered.has(referral.id),
+        )
         .map((referral) => referral.id),
 
       changedHouseholds: parcelRows.flatMap((parcel) => {
@@ -210,6 +242,7 @@ export function createPickListsService(deps: PickListsServiceDeps) {
 
   return {
     getPickList,
+    getPickListForSession,
     getOrGenerate,
     listParcelsWithLines: (pickListId: string): Promise<ParcelWithLines[]> =>
       repository.listParcelsWithLines(pickListId),
@@ -217,6 +250,7 @@ export function createPickListsService(deps: PickListsServiceDeps) {
     setLine,
     removeLine,
     setParcelNotes,
+    markParcelReviewed,
     markPrinted,
     confirm,
     divergence,

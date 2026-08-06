@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { STOCK_MOVEMENT_TYPES } from '../../db/schema/stock.ts';
 
 /**
  * D1 caps a `LIKE`/`GLOB` pattern at **50 bytes**. Exceeding it is a runtime
@@ -26,25 +25,16 @@ export const stockSearchSchema = z.object({
   q: z.string().trim().min(1).max(MAX_SEARCH_TERM),
 });
 
-/** Recording a shop: one trip, many lines, each adding to existing stock. */
-export const purchaseInputSchema = z.object({
-  purchasedAt: z.iso.datetime().optional(),
-  note: z.string().trim().max(500).nullable().default(null),
-  lines: z
-    .array(
-      z.object({
-        stockItemId: z.uuid(),
-        quantity: z.number().int().positive().max(100000),
-      }),
-    )
-    .min(1)
-    .max(200),
-});
-
-export const stockTakeInputSchema = z.object({
-  note: z.string().trim().max(500).nullable().default(null),
-});
-
+/**
+ * One saved page of a stock take.
+ *
+ * `counts` carries **only the items the volunteer changed**; an item left alone
+ * is left out and is not touched. 200 is not the page size — the client picks
+ * that, and 40 is what the screen shows — it is a ceiling on one request.
+ *
+ * A count of zero is legitimate and means the shelf is empty. It is the reason
+ * `countedQuantity` is `min(0)` rather than positive.
+ */
 export const stockTakeCountsSchema = z.object({
   counts: z
     .array(
@@ -54,23 +44,12 @@ export const stockTakeCountsSchema = z.object({
       }),
     )
     .min(1)
-    .max(500),
-});
-
-/**
- * A hand correction always needs a reason — it is the only unexplained delta.
- *
- * Every one of the six movement types is offered, including the two the app
- * normally writes for itself: stock arriving without a recorded shop, or a
- * parcel handed over outside a session, are both things that happen in a
- * warehouse and both need a way onto the ledger.
- */
-export const stockAdjustmentSchema = z.object({
-  stockItemId: z.uuid(),
-  quantityDelta: z
-    .number()
-    .int()
-    .refine((value) => value !== 0, 'must not be zero'),
-  movementType: z.enum(STOCK_MOVEMENT_TYPES),
-  reason: z.string().trim().min(1).max(300),
+    .max(200)
+    // Two counts for one item in one page is a genuinely ambiguous
+    // instruction, and the server has no basis for picking the later one. It
+    // is far more likely to be a client bug than a volunteer's intent.
+    .refine(
+      (counts) => new Set(counts.map((count) => count.stockItemId)).size === counts.length,
+      'the same stock item must not appear twice',
+    ),
 });

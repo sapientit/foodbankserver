@@ -1,0 +1,1 @@
+ALTER TABLE `parcels` ADD `reviewed_at` text;

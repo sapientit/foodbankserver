@@ -86,62 +86,6 @@ durable than a client that may have moved on several form versions by then.
 
 ---
 
-## Q13 — Should a stock take's variance be told apart from a hand correction?
-
-`Status: open` · `Raised by: server` · `Blocks: nothing today — the code works either way`
-
-Closing Q8 fixed the ways stock moves at six: opening balance, shop, donation, parcel given to a
-client, wastage, correction. That answer was given to a question about the reasons for **a hand
-correction**, and there is one movement it did not obviously have in view: the row a stock take
-writes by itself.
-
-A stock take records a count, and the difference between the count and the figure the system holds
-becomes a ledger entry. There used to be a seventh type, `stock_take_adjustment`, for exactly that.
-With six to choose from, **the code now writes `correction`** — it is the only one it can be. Those
-rows still carry the id of the stock take they came from, so a report could still find them, but the
-movement type itself no longer separates _we counted the shelf and were two short_ from _a team
-leader put a mis-tap right_.
-
-Worth a human view because a stock take variance is the number that says how well the stock figures
-are holding up, and because putting a seventh value back costs a rebuild of the whole ledger — the
-same reason the original list was enumerated generously in the first place. If the two never need
-separating in a report, nothing needs doing and this can be closed as it stands.
-
-**A:**
-Suggested answer accepted. Close the question
-
----
-
-## Q14 — Does the team lead's six-day horizon stop them opening a session further out?
-
-`Status: open` · `Raised by: server` · `Blocks: nothing today — the code works either way`
-
-Closing Q10 gave a team lead a six-day window and an admin the full six weeks. That answer was
-about what staff can **see**, and the obvious place it lands is the session **list**. It does not
-say whether it is a limit on _looking_ or a limit on _reaching_.
-
-**Where the horizon is enforced today.** `GET /api/v1/sessions` is capped: a team lead gets today
-through today plus six, and a `to` beyond that is clamped rather than obeyed. Nothing else is.
-`GET /api/v1/sessions/{id}`, `GET`/`POST /api/v1/sessions/{sessionId}/pick-list`,
-`GET /api/v1/pick-lists/{id}` and its print, divergence, parcel and confirm routes, and
-`POST /api/v1/sessions/{sessionId}/confirm` all serve a team lead any session id they hold.
-
-So a team lead cannot browse to a session eight days out, but if they have its id they can open it
-and generate its pick list. Whether that is a hole or the point is a judgement about how the
-warehouse works, not about the code. Capping everything is simpler to describe and harder to
-explain away; but it would also stop a team lead getting a fortnight's picking ready in advance,
-and a session's pick list is the thing they prepare from. Preparing early may be exactly the
-practice, or it may be an administrator's job to hand out.
-
-If the horizon should apply everywhere, the enforcement moves down into the session lookup and the
-pick-list routes inherit it. If it should not, nothing needs doing and the list stays the only
-place it lives.
-
-**A:**
-Not worth closing the loophole. Close the question
-
----
-
 ## Q15 — Does a team lead ever need to look at a model parcel or the household grid?
 
 `Status: open` · `Raised by: client` · `Blocks: nothing today — the menu is admin-only meanwhile`
@@ -174,7 +118,7 @@ Worth answering before pick lists and printing are built, because that is the sl
 would discover they wanted it.
 
 **A:**
-No reason to ever look.
+No reason for the team leader to ever look.
 
 ---
 
@@ -216,99 +160,64 @@ either has on a shelf or does not.
 
 ---
 
-## Q21 — Is there a `reviewed` status, and is review something every referral gets?
+## Q24 — Does the Google Sheets export carry names and addresses?
 
-`Status: open` · `Raised by: server` · `Blocks: nothing today — the four-status model is built and working`
+`Status: open` · `Raised by: server` · `Blocks: the export's row shape — see [docs/planned/google-sheets-export.md](./docs/planned/google-sheets-export.md)`
 
-`referral details.txt` item 7 says, of the administrators' review screen: _"It would make sense to
-have an additional status of reviewed (but review is not required, and the session includes it
-whether it is reviewed or not."_
+The charity wants every referral to end up in a Google Sheet, fed automatically by a cron job. What
+is unsettled is **which columns**: the referee's name, date of birth, address, postcode, phone and
+reason for referral, or only the non-identifying parts — session, date, household counts, delivery
+flag, attendance outcome.
 
-That describes a different shape from the one now built. What is built came from the client's
-contract change request and is settled: four statuses, `pending_review → active | rejected`, and a
-referral only ever waits for review because its referrer's email address was not recognised. A
-referral from a known address is `active` immediately and nobody looks at it.
+Pete's view on 2026-08-05 was that he saw no reason to copy names and addresses, and also that the
+charity already keeps this data in Google Sheets today. Both are true and neither settles it, so it
+is being asked rather than assumed.
 
-Item 7 reads as though **review is a pass over referrals in general** — something an administrator
-may do to any of them, marking it `reviewed`, with the referral counting towards the session either
-way. If that is right then `reviewed` is not a fifth value of the same status but a separate flag,
-because a referral could be both `active` and reviewed, or `pending_review` and not yet reviewed.
-Overloading one column with both ideas is how a status enum stops meaning anything.
+What the charity should know before deciding:
 
-Two readings, and the difference is a column:
+- **The database is pinned to the EU jurisdiction and cannot be moved.** That pinning is why
+  [`docs/engineering/personal-data.md`](./docs/engineering/personal-data.md) currently states that
+  nothing carrying a referee's name, address, phone number or reason for referral may leave D1 —
+  including to a third-party fetch, which is exactly what this export is. Sending personal fields
+  means changing that rule deliberately, in the spec, not quietly in a job. A Google Workspace with
+  EU data regions configured keeps residency; a personal Gmail account does not.
+- **The purge cannot reach the Sheet.** Whatever `PII_RETENTION_DAYS` is eventually set to (**Q2**),
+  it clears rows in D1 only. Personal data in the Sheet stays until somebody deletes it by hand, so
+  the answer to Q2 becomes partly untrue the day this ships with personal columns in it.
+- **Who can see the Sheet is outside this system entirely.** Roles, `requireRole` and the response
+  mappers stop at the API boundary. Anyone the Sheet is shared with sees every column in it.
 
-- **Item 7 is describing the screen, not a new state.** "Reviewed" is just what an administrator has
-  done to a `pending_review` referral — accepted or rejected it — and the existing statuses already
-  say so. Nothing to build.
-- **Review is a separate, optional pass.** Then a `reviewedAt` (or a boolean) is wanted alongside
-  `status`, every referral can carry it, and the screen filters on it.
-
-Nothing is blocked meanwhile: the four-status model satisfies everything else in the contract
-request, and the review screen can be built on it today.
+None of this makes the answer no. The charity may have a good reason and already has this data in
+Sheets. It makes it a decision worth taking on purpose.
 
 **A:**
+Tbc
 
 ---
 
-## Q22 — What does "approve (authorise referrer)" add to the authorised list?
+## Q26 — Who appears on the listener sheet?
 
-`Status: open` · `Raised by: server` · `Blocks: the second accept button on the review screen`
+`Status: open` · `Raised by: server` · `Blocks: nothing — built on an assumption, marked x-assumed`
 
-`referral details.txt` item 7: _"If it is in a status of 'not approved' (invalid referrer email)
-there should be options to approve (once) or approve (authorise referrer)."_
+The listener sheet lists the households on a session. Which households was never settled, and the
+build had to choose.
 
-"Approve once" is built — `POST /referrals/{id}/accept`. The second option is not, because what it
-should write is not derivable. An administrator looking at a referral from `newstarter@guildford.gov.uk`
-could reasonably mean any of:
+**What it does today:** the sheet lists referrals that are `active` or `pending_review` — the same
+set that holds a place on the session, i.e. everybody who might walk through the door. Cancelled and
+rejected households are left off.
 
-- **That address, from now on.** An `email` rule for `newstarter@guildford.gov.uk`.
-- **Everyone at that domain.** A `domain` rule for `*@guildford.gov.uk` — which is a much bigger
-  decision to take from one screen, and the one that would quietly authorise a whole council.
+The reasoning, which is a guess and not a requirement: they are not coming, and a listener sheet is
+a list of named people against what went wrong for them. Handing a volunteer the name and the crisis
+of somebody the food bank turned away, or who cancelled, is the harm this endpoint most obviously
+risks.
 
-And whichever it is, the new row needs an `organisationName`, which the list is keyed on for
-reporting. The only candidate to hand is `referrerOrganisation` as the referrer typed it — free text
-they chose, which is exactly the value that ends up as "Guildford BC", "Guildford Borough Council"
-and "guildford borough council" as three separate organisations six months later.
+But it is arguable the other way. A household that cancelled may still appear on the day, and a
+listener who cannot find them on the sheet has nothing to work from. And a rejected referral is
+still a household that asked.
 
-So this needs three answers: which match type, what organisation name, and whether the administrator
-picks or confirms either on the screen rather than the server deciding. It is a small endpoint once
-those are settled.
-
-Worth answering with Q21, since both are about the same screen.
+Worth a human answer because the cost of being wrong points in two different directions: too narrow
+and a listener is unprepared, too wide and somebody's crisis is on a sheet in a hall when they were
+never coming.
 
 **A:**
-
----
-
-## Q23 — Which fields may an administrator change on a referral?
-
-`Status: open` · `Raised by: server` · `Blocks: nothing today — the wider set is built, and may be too wide`
-
-`referral details.txt` item 7 ends: _"The session, other information, (and the notes) are the only 3
-fields that can be changed."_
-
-What is built is wider, and predates that sentence. `PATCH /api/v1/referrals/{id}` currently accepts
-the session (a move), the referee's name, date of birth, address, postcode and phone, the referrer's
-name and phone, the household counts, the delivery flag, the fuel-help flag, the reason and the whole
-answers map. That came from the spec's "administrators can amend or cancel referrals", which does not
-enumerate.
-
-Three things need settling before the surface is narrowed, because narrowing it is not reversible in
-practice — a client built against the narrow one will not know it lost anything:
-
-- **Is item 7 describing the review screen only, or the referral generally?** An administrator taking
-  a correction over the phone — a referrer rang to say the address is wrong, or the family is now
-  four not three — is the case the spec's "amend" sentence was written for, and it needs the wider
-  set. A review screen might legitimately offer only three fields while the referral screen offers
-  more.
-- **What is "other information"?** The referral form has a question keyed `Other` ("Any additional
-  information?"). That is a single answer, not the answers map. If it means that one key, then the
-  server cannot enforce it — it holds no form definition and does not know `Other` from any other
-  key, so "only these answers may be amended" is a rule only the client can apply.
-- **What are "the notes"?** There is no notes field on a referral. There is `parcels.notes`, which is
-  a picker's note on a parcel and belongs to the pick list, and there is now `reviewComment`, which
-  is the administrator's line about the review. Neither is obviously the one meant.
-
-Meanwhile the wider set stands, and a client is free to offer only three fields.
-
-**A:**
+Cancelled and rejected and deliveries not included.

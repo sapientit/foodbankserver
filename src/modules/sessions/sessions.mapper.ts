@@ -28,6 +28,9 @@ export interface SessionResponse {
   readonly isCustomised: boolean;
   readonly recurringSessionId: string | null;
   readonly occurrenceDate: string | null;
+  /** `HH:MM` London wall clock, or null for "the same as `startTime`". */
+  readonly deliveryTime: string | null;
+  readonly deliveriesAllowed: boolean;
 }
 
 /**
@@ -50,6 +53,8 @@ export function toSessionResponse({ session, booked }: SessionWithBooked): Sessi
     isCustomised: session.isCustomised === 1,
     recurringSessionId: session.recurringSessionId,
     occurrenceDate: session.occurrenceDate,
+    deliveryTime: session.deliveryTime,
+    deliveriesAllowed: session.deliveriesAllowed === 1,
   };
 }
 
@@ -67,6 +72,12 @@ export interface PublicSessionResponse {
   readonly startsAtUtc: string;
   readonly durationMinutes: number;
   readonly location: string;
+  /**
+   * No `deliveryTime` here — it is only worth reading once a delivery has been
+   * arranged. Whether one can be arranged at all is exactly what the referral
+   * form needs before it offers the choice, so that alone is public.
+   */
+  readonly deliveriesAllowed: boolean;
 }
 
 export function toPublicSessionResponse(session: Session): PublicSessionResponse {
@@ -77,6 +88,7 @@ export function toPublicSessionResponse(session: Session): PublicSessionResponse
     startsAtUtc: session.startsAtUtc,
     durationMinutes: session.durationMinutes,
     location: session.location,
+    deliveriesAllowed: session.deliveriesAllowed === 1,
   };
 }
 
@@ -90,6 +102,8 @@ export interface RecurringSessionResponse {
   readonly capacity: number;
   readonly activeFrom: string;
   readonly activeUntil: string | null;
+  readonly deliveryTime: string | null;
+  readonly deliveriesAllowed: boolean;
 }
 
 export function toRecurringSessionResponse(row: RecurringSession): RecurringSessionResponse {
@@ -103,5 +117,7 @@ export function toRecurringSessionResponse(row: RecurringSession): RecurringSess
     capacity: row.capacity,
     activeFrom: row.activeFrom,
     activeUntil: row.activeUntil,
+    deliveryTime: row.deliveryTime,
+    deliveriesAllowed: row.deliveriesAllowed === 1,
   };
 }

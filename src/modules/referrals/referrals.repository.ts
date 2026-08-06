@@ -15,6 +15,12 @@ import type { Patch } from '../../core/types.ts';
 export interface ReferralListFilter {
   readonly sessionId?: string | undefined;
   readonly status?: ReferralStatus | undefined;
+  /**
+   * Several statuses at once, for callers that want a stage of the pipeline
+   * rather than one value — picking uses every status that holds a place, so
+   * its client has a parcel for every household it may need to run.
+   */
+  readonly statuses?: readonly ReferralStatus[] | undefined;
   /** Statuses the caller is not allowed to know exist. See the service. */
   readonly excludeStatuses?: readonly ReferralStatus[] | undefined;
 }
@@ -31,6 +37,9 @@ export function createReferralsRepository(db: Database) {
       if (filter.sessionId !== undefined)
         conditions.push(eq(referrals.sessionId, filter.sessionId));
       if (filter.status !== undefined) conditions.push(eq(referrals.status, filter.status));
+      if (filter.statuses !== undefined) {
+        conditions.push(inArray(referrals.status, [...filter.statuses]));
+      }
       if (filter.excludeStatuses !== undefined && filter.excludeStatuses.length > 0) {
         conditions.push(notInArray(referrals.status, [...filter.excludeStatuses]));
       }
@@ -75,7 +84,8 @@ export function createReferralsRepository(db: Database) {
     },
 
     /**
-     * Records a review decision, but **only** on a referral still awaiting one.
+     * Moves a referral along the pipeline, but **only** from the status it is
+     * expected to be in.
      *
      * The condition travels with the write rather than being checked in the
      * service first. D1 has no interactive transactions, so a read-then-write
@@ -88,11 +98,15 @@ export function createReferralsRepository(db: Database) {
      * Returns `undefined` when nothing matched, which the service reads as
      * "somebody else got there first".
      */
-    async reviewIfPending(id: string, patch: Patch<NewReferral>): Promise<Referral | undefined> {
+    async updateIfStatus(
+      id: string,
+      from: ReferralStatus,
+      patch: Patch<NewReferral>,
+    ): Promise<Referral | undefined> {
       const rows = await db
         .update(referrals)
         .set(patch)
-        .where(and(eq(referrals.id, id), eq(referrals.status, 'pending_review')))
+        .where(and(eq(referrals.id, id), eq(referrals.status, from)))
         .returning();
       return expectAtMostOne(rows);
     },

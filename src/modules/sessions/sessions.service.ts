@@ -41,6 +41,7 @@ export function createSessionsService({ repository, clock }: SessionsServiceDeps
     const now = clock.nowIso();
     return repository.insertRecurring({
       ...input,
+      deliveriesAllowed: input.deliveriesAllowed ? 1 : 0,
       id: crypto.randomUUID(),
       createdAt: now,
       updatedAt: now,
@@ -51,7 +52,12 @@ export function createSessionsService({ repository, clock }: SessionsServiceDeps
     id: string,
     patch: Patch<RecurringSessionInput>,
   ): Promise<RecurringSession> {
-    const updated = await repository.updateRecurring(id, { ...patch, updatedAt: clock.nowIso() });
+    const { deliveriesAllowed, ...rest } = patch;
+    const updated = await repository.updateRecurring(id, {
+      ...rest,
+      ...(deliveriesAllowed === undefined ? {} : { deliveriesAllowed: deliveriesAllowed ? 1 : 0 }),
+      updatedAt: clock.nowIso(),
+    });
     if (updated === undefined) {
       throw new NotFoundError('Recurring session not found');
     }
@@ -71,6 +77,8 @@ export function createSessionsService({ repository, clock }: SessionsServiceDeps
       durationMinutes: input.durationMinutes,
       location: input.location,
       capacity: input.capacity,
+      deliveryTime: input.deliveryTime,
+      deliveriesAllowed: input.deliveriesAllowed ? 1 : 0,
       status: 'planned',
       cancelledReason: null,
       isCustomised: 1,
@@ -97,13 +105,15 @@ export function createSessionsService({ repository, clock }: SessionsServiceDeps
 
     const sessionDate = patch.sessionDate ?? existing.sessionDate;
     const startTime = patch.startTime ?? existing.startTime;
+    const { deliveriesAllowed, ...rest } = patch;
 
     const updated = await repository.updateSession(id, {
-      ...patch,
+      ...rest,
       sessionDate,
       startTime,
       // Always re-derive: changing either half changes the instant.
       startsAtUtc: londonWallClockToInstant(sessionDate, startTime),
+      ...(deliveriesAllowed === undefined ? {} : { deliveriesAllowed: deliveriesAllowed ? 1 : 0 }),
       isCustomised: 1,
       updatedAt: clock.nowIso(),
     });
@@ -143,6 +153,25 @@ export function createSessionsService({ repository, clock }: SessionsServiceDeps
     });
   }
 
+  /**
+   * Calls off a session.
+   *
+   * **Refused while anybody still holds a place.** The households have to be
+   * moved or cancelled first, one at a time, because cancelling the session
+   * out from under them would leave families expecting food that nobody has
+   * arranged and no record that anyone decided what to do about them. Making
+   * the administrator deal with them first means somebody has looked at each
+   * one, rather than a single click quietly stranding twenty-five.
+   *
+   * It follows that a cancelled session never has referrals attached to it.
+   *
+   * The count and the cancel are two statements, so a referral submitted in
+   * between slips through. That is the same accepted race as the capacity
+   * check in `referrals.service.ts` and for the same reason: the single
+   * conditional statement that would close it moves the rule out of here and
+   * into SQL, and `assertSessionAccepts` already refuses arrivals at a
+   * cancelled session, so the window is milliseconds wide.
+   */
   async function cancelSession(id: string, reason: string | null): Promise<Session> {
     const existing = await getSession(id);
     if (existing.status === 'cancelled') {
@@ -150,6 +179,14 @@ export function createSessionsService({ repository, clock }: SessionsServiceDeps
     }
     if (existing.status === 'confirmed') {
       throw new ConflictError('This session has been confirmed and can no longer be cancelled');
+    }
+
+    const booked = await repository.bookedFor(id);
+    if (booked > 0) {
+      throw new ConflictError(
+        'Move or cancel the households on this session before cancelling the session itself',
+        { details: { booked } },
+      );
     }
 
     const updated = await repository.updateSession(id, {

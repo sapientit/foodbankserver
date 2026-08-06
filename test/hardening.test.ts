@@ -52,16 +52,31 @@ describe('production refuses to start unsafely', () => {
     ).toThrow(/TURNSTILE_SECRET_KEY is required in production/);
   });
 
-  it('accepts a production configuration that has both controls', () => {
+  it('requires a secret on the SMS webhook in production', () => {
+    // The other unauthenticated write. It lands in `sms_messages`, which holds
+    // a household's own words, so an unguarded one is worse than an open form.
+    expect(() =>
+      loadConfig({
+        AUTH_JWT_SECRET: SECRET,
+        ENVIRONMENT: 'production',
+        AUTH_MODE: 'google',
+        TURNSTILE_SECRET_KEY: 'turnstile-secret',
+      }),
+    ).toThrow(/SMS_WEBHOOK_SECRET is required in production/);
+  });
+
+  it('accepts a production configuration that has every control', () => {
     const config = loadConfig({
       AUTH_JWT_SECRET: SECRET,
       ENVIRONMENT: 'production',
       AUTH_MODE: 'google',
       TURNSTILE_SECRET_KEY: 'turnstile-secret',
+      SMS_WEBHOOK_SECRET: 'sms-webhook-secret-long-enough',
       ALLOWED_ORIGINS: 'https://foodbank.example.org',
     });
 
     expect(config.turnstileSecret).toBe('turnstile-secret');
+    expect(config.smsWebhookSecret).toBe('sms-webhook-secret-long-enough');
     expect(config.allowedOrigins).toEqual(['https://foodbank.example.org']);
   });
 
@@ -347,6 +362,7 @@ describe('security headers', () => {
         ENVIRONMENT: 'production',
         AUTH_MODE: 'google',
         TURNSTILE_SECRET_KEY: 'secret',
+        SMS_WEBHOOK_SECRET: 'sms-webhook-secret-long-enough',
       },
     });
 

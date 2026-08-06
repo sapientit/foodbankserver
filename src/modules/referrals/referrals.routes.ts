@@ -9,12 +9,17 @@ import { createReferrersService } from '../referrers/referrers.service.ts';
 import { createSessionsRepository } from '../sessions/sessions.repository.ts';
 import { createReferralsRepository } from './referrals.repository.ts';
 import { createReferralsService } from './referrals.service.ts';
-import { toReferralResponse, type ReferralResponse } from './referrals.mapper.ts';
 import {
+  toReferralResponse,
+  type ListenerSheetHousehold,
+  type ReferralResponse,
+} from './referrals.mapper.ts';
+import {
+  acceptReferralSchema,
   cancelReferralSchema,
   referralAdminAmendSchema,
   referralListQuerySchema,
-  reviewReferralSchema,
+  rejectReferralSchema,
 } from './referrals.schema.ts';
 
 /**
@@ -38,6 +43,25 @@ export function referralRoutes(): Hono<AppEnv> {
 
     return c.json<{ referrals: ReferralResponse[] }>({
       referrals: referrals.map((referral) => toReferralResponse(referral, actor)),
+    });
+  });
+
+  /**
+   * The listener sheet: one sheet for the session, every household on it.
+   *
+   * Session-scoped rather than under `/referrals` because it is a thing handed
+   * to a volunteer on the day, not a view of the referral list. Open to a team
+   * leader, and **the only place a team leader is given the reason for
+   * referral** — see `toListenerSheetHousehold` for what that costs and why it
+   * is narrow.
+   */
+  routes.get('/sessions/:sessionId/listener-sheet', ...readers, async (c) => {
+    const sessionId = c.req.param('sessionId');
+    const households = await serviceFor(c).listenerSheet(sessionId);
+
+    return c.json<{ sessionId: string; households: ListenerSheetHousehold[] }>({
+      sessionId,
+      households,
     });
   });
 
@@ -71,19 +95,61 @@ export function referralRoutes(): Hono<AppEnv> {
   });
 
   /**
-   * The two halves of reviewing a referral that arrived from an unrecognised
+   * The two halves of deciding a referral that arrived from an unrecognised
    * address. Both refuse anything that is not waiting to be reviewed.
+   *
+   * Accepting takes an optional `authoriseReferrer`, which is the second accept
+   * button: let this one through *and* add the referrer's address to the
+   * authorised list so the next one is not held up. Rejecting does not, which
+   * is why the two bodies have separate schemas rather than one with a field
+   * that is meaningless on half of it.
    *
    * Written out rather than looped because `check:openapi` reads the routes
    * out of this file as text, and a route it cannot see is a route the contract
    * stops being checked against.
    */
-  routes.post('/referrals/:id/accept', ...admins, async (c) =>
-    review(c, c.req.param('id'), 'active'),
-  );
-  routes.post('/referrals/:id/reject', ...admins, async (c) =>
-    review(c, c.req.param('id'), 'rejected'),
-  );
+  routes.post('/referrals/:id/accept', ...admins, async (c) => {
+    const { comment, authoriseReferrer } = await parseOptionalJsonBody(c, acceptReferralSchema);
+    const actor = actorOf(c);
+    const accepted = await serviceFor(c).review(
+      c.req.param('id'),
+      'active',
+      comment ?? null,
+      actor,
+      authoriseReferrer,
+    );
+
+    return c.json(toReferralResponse(accepted, actor));
+  });
+
+  routes.post('/referrals/:id/reject', ...admins, async (c) => {
+    const { comment } = await parseOptionalJsonBody(c, rejectReferralSchema);
+    const actor = actorOf(c);
+    // No read first: the "still pending" guard is in the UPDATE itself, so a
+    // read here would only add a query and a race window. See the service.
+    const rejected = await serviceFor(c).review(
+      c.req.param('id'),
+      'rejected',
+      comment ?? null,
+      actor,
+    );
+
+    return c.json(toReferralResponse(rejected, actor));
+  });
+
+  /**
+   * The administrator has read this referral through.
+   *
+   * A separate pass from accepting one: every referral is meant to be read,
+   * including the ones nothing held up, and this is what makes "which has
+   * nobody looked at yet?" answerable. Only an `active` referral can be marked;
+   * the guard is in the statement, as it is for the decision above.
+   */
+  routes.post('/referrals/:id/review', ...admins, async (c) => {
+    const actor = actorOf(c);
+    const reviewed = await serviceFor(c).markReviewed(c.req.param('id'), actor);
+    return c.json(toReferralResponse(reviewed, actor));
+  });
 
   routes.post('/referrals/:id/cancel', ...admins, async (c) => {
     const service = serviceFor(c);
@@ -100,18 +166,6 @@ export function referralRoutes(): Hono<AppEnv> {
   });
 
   return routes;
-}
-
-async function review(c: Context<AppEnv>, id: string, outcome: 'active' | 'rejected') {
-  const service = serviceFor(c);
-  const actor = actorOf(c);
-
-  const { comment } = await parseOptionalJsonBody(c, reviewReferralSchema);
-  // No read first: the "still pending" guard is in the UPDATE itself, so a
-  // read here would only add a query and a race window. See the service.
-  const reviewed = await service.review(id, outcome, comment ?? null, actor);
-
-  return c.json(toReferralResponse(reviewed, actor));
 }
 
 function actorOf(c: Context<AppEnv>): Actor {

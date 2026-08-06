@@ -136,3 +136,53 @@ function parseAnswers(answersJson: string | null): Record<string, unknown> {
     return {};
   }
 }
+
+/**
+ * One household on the listener sheet, and **nothing else about them**.
+ *
+ * This is the narrowest mapper in the codebase and the only place a team
+ * leader receives the reason for referral. That is a deliberate exception to
+ * the rule enforced in `toReferralResponse`, not the rule being relaxed: the
+ * listener is having a conversation about what went wrong, and cannot have it
+ * without knowing what went wrong.
+ *
+ * What is absent is the point. No address, no postcode, no phone, no date of
+ * birth, nothing about the referrer. A listener needs to know what happened,
+ * not where the household lives — and this ends up on paper in a hall.
+ *
+ * `answers` is handed over **whole**, exactly as `toParcelResponse` does it.
+ * The sheet's "Cause Details" is one of those answers, and which one is the
+ * client's to know: it owns the form definition and the server holds none.
+ * Picking the key out here would be the same guess that four hard-coded
+ * dietary keys turned out to be.
+ */
+export interface ListenerSheetHousehold {
+  readonly referralId: string;
+  readonly refereeFirstName: string | null;
+  readonly refereeSurname: string | null;
+  /**
+   * The reason's **label**, not its id.
+   *
+   * It survives a purge — `reasonId` is outside the PII block on purpose, so
+   * that reporting still works once nobody is identifiable. Null only if the
+   * label could not be found at all, which should not happen and is not worth
+   * failing the whole sheet over.
+   */
+  readonly reason: string | null;
+  readonly needsFuelHelp: boolean;
+  readonly answers: Record<string, unknown>;
+}
+
+export function toListenerSheetHousehold(
+  referral: Referral,
+  reasonLabel: string | undefined,
+): ListenerSheetHousehold {
+  return {
+    referralId: referral.id,
+    refereeFirstName: referral.refereeFirstName,
+    refereeSurname: referral.refereeSurname,
+    reason: reasonLabel ?? null,
+    needsFuelHelp: referral.needsFuelHelp === 1,
+    answers: parseAnswers(referral.answersJson),
+  };
+}

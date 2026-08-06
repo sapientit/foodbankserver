@@ -17,6 +17,43 @@ hygiene here; it is the control that keeps personal data inside the jurisdiction
 pinned to. Nothing carrying a referee's name, address, phone number or reason for referral may leave
 D1 — not to logs, not to Analytics Engine, not to any third-party fetch.
 
+### `sms_messages` is the other table holding personal data
+
+Everything in this document was written about `referrals`. Since text reminders
+there is a second table: `sms_messages` holds a household's phone number and the
+**free text they wrote back**, which can be anything — why they need food, who
+has left, what they are frightened of. Treat it as at least as sensitive as a
+referral, and note the two things that make it different:
+
+- **It is written by a public, unauthenticated route.** The webhook is the only
+  other open write in the system besides referral submission, and unlike that
+  one it is not a form a person filled in — so the shared secret and the rate
+  limiter are the whole of the door.
+- **It is deleted, not anonymised, after thirty days** — including the loose
+  replies that belong to no referral. A referral keeps counts once its name is
+  gone; a text message has nothing underneath it worth keeping. See
+  `purge-sms.ts`.
+
+Never log a body or a number: `LogContext` has `smsMessageId` and deliberately
+nothing else.
+
+### The one exception, and how narrow it is
+
+**SMS reminders send a phone number to TheSMSWorks and nothing else.** The charity settled that on
+2026-08-06: the provider receives the number to text and no data identifying whose number it is —
+no name, no address, no date of birth, no reason for referral, and nothing in the message body that
+would name the household. That is what makes the exception acceptable rather than a hole in the
+rule, and it is a constraint on the **message text** as much as on the request: a reminder that
+opened "Dear Mrs Wintergreen" would breach it.
+
+Replies come back the same way and are stored in D1 like any other personal data — a household's
+own words are theirs, and everything in this document applies to them once they land.
+
+Nothing else about this changes. The rule above still holds for every other outbound path, and a
+second exception is a decision for the charity, in the spec, not an extension of this one. See
+`INITIAL_SPEC1.txt`, "SMS reminders and replies", and
+[`../architecture/domain-model.md`](../architecture/domain-model.md).
+
 `core/log.ts` enforces this **by construction** rather than by discipline: `LogContext` enumerates
 the permitted fields and they are all identifiers or counts, so `log.info('saved', { referral })`
 does not compile. Adding a field to `LogContext` is a deliberate decision to be reviewed against

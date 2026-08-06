@@ -30,8 +30,14 @@ parameter and expand with `json_each`: one statement and one parameter regardles
 Drizzle has no builder for that, **and its `db.batch()` only accepts Drizzle query builders** — a
 raw `db.run(sql)` is not a batchable item and fails at runtime with a confusing
 `Cannot read properties of undefined (reading 'bind')`. So bulk inserts use raw D1 prepared
-statements through `db.$client.batch()`. That is confined to `pick-lists.repository.ts` and covered
-by integration tests; everything else stays in Drizzle.
+statements through `db.$client.batch()`. That is confined to `pick-lists.repository.ts` and
+`stock.repository.ts` and covered by integration tests; everything else stays in Drizzle.
+
+The stock take is the second case: a page of counts deletes those items' rows and writes one
+baseline each, so both the `DELETE ... WHERE stock_item_id IN` and the insert take the item set as a
+single JSON parameter. `inArray` would have been the obvious Drizzle answer and it is the wrong one
+— it binds one parameter per id, so it fails somewhere north of a hundred items with the same
+100-parameter error this section exists to describe.
 
 ## 50 queries per Worker invocation on the free plan
 
@@ -51,8 +57,27 @@ and both easy to "tidy up" by mistake:
   module, not the DDL. Write `NOT NULL` on a PII column and it can never be purged.
 - **Enums are CHECK constraints.** They were once enumerated generously, on the reasoning that
   adding a value later is expensive. That reasoning did not survive contact: `stock_ledger.movement_type`
-  shipped with nine guessed values and migration `0011` rebuilt the table to get down to the six the
-  charity actually wanted. Generosity bought a rebuild rather than avoiding one. **Ask instead.**
+  shipped with nine guessed values, migration `0011` rebuilt the table to get down to the six the
+  charity actually wanted, and migration `0015` rebuilt it again to reach the **two** they actually
+  use. Three rebuilds of one column, every one of them caused by guessing rather than asking.
+  **Ask instead.**
+
+## The stock ledger stopped being append-only, on purpose
+
+It was append-only for good reasons and they are still good reasons — a mistake was additive, and
+nothing could be lost by a bad `WHERE`. What changed is the requirement, not the engineering: the
+charity does not want stock history from before the previous weekly count, so a count now deletes
+the item's rows and writes it a fresh `opening_balance`, and taking an attendance outcome back
+deletes that parcel's rows.
+
+**The trade was made knowingly.** Destructive writes are not recoverable — D1's Time Travel restores
+the whole database or nothing, so recovering a stock figure would mean rolling back referrals. The
+argument that carried it is that the weekly count re-baselines every item from physical stock, so
+the blast radius of a bad delete is one week and it repairs itself at the next take.
+
+What follows for anyone touching this: **the `WHERE` clause on those two deletes is the highest-stakes
+code in the stock module.** An append-only alternative was designed and rejected; do not reintroduce
+it, and do not add a third delete.
 
 ## Dropping a column is usually not a rebuild
 

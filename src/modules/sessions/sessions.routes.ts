@@ -30,7 +30,8 @@ import {
  * How far ahead a read reaches is not the same question as who may read: the
  * list is capped at six days for a team lead and uncapped for an admin, and
  * that cap lives in the service, from the `Actor`. Fetching one session by id
- * is not capped — see Q14.
+ * is deliberately not capped: the horizon decides which sessions a team lead is
+ * shown, not which ones they may open to prepare.
  */
 export function sessionRoutes(): Hono<AppEnv> {
   const routes = new Hono<AppEnv>();

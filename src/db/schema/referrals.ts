@@ -5,26 +5,45 @@ import { sessions } from './sessions.ts';
 import { users } from './users.ts';
 
 /**
- * `pending_review` is where a referral from an unrecognised address lands.
+ * One column, one pipeline: `pending_review → active → reviewed`, with
+ * `rejected` off the first step and `cancelled` reachable from any of them.
  *
- * An unauthorised referrer is no longer refused: the referral is taken and an
+ * `pending_review` is where a referral from an unrecognised address lands. An
+ * unauthorised referrer is no longer refused: the referral is taken and an
  * administrator accepts or rejects it. That is a queue of people waiting to be
- * fed rather than a door closed on them, and it is the charity's decision —
- * see `INITIAL_SPEC1.txt`, "Referral".
+ * fed rather than a door closed on them.
+ *
+ * `reviewed` says an administrator has read the referral through. The charity
+ * wants every referral read, not only the ones held for an unrecognised
+ * address, and wants to see the unread pile go down — so it is a step on the
+ * same pipeline rather than a flag beside it. That is the charity's choice,
+ * made knowing the consequence: a referral cancelled after being reviewed
+ * reads as `cancelled` and no longer records that anybody read it. See
+ * `INITIAL_SPEC1.txt`, "Reviewing a referral".
  */
-export const REFERRAL_STATUSES = ['pending_review', 'active', 'rejected', 'cancelled'] as const;
+export const REFERRAL_STATUSES = [
+  'pending_review',
+  'active',
+  'reviewed',
+  'rejected',
+  'cancelled',
+] as const;
 export type ReferralStatus = (typeof REFERRAL_STATUSES)[number];
 
 /**
- * The two statuses that occupy a place on a session.
+ * The three statuses that occupy a place on a session.
  *
  * A referral awaiting review holds its place, so a session fills with everyone
  * who might come rather than only those already looked at. Rejecting one gives
  * the place back. The alternative — counting only accepted referrals — lets an
  * administrator working through a queue on the morning of a session push it
  * past capacity, and the person who finds out is the team lead in the hall.
+ *
+ * **Being reviewed changes nothing about holding a place.** Every set in this
+ * module that contained `active` must contain `reviewed` too, or reading a
+ * referral would quietly take the household off the session.
  */
-export const REFERRAL_STATUSES_HOLDING_A_PLACE = ['pending_review', 'active'] as const;
+export const REFERRAL_STATUSES_HOLDING_A_PLACE = ['pending_review', 'active', 'reviewed'] as const;
 
 /**
  * A request to feed a household at a session.
@@ -146,6 +165,26 @@ export const referrals = sqliteTable(
     answersJson: text('answers_json'),
     // =====================================================
 
+    /**
+     * When the household was sent a text reminder about this session.
+     *
+     * **Per referral, not per household** — a household referred to two
+     * sessions is reminded once for each, which is the point.
+     *
+     * Set only on a *successful* send: a failure leaves it null so the next
+     * press of the button retries that household. See `modules/sms`.
+     *
+     * A timestamp rather than a boolean, like every other flag on this table:
+     * "one went at 09:04 on Friday" answers "did one go?" and a boolean does
+     * not answer the other way round.
+     *
+     * Outside the PII block deliberately. It holds no phone number and says
+     * nothing about who the household is once their own columns are nulled, so
+     * a purge leaves it alone. The message rows themselves are a different
+     * matter — they go after thirty days, see `db/schema/sms.ts`.
+     */
+    smsReminderSentAt: text('sms_reminder_sent_at'),
+
     piiPurgedAt: text('pii_purged_at'),
     /** Null for a public submission; set when an admin enters one by phone. */
     createdByUserId: text('created_by_user_id').references(() => users.id),
@@ -157,7 +196,7 @@ export const referrals = sqliteTable(
     index('idx_referrals_referred_at').on(table.referredAt),
     check(
       'referrals_status_valid',
-      sql`${table.status} IN ('pending_review', 'active', 'rejected', 'cancelled')`,
+      sql`${table.status} IN ('pending_review', 'active', 'reviewed', 'rejected', 'cancelled')`,
     ),
     check('referrals_adults_valid', sql`${table.adults} >= 0`),
     check('referrals_children_valid', sql`${table.children} >= 0`),
