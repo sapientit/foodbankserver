@@ -36,7 +36,13 @@ enforced. Longer rationale: [`docs/architecture/authentication.md`](../../docs/a
   to the **last active admin**. The second cannot be a count-then-write — `updateLeavingAnotherAdmin`
   carries the condition into the `UPDATE` and the service reads the result.
 - Use `requireAuth` then `requireRole('admin')`. **Name roles explicitly per route**; never invent a
-  hierarchy where `team_lead` is "a lesser admin".
+  hierarchy where `team_lead` is "a lesser admin". There are three roles, and `fuel_admin` is the
+  one that makes a hierarchy impossible rather than merely unwise: it reaches
+  `GET /fuel-help-list` and `GET /auth/me` and nothing else, so it is neither above nor below
+  either of the others. **Its boundary is enforced only by its absence from every other route's
+  guard** — nothing in the type system checks that, so `test/fuel-help-list.test.ts` asserts the
+  403s explicitly. Adding a role to a guard tuple is the whole of granting it access; do it
+  deliberately.
 
 ## Route mounting — this one is a trap
 

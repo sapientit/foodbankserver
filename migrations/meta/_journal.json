@@ -127,6 +127,13 @@
       "when": 1786010000000,
       "tag": "0017_sms-reminders-and-replies",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1786100000000,
+      "tag": "0018_fuel-administrator-role",
+      "breakpoints": true
     }
   ]
 }

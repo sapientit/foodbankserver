@@ -32,6 +32,10 @@ tags:
     description: No authentication. Rate limited per client IP.
   - name: Sessions
   - name: Referrals
+  - name: Fuel help
+    description: >-
+      Households to follow up about a gas or electricity bill. One endpoint,
+      and a role that reaches nothing else in the API.
   - name: SMS
     description: >-
       Reminding households about a session by text, and the replies that come
@@ -784,6 +788,70 @@ paths:
                     type: array
                     items: { $ref: '#/components/schemas/ListenerSheetHousehold' }
         '404': { description: No such session }
+
+  # ------------------------------------------------------------- fuel help --
+  /api/v1/fuel-help-list:
+    get:
+      tags: [Fuel help]
+      summary: Households to follow up about a fuel bill
+      description: |
+        **A fuel administrator's only endpoint.** A `fuel_admin` account reaches
+        this and `GET /api/v1/auth/me` and nothing else at all — no sessions, no
+        referrals, no listener sheet, no stock, no user accounts. The role is a
+        boundary rather than a job title: it is what stops somebody brought in
+        to help with fuel bills from being able to read why every household in
+        the borough was referred. **Do not build a menu that treats it as a
+        lesser administrator**; it is not a subset of any other role.
+
+        An `admin` may read it too, so the charity is not locked out of its own
+        report when the person who normally runs it is away or their account has
+        been made inactive. A `team_lead` may **not** — it is not something that
+        happens on the day.
+
+        A household is listed when **all four** of these are true: they said
+        they needed help with fuel; they were **given their parcel**, whether
+        they collected it or it was delivered (a delivery counts as having
+        attended, here as everywhere else); the session those outcomes belong to
+        is **confirmed**, because until it is signed off an outcome can still be
+        taken back and nobody should be rung about their gas bill in the
+        meantime; and that session was **within the last two weeks** — fourteen
+        dates counting today.
+
+        Ordered by session date, **oldest first**, so whoever works through it
+        deals with the households closest to dropping off the end. The list is
+        laid out to be pasted straight into a spreadsheet: the people who deal
+        with fuel work in Excel, and the food bank would rather they pasted a
+        list than retyped one and got a phone number wrong.
+
+        The two questions that follow the fuel question — whether the household
+        is on a pre-payment meter, and whether they will let us ring them about
+        it — are ordinary questions on the referral form, so they arrive inside
+        `answers` and **the client extracts them**, exactly as it does *Cause
+        Details* on the listener sheet. **Nobody is left off the list on the
+        strength of them:** every household meeting the four conditions is
+        listed, and the person about to make the call reads the answers and
+        decides whether to make it. A household who said no to a call may still
+        be somebody worth writing to.
+
+        **No reason for referral, no date of birth, no household counts and no
+        delivery flag.** None of them bears on helping with a fuel bill, and the
+        row already holds enough to identify somebody.
+
+        A row is a **referral**, not a household. Being fed twice inside a
+        fortnight is not expected to happen and nothing de-duplicates it, so a
+        household who was would appear once per session.
+      responses:
+        '200':
+          description: The list, oldest session first. Empty when nothing qualifies.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [households]
+                properties:
+                  households:
+                    type: array
+                    items: { $ref: '#/components/schemas/FuelHelpHousehold' }
 
   /api/v1/referrals:
     get:
@@ -2190,11 +2258,15 @@ components:
 
     Role:
       type: string
-      enum: [admin, team_lead]
+      enum: [admin, team_lead, fuel_admin]
       description: >
-        `volunteer` exists in the database but is unused, and is not assignable.
-        Use this to choose a menu, never for access control — the server
-        re-checks on every request.
+        Three roles, and **none of them is a rank**. An administrator runs the
+        food bank, a team leader runs the sessions, and a fuel administrator
+        reaches `GET /api/v1/fuel-help-list` and `GET /api/v1/auth/me` and
+        nothing else at all. `fuel_admin` is a boundary rather than a lesser
+        administrator, so a menu built on "which subset of admin is this" will
+        be wrong for it. Use this to choose a menu, never for access control —
+        the server re-checks on every request.
 
     User:
       type: object
@@ -2777,6 +2849,54 @@ components:
           description: >-
             The dynamic answers, whole. Extract *Cause Details* here; the server
             does not know which key it is. `{}` once purged.
+
+    FuelHelpHousehold:
+      type: object
+      description: >-
+        One household to ring about a fuel bill, at one session they were fed
+        at. Who is being helped, where they live, how to ring them, when it was,
+        and the form answers whole — and deliberately nothing else.
+      required:
+        [
+          referralId,
+          sessionDate,
+          refereeFirstName,
+          refereeSurname,
+          refereeAddress,
+          refereePostcode,
+          refereePhone,
+          answers,
+        ]
+      properties:
+        referralId: { type: string, format: uuid }
+        sessionDate:
+          type: string
+          format: date
+          description: >-
+            The session's own `YYYY-MM-DD`, London wall clock — **the session
+            the parcel was issued at**, which is not always the session the
+            referral now points at if it was moved after picking. The list is
+            sorted by this, oldest first.
+        refereeFirstName: { type: [string, 'null'] }
+        refereeSurname: { type: [string, 'null'] }
+        refereeAddress:
+          type: [string, 'null']
+          description: Where the household lives. A delivery goes here too.
+        refereePostcode: { type: [string, 'null'] }
+        refereePhone:
+          type: [string, 'null']
+          description: >-
+            Here because the follow-up is a phone call. Free text as the
+            referrer typed it — it is **not** normalised on the way in, so
+            format it for display rather than assuming a shape. Null when the
+            referral gave no number.
+        answers:
+          type: object
+          additionalProperties: true
+          description: >-
+            The dynamic answers, whole. Extract the pre-payment-meter and
+            permission-to-ring answers here; the server does not know which keys
+            they are and will not guess.
 
     ParcelContentLine:
       type: object

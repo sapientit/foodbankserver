@@ -1,4 +1,5 @@
 import type { Actor } from '../../core/actor.ts';
+import { parseAnswers } from '../../core/answers.ts';
 import type { Referral } from '../../db/schema/referrals.ts';
 
 /**
@@ -123,18 +124,6 @@ export function toReceiptResponse(referral: Referral): ReferralReceiptResponse {
     refereePostcode: referral.refereePostcode,
     referredAt: referral.referredAt,
   };
-}
-
-function parseAnswers(answersJson: string | null): Record<string, unknown> {
-  if (answersJson === null) return {};
-  try {
-    const parsed: unknown = JSON.parse(answersJson);
-    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : {};
-  } catch {
-    return {};
-  }
 }
 
 /**

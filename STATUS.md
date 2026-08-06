@@ -30,6 +30,8 @@ The domain flow is complete end to end: **referral → session → pick list →
 
 | **13 — SMS reminders** | `sms_messages` and `modules/sms`. A team leader texts a session's households from `POST /sessions/:id/sms-reminders`; TheSMSWorks delivers; replies arrive on the public `POST /webhooks/sms`, matched by phone to the referral for the soonest upcoming session, and unmatched ones are kept for admins. Counts poll from `/sms-summary`. Everything is deleted after 30 days by the nightly job. Sessions gained `deliveryTime` and `deliveriesAllowed`. |
 
+| **14 — fuel help list** | A third role, `fuel_admin`, and `GET /fuel-help-list` in `modules/fuel-help` — the role's entire surface, plus `/auth/me`. Households who asked for fuel help, were given their parcel, at a confirmed session, in the last fourteen dates counting today; oldest first. Name, address, postcode, phone, session date and the answers whole; **no reason, date of birth, household counts or delivery flag**. One query, joined through the parcel rather than the referral so a moved referral reports the session it was actually fed at. Migration `0018` rebuilt `users` to widen the CHECK and **dropped the unused `volunteer`**. `test/fuel-help-list.test.ts`. |
+
 **Removed:** there was a `modules/forms` — versioned `form_definitions` / `form_fields`, a publish
 flow and an answer-validation module. The referral form moved to the client, migration `0008`
 dropped both tables and `referrals.form_definition_id`, and the referrer and reason routes it also

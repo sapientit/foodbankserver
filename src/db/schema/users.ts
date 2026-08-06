@@ -5,12 +5,21 @@ import { sql } from 'drizzle-orm';
 /**
  * Roles.
  *
- * Only `admin` and `team_lead` are used. `volunteer` is enumerated anyway
- * because SQLite cannot extend a CHECK constraint without rebuilding the
- * table, and adding a role later is far more likely than removing one.
- * Enumerating it costs nothing; needing it later would cost a migration.
+ * Three, and each is a different job rather than a rank. An administrator runs
+ * the food bank, a team leader runs the sessions, and a fuel administrator
+ * does one thing and sees nothing else at all. **`fuel_admin` is deliberately
+ * not a variety of administrator** — it is the boundary that stops somebody
+ * brought in to help with fuel bills reading why every household in the
+ * borough was referred. See `INITIAL_SPEC1.txt`, #Roles.
+ *
+ * `volunteer` was here until 0018, enumerated speculatively on the reasoning
+ * that adding a role later would cost a table rebuild. Adding `fuel_admin` was
+ * that rebuild, so the speculation paid for nothing and the value went with
+ * it. Do not add another on the same argument — see
+ * `docs/engineering/d1-constraints.md`, which counts what guessing has cost
+ * this schema already.
  */
-export const USER_ROLES = ['admin', 'team_lead', 'volunteer'] as const;
+export const USER_ROLES = ['admin', 'team_lead', 'fuel_admin'] as const;
 export type UserRole = (typeof USER_ROLES)[number];
 
 /**
@@ -48,7 +57,7 @@ export const users = sqliteTable(
     updatedAt: text('updated_at').notNull(),
   },
   (table) => [
-    check('users_role_valid', sql`${table.role} IN ('admin', 'team_lead', 'volunteer')`),
+    check('users_role_valid', sql`${table.role} IN ('admin', 'team_lead', 'fuel_admin')`),
     check('users_is_active_boolean', sql`${table.isActive} IN (0, 1)`),
   ],
 );

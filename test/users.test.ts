@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers';
 import { eq } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createDatabase } from '../src/db/client.ts';
-import { refreshTokens, users } from '../src/db/schema/users.ts';
+import { refreshTokens, users, type UserRole } from '../src/db/schema/users.ts';
 import { authHeaders, buildTestApp, devLogin, seedUser, type TestApp } from './helpers/app.ts';
 
 const db = createDatabase(env.DB);
@@ -91,7 +91,10 @@ describe('user maintenance', () => {
     expect(await duplicate.json()).toMatchObject({ error: { code: 'CONFLICT' } });
   });
 
-  it('never offers a role the system does not use', async () => {
+  it('refuses a role the database no longer has', async () => {
+    // `volunteer` was removed from the schema in migration 0018. Keeping it as
+    // the example here turns a stale fixture into a regression guard: if it is
+    // ever quietly reinstated, this starts failing.
     const response = await createUser(testApp, adminToken, {
       email: 'volunteer@foodbank.org',
       displayName: 'Vol',
@@ -99,6 +102,36 @@ describe('user maintenance', () => {
     });
 
     expect(response.status).toBe(400);
+  });
+
+  it('refuses a removed role at the database constraint, not only in Zod', async () => {
+    // Deliberately lying to the type system to get past validation and reach
+    // the CHECK constraint itself. Without this the test above would still
+    // pass if 0018 had never run.
+    const write = db.insert(users).values({
+      id: crypto.randomUUID(),
+      email: 'straight-to-the-table@foodbank.org',
+      displayName: 'Vol',
+      role: 'volunteer' as UserRole,
+      googleSubject: null,
+      isActive: 1,
+      lastLoginAt: null,
+      createdAt: '2026-08-04T09:00:00.000Z',
+      updatedAt: '2026-08-04T09:00:00.000Z',
+    });
+
+    await expect(write).rejects.toThrow();
+  });
+
+  it('creates a fuel administrator', async () => {
+    const response = await createUser(testApp, adminToken, {
+      email: 'fuel@foodbank.org',
+      displayName: 'Fenella Fuel',
+      role: 'fuel_admin',
+    });
+
+    expect(response.status).toBe(201);
+    expect(await response.json()).toMatchObject({ role: 'fuel_admin' });
   });
 
   it('lists active users by default and retired ones on request', async () => {

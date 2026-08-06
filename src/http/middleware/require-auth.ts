@@ -35,8 +35,10 @@ export const requireAuth: MiddlewareHandler<AppEnv> = async (c, next) => {
  * Restricts a route to the given roles. Compose after `requireAuth`.
  *
  * Prefer naming roles explicitly at each route over inventing a hierarchy —
- * "team_lead is a lesser admin" stops being true the moment one permission
- * goes the other way, and there are only two roles.
+ * "team_lead is a lesser admin" stops being true the moment one permission goes
+ * the other way. `fuel_admin` makes the point plainly: it is not a lesser
+ * anything, it reaches one route no other role is defined by, and a hierarchy
+ * has nowhere to put it.
  */
 export function requireRole(...roles: readonly UserRole[]): MiddlewareHandler<AppEnv> {
   return async (c, next) => {

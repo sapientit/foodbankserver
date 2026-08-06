@@ -87,3 +87,18 @@ export const SMS_MESSAGE_RETENTION_DAYS = 30;
  * at the provider for no gain. Five keeps a full session inside a few seconds.
  */
 export const SMS_SEND_CONCURRENCY = 5;
+
+/**
+ * How far back the fuel help list reaches, counted from today in London.
+ *
+ * Fourteen **dates**, today included — so `today - 13` is the earliest session
+ * listed, not `today - 14`. The charity asked for a fortnight and meant one:
+ * counting fourteen days *back* from today would span fifteen dates and, with
+ * weekly sessions, would catch three of them rather than two on the weeks
+ * where the boundary lands on a session day.
+ *
+ * The list is rolling: the point is what has happened since it was last looked
+ * at, and a fuel crisis from a year ago is not a reason to ring somebody
+ * today. See `INITIAL_SPEC1.txt`, #Fuel help list.
+ */
+export const FUEL_HELP_WINDOW_DAYS = 14;

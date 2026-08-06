@@ -26,8 +26,8 @@ POST /api/v1/auth/dev-login   { "email": "pete@foodbank.org" }
   + Set-Cookie: foodbank_refresh=…  HttpOnly; Secure; SameSite=Strict
 ```
 
-The `role` in that response is what you choose the menu from — `admin` or
-`team_lead`.
+The `role` in that response is what you choose the menu from — `admin`,
+`team_lead` or `fuel_admin`.
 
 **The email must already have a user record.** Signing in never creates an
 account; an admin does, through `/api/v1/users`. An unknown address gets `401`
@@ -128,20 +128,26 @@ gap — say so rather than assuming this closes it.
 
 ## 2. Roles
 
-Two roles. Use them for menus; **never for access control.**
+Three roles. Use them for menus; **never for access control.**
 
-|                                                 | `admin` | `team_lead` |
-| ----------------------------------------------- | ------- | ----------- |
-| Run a session: pick lists, printing, attendance | ✅      | ✅          |
-| Read sessions, stock, referrals, model parcels  | ✅      | ✅          |
-| See the session list more than six days ahead   | ✅      | ❌          |
-| The weekly stock take                           | ✅      | ✅          |
-| Create or amend sessions and referrals          | ✅      | ❌          |
-| Maintain the stock item list                    | ✅      | ❌          |
-| Model parcels and the household grid            | ✅      | ❌          |
-| Referrers and reasons for referral              | ✅      | ❌          |
-| User maintenance                                | ✅      | ❌          |
-| **See why someone was referred**                | ✅      | ❌          |
+|                                                 | `admin` | `team_lead` | `fuel_admin` |
+| ----------------------------------------------- | ------- | ----------- | ------------ |
+| Run a session: pick lists, printing, attendance | ✅      | ✅          | ❌           |
+| Read sessions, stock, referrals, model parcels  | ✅      | ✅          | ❌           |
+| See the session list more than six days ahead   | ✅      | ❌          | ❌           |
+| The weekly stock take                           | ✅      | ✅          | ❌           |
+| Create or amend sessions and referrals          | ✅      | ❌          | ❌           |
+| Maintain the stock item list                    | ✅      | ❌          | ❌           |
+| Model parcels and the household grid            | ✅      | ❌          | ❌           |
+| Referrers and reasons for referral              | ✅      | ❌          | ❌           |
+| User maintenance                                | ✅      | ❌          | ❌           |
+| **See why someone was referred**                | ✅      | ❌          | ❌           |
+| **The fuel help list**                          | ✅      | ❌          | ✅           |
+
+**`fuel_admin` is not a lesser `admin`, and a menu built by subtracting from
+one will be wrong for it.** It reaches `GET /api/v1/fuel-help-list` and
+`GET /api/v1/auth/me` and nothing else at all — every other endpoint answers
+`403`. Its whole screen is one list. See §5e.
 
 The server re-checks the role on every request from the signed token. If someone
 edits `role` in your app's state they will see extra menu items and get `403` on
@@ -811,6 +817,56 @@ session is not a commitment.
 
 `POST /sessions/{id}/confirm` is the point of no return. After it, changing an
 outcome is a `409`. Disable the control there rather than letting someone try.
+
+---
+
+## 5e. The fuel help list
+
+```
+GET /api/v1/fuel-help-list
+  → 200 { households: [ { referralId, sessionDate, refereeFirstName,
+                          refereeSurname, refereeAddress, refereePostcode,
+                          refereePhone, answers } ] }
+```
+
+**This is the whole of a `fuel_admin`'s application.** That role reaches this
+and `GET /api/v1/auth/me` and nothing else — every other endpoint answers
+`403`. Build it one screen, not a cut-down version of the staff app. An `admin`
+can read it too, so the charity is not locked out when the usual person is away;
+a `team_lead` cannot.
+
+**The screen is meant to be pasted into Excel.** The people doing fuel work live
+in a spreadsheet, and the charity would rather they pasted a list than retyped
+one and got a phone number wrong. A plain table that copies cleanly beats
+anything clever.
+
+A household is listed when **all four** are true: they asked for help with fuel;
+they were **given their parcel** (a delivery counts as attended); the session is
+**confirmed**; and that session was **within the last fourteen dates, counting
+today**. Ordered oldest session first, so the top of the list is what is about
+to age out.
+
+**Extract the pre-payment meter and permission-to-ring answers from `answers`.**
+They are ordinary questions on the form you own, so the server does not know
+which keys they are and will not guess — the same arrangement as _Cause Details_
+on the listener sheet. **Nobody is filtered out on them.** A household who said
+not to ring them is still listed, with their answer beside them, because the
+decision belongs to the person about to make the call and not to the system.
+Show that answer prominently; it is the whole reason it is there.
+
+**A row is a referral, not a household.** Being fed twice in a fortnight is not
+expected and nothing de-duplicates it, so a household who was would appear once
+per session.
+
+`sessionDate` is the session the **parcel was issued at**, which is not always
+the session the referral currently points at — a referral moved after picking
+keeps its parcel on the original session. Do not join it back to a referral's
+own session and expect them to match.
+
+**No reason for referral, no date of birth, no household counts, no delivery
+flag.** None of them bears on a fuel bill. `refereePhone` is free text exactly
+as the referrer typed it — it is **not** normalised, so format for display
+rather than assuming a shape, and it may be `null`.
 
 ---
 

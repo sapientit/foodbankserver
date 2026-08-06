@@ -3,12 +3,18 @@ import { z } from 'zod';
 /**
  * The roles an admin may hand out.
  *
- * The database enumerates `volunteer` as well, deliberately — SQLite cannot
- * extend a CHECK constraint without rebuilding the table. But no route grants
- * a volunteer anything, so offering it here would create accounts that can log
- * in and then do nothing. Add it when a route needs it.
+ * All three, since 0018 removed the speculative `volunteer` and the database
+ * now enumerates exactly the roles that have routes. So this list and
+ * `USER_ROLES` currently say the same thing.
+ *
+ * **They stay two constants all the same.** "What the database will store" and
+ * "what an administrator may pick from a dropdown" are different questions,
+ * and they have already diverged once: a role can exist in the schema before
+ * any route grants it anything, and offering that one here would create
+ * accounts that sign in and can do nothing. Collapsing them would lose the
+ * place to say so.
  */
-export const ASSIGNABLE_ROLES = ['admin', 'team_lead'] as const;
+export const ASSIGNABLE_ROLES = ['admin', 'team_lead', 'fuel_admin'] as const;
 export type AssignableRole = (typeof ASSIGNABLE_ROLES)[number];
 
 export const userInputSchema = z.object({

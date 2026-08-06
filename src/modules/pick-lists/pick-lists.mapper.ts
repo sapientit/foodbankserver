@@ -1,4 +1,5 @@
 import type { Actor } from '../../core/actor.ts';
+import { parseAnswers } from '../../core/answers.ts';
 import type { PickList } from '../../db/schema/pick-lists.ts';
 import type { Referral } from '../../db/schema/referrals.ts';
 import type { ParcelWithLines } from './pick-lists.repository.ts';
@@ -150,18 +151,6 @@ export function toPrintParcelResponse(
     notes: entry.parcel.notes,
     lines: toParcelResponse(entry, undefined).lines,
   };
-}
-
-function parseAnswers(answersJson: string | null): Record<string, unknown> {
-  if (answersJson === null) return {};
-  try {
-    const parsed: unknown = JSON.parse(answersJson);
-    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : {};
-  } catch {
-    return {};
-  }
 }
 
 /** An admin sees a little more of the picking screen than a team lead does. */
