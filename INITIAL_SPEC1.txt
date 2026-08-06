@@ -99,6 +99,12 @@ Each match says which of the three it matched on, because they are not equally c
 
 Matching needs the three fields in a settled form - a postcode typed with no space and one typed in lower case are the same postcode, and a phone number is the same number however it was written.  That standardising is for matching only.  The postcode, phone number and date of birth as the referrer sent them stand untouched, as everything else on a referral does.
 
+The referral form puts the postcode into that settled form as it is typed, and the food bank does the same again when the referral arrives.  Doing it twice is deliberate: the form is the better place to do it, because it can show the referrer what has been understood while they can still correct it, but a referral can reach the food bank by other means and the matching cannot depend on every one of them having tidied up first.  For the two to agree, the rule has to be written down where both can read it rather than settled once at each end.
+
+Putting a value into a settled form is not the same as insisting on one.  A postcode the rule cannot make sense of does not stop the referral: it is taken, stored as typed, and simply not matched on.  The food bank would rather look at a referral with an odd postcode on it than turn away a household because of the way an address was written down.
+
+A field that is missing is not a match either.  The phone number is optional, and two households that both have no phone number have nothing in common - that is an absence, not a shared detail.  The same holds for a postcode or a phone number the rule could make nothing of.  Only a value the food bank actually holds and understands can match another.
+
 The twelve months cannot reach further back than the food bank keeps personal details for.  Once a referral's personal details have been forgotten there is nothing left to match on, and the household is not found.  That is accepted rather than worked around: the food bank is not going to hold names and addresses for longer than it otherwise would in order to make this count go back further.
 
 #Referral maintenance.
