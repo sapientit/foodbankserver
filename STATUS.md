@@ -50,14 +50,14 @@ them is a gap in the code.**
 
 | Feature                  | State                                                                                                                                                                                                     | What it needs                                                                                                             |
 | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| **PII purge**            | Runs nightly on the `17 2 * * *` cron and purges **nothing**. Clears only the referee's own fields; the referrer's details and `reviewComment` survive. **One `UPDATE` per row** — see the warning below. | `PII_RETENTION_DAYS`. The period is **Q2** and unanswered.                                                                |
+| **PII purge**            | Runs nightly on the `17 2 * * *` cron and purges **nothing**. Clears only the referee's own fields; the referrer's details and `reviewComment` survive. **One `UPDATE` per row** — see the warning below. | `PII_RETENTION_DAYS=365`. The period is settled at twelve months; the variable is still unset.                            |
 | **Turnstile**            | Verified on `POST /public/referrals` before parsing; **skipped when no secret is set**, which can only be development because production refuses to boot without one.                                     | A Turnstile widget and `TURNSTILE_SECRET_KEY`.                                                                            |
 | **CORS**                 | Allowlist middleware applied app-wide; with no origins configured it emits nothing, which is correct same-origin behaviour.                                                                               | `ALLOWED_ORIGINS`, only if the frontend is on a different origin. Never a wildcard.                                       |
 | **Rate limiting**        | Applied per route to all six public endpoints, keyed on `cf-connecting-ip`. The binding is **optional at runtime**, so it is inert in the test runner and in a plain `wrangler dev`.                      | Nothing in code — the bindings are declared in `wrangler.jsonc`. It is live wherever the binding exists.                  |
 | **Access token signing** | Refuses to start without a key.                                                                                                                                                                           | `wrangler secret put AUTH_JWT_SECRET --env production`.                                                                   |
 | **SMS reminders**        | Every route, the webhook and the 30-day purge are live. With no credentials the send path records **every household as a failure** rather than pretending — which is visible on the screen, not silent.   | `SMS_API_KEY`, `SMS_SENDER` (the reply number) and `SMS_WEBHOOK_SECRET`. Production refuses to boot without the last one. |
 
-**One hazard in the purge, for whoever answers Q2.** `purgeReferralPii` issues one `UPDATE` per
+**One hazard in the purge, for whoever sets `PII_RETENTION_DAYS`.** `purgeReferralPii` issues one `UPDATE` per
 candidate row. That is fine on a nightly tick clearing a handful of referrals, but the **first** run
 after `PII_RETENTION_DAYS` is finally set will face every referral older than the period at once —
 months of history — and the free plan allows 50 queries per invocation. Set the period before there
@@ -88,10 +88,10 @@ including one this repo raised.** `grep x-assumed openapi.yaml` is the standing 
 
 | #       | Question                                                 | What the code does meanwhile                                                                                             |
 | ------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| **Q2**  | How long is personal data kept?                          | Purge runs, purges nothing. Blocks going live with real data.                                                            |
 | **Q12** | May any form answers survive a purge?                    | Drops the answers blob **whole** — with no form definition the server cannot tell a personal answer from a harmless one. |
 | **Q26** | Who appears on the listener sheet?                       | Active and awaiting-review households; cancelled and rejected ones are left off. `x-assumed` on the operation.           |
-| **Q24** | Does the Google Sheets export carry names and addresses? | Not built. Blocks the export's row shape; personal columns would also outlive whatever **Q2** decides.                   |
+| **Q24** | Does the Google Sheets export carry names and addresses? | Not built. Blocks the export's row shape; personal columns would also outlive the twelve-month purge.                    |
+| **Q27** | Is a forgotten referral anonymised or deleted?           | Anonymised — the row stays and its counts remain reportable. Deleting is blocked by the `parcels` FK anyway.             |
 
 ---
 

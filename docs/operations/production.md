@@ -21,7 +21,7 @@ configuration.**
    whatever `Origin` arrives, which is no policy at all. Empty means same-origin only, which is
    correct if the frontend ships as Workers static assets.
 4. Implement Google auth. `AUTH_MODE=google` currently means "no way to log in".
-5. Decide the retention period and set `PII_RETENTION_DAYS` — see below.
+5. Set `PII_RETENTION_DAYS=365` — the period is settled; see below.
 
 ## What is already enforced at runtime
 
@@ -54,11 +54,14 @@ is refused with a `403` rather than answered.
 
 ## Retention
 
-`PII_RETENTION_DAYS` is **unset**, so the purge runs nightly and purges nothing. That is deliberate:
-guessing a period and deleting somebody's data on that guess would be worse than doing nothing. The
-job, its tests and the cron wiring are already in place — setting the variable is the whole change.
+The period is **twelve months**, settled by the charity on 2026-08-06 (`INITIAL_SPEC1.txt`,
+`#Forgetting a referral`). `PII_RETENTION_DAYS` is nonetheless still **unset**, so the purge runs
+nightly and purges nothing. Setting it to `365` is the whole change — and it is the moment the
+system starts deleting personal data, which is why it is a deliberate step at go-live rather than
+something already done.
 
-The period itself is **Q2** in `OPEN-QUESTIONS.md` and only Pete can settle it.
+Twelve months is also the lookback the repeat-referral count on the review screen depends on. Do not
+shorten one without the other: a shorter retention makes that count under-report silently.
 
 ## Backups
 

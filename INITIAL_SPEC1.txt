@@ -64,7 +64,9 @@ Note that the referral is done without authentication (other than checking the e
 The reason for referral is chosen from a list the administrators maintain rather than typed in.  It is there to be reported on - how many households came for which reason - and free text cannot be counted.  It also means the reason can be kept after the personal details have been removed, because a reason from a fixed list says nothing about who the person was.
 
 #Forgetting a referral
-After a while the food bank stops holding the household's details.  What is removed is the referee's own information and nothing else: their name, their date of birth, their address and postcode, their phone number, and every answer they gave on the form.  How long "a while" is has not been settled yet.
+Twelve months after the referral was made, the food bank stops holding the household's details.  What is removed is the referee's own information and nothing else: their name, their date of birth, their address and postcode, their phone number, and every answer they gave on the form.
+
+Twelve months is what the charity is prepared to defend holding somebody's name and address for.  It is also the shortest period that leaves the repeat-referral count on the review screen telling the truth, since that count looks back twelve months and matches on the very details this removes.  The two were settled together and moving either without the other quietly breaks it: shortening this makes the review screen report households as new when they are not.
 
 What is kept is the number of adults and children, whether it was a delivery, whether they needed help with fuel, and the reason they were referred, because once the name and address have gone those are counts rather than people, and they are what the food bank reports on.
 
@@ -83,6 +85,22 @@ Every referral is meant to be read by an administrator, not only the ones held b
 
 A reviewed referral is an ordinary referral in every other way.  It holds its place on the session exactly as an accepted one does, it is picked, and it appears on the picking list and the listener sheet - the only thing being reviewed says is that somebody has read it.  Cancelling a referral takes it out whether it had been reviewed or not, and the food bank does not need to know afterwards whether a cancelled referral had been read.
 
+A food bank parcel is emergency support and not a way of living.  The intention is that a household is referred once, while their benefits are being sorted out or whatever else has gone wrong is put right.  A household coming back again and again is not a fraud to be caught but a sign that the emergency was never resolved, and the administrator reviewing the referral is the person who should see that and decide what to do about it.
+
+So the review screen shows, for the household being reviewed, how many times they have already been given a parcel in the last twelve months, and when the most recent of those was.  A button beside it lists those referrals in full, most recent first, with the name, address, phone number, postcode and date of birth on each.
+
+What counts is a parcel the household actually received.  A referral that was rejected, cancelled, or booked and not turned up for does not count, because the figure is meant to say how much food this household has been given and not how many times somebody asked on their behalf.
+
+The matching is approximate and the system does not draw a conclusion from it.  Nothing is blocked, refused or flagged automatically: the administrator is shown what was found and makes the call.  A number on a screen is the right amount of help here, and a rule that refused a household on the strength of a shared postcode would be the wrong kind.
+
+Three things are matched on: date of birth, postcode, and phone number.  Any one of them matching is enough.  Names are deliberately not matched on, because different people from the same household get referred at different times and the same name is typed differently by different referrers, so a name is the least reliable of the things the food bank holds.
+
+Each match says which of the three it matched on, because they are not equally convincing.  A match on all three is almost certainly the same household; a match on postcode alone may be nothing more than two families in the same block of flats, a hostel or a refuge - which is exactly the housing the households the food bank serves are most likely to be in.  An administrator who is told only "three previous matches" cannot tell those apart, and would learn to ignore the number.
+
+Matching needs the three fields in a settled form - a postcode typed with no space and one typed in lower case are the same postcode, and a phone number is the same number however it was written.  That standardising is for matching only.  The postcode, phone number and date of birth as the referrer sent them stand untouched, as everything else on a referral does.
+
+The twelve months cannot reach further back than the food bank keeps personal details for.  Once a referral's personal details have been forgotten there is nothing left to match on, and the household is not found.  That is accepted rather than worked around: the food bank is not going to hold names and addresses for longer than it otherwise would in order to make this count go back further.
+
 #Referral maintenance.
 Administrators can cancel referrals or move them to another session (even if that exceeds capacity with a client generated warning).  A referral that has been cancelled or rejected cannot be amended, and cannot be moved either - there is nothing that brings a referral back, so moving a finished one only shifts a dead record from one session to another.
 
@@ -93,7 +111,11 @@ Corrections are made by writing them into the "other information" answer on the 
 Which answer is the "other information" one is a matter for the form, so the server takes the answers as a set and does not police which of them changed.
 
 #Login
-Authentication will eventually be via a Google id.  Initial version will be a dummy signon page with no validation, but this should still generate an expiring security token, with refresh tokens etc.
+Signing on is by Google identity.  Everyone who uses the system has an account on the charity's own Google domain, which the charity controls, and a Google identity from outside that domain is refused even when the address on it matches an account the food bank has created.  That restriction is what makes the Google account the thing being trusted rather than an address typed into a box: somebody who opens a Gmail account in a volunteer's name gets nowhere with it.
+
+Alongside it there is a dummy signon page with no validation, which accepts any address that already has an account.  It exists because the charity's Google domain was not available when the system was built and the rest of the system could not wait for it.  The two sit side by side and a deployment is configured to use one or the other.  The dummy signon is not a fallback that a failed Google signon drops through to - a signon that quietly stops checking anything when the checking breaks is worse than one that fails and says so.  Either way, signing on produces an expiring security token with refresh tokens as described below, and everything after the moment of signing on is the same whichever was used.
+
+The dummy signon is for development only, and the system refuses to start in production while it is configured, so the charity cannot go live on it by accident.  It follows that going live depends on the charity's Google domain being available, and no amount of the rest of the system being finished changes that.
 
 A signon lasts 8 hours and then the person signs in again.  The 8 hours are counted from the moment they signed in and carrying on working does not push them back, so a signon that started at eight in the morning has ended by four in the afternoon whatever has happened in between.  Eight hours covers a session in the warehouse without a team leader being thrown out halfway through marking attendance, and it means a tablet left on a shared bench is not still signed in the next morning.  Within those 8 hours the client renews its security token quietly in the background, so nobody is asked to sign in again while they are working.
 
@@ -104,13 +126,15 @@ Only people the food bank has already given an account to can sign in.  Signing 
 A new database starts with a single administrator account already in it, because otherwise there is nobody who could create the first one and nobody who could create the person who creates everyone else.  That account is pete@x.com for the time being.  It is a stand-in rather than the charity's own address, and it is replaced when signon moves to Google.
 
 #Roles
-There are two roles, administrator and team leader.
+There are three roles, administrator, team leader and fuel administrator.
 
 Team leaders run the sessions.  That means the picking list, printing it, and marking who attended.  It also means the stock itself - doing the weekly stock take - because the team leader is the person standing in the warehouse.  They also see why each household was referred: the listener sheet is a team leader job, not an administrator one, and it needs the reason for referral on it.  The reason is chosen from a fixed list rather than typed, so it says what kind of crisis brought the household in without saying anything about the household itself.
 
 Administrators do everything a team leader does, and additionally maintain the list of stock items, the authorised referrers, the reasons for referral, the model parcels and household grid, the user accounts, and amendments to sessions and referrals.  The referral form itself is not on that list: it is application configuration rather than data, so it changes with a release rather than on a maintenance screen.
 
 The stock item list is the one part of stock that is administrator only.  Adding an item or changing its shelf number changes every picking list and every stock take that follows, so it is a maintenance decision rather than a warehouse one.
+
+A fuel administrator does one job: the fuel help list, described below.  The role exists because that job is done by somebody who is not otherwise part of running the food bank, and it carries names, addresses and phone numbers, so it is deliberately not a variety of administrator.  A fuel administrator sees the fuel help list and nothing else at all - no sessions, no referrals, no listener sheet, no stock, no user accounts.  The role is a boundary rather than a job title: it is what stops somebody brought in to help with fuel bills from being able to read why every household in the borough was referred.  Administrators can produce the fuel help list as well, so that the charity is not locked out of its own report when the person who normally runs it is away or their account has been made inactive.  Team leaders cannot: it is not something that happens on the day.
 
 #Stock maintenance
 There are about 120 stock items, with a maintenance facility to amend them.
@@ -186,6 +210,23 @@ The listener sheet is the most sensitive thing the food bank prints: a list of n
 What becomes of the sheet after the session is handled by the food bank as a matter of process, not by the system.  Looking after the paper is something the volunteers are asked to do properly; the system does nothing towards it, and does not keep a record of a sheet having been produced or of who produced it.
 
 After picking is complete, modifications can be made to the list.
+
+#Fuel help list
+Households say on the referral form whether they need help with gas or electricity.  It is a fixed question rather than an ordinary one because the food bank reports on it, and because somebody follows it up: the fuel help list is what that person works from.
+
+The list is a screen rather than a printed sheet, and it is laid out so that it can be copied straight into a spreadsheet.  The people who deal with fuel work in Excel, and the food bank would rather they pasted a list than retyped one and got a phone number wrong.
+
+A household is on the list when four things are true: they said they needed help with fuel; they were given their parcel, whether they collected it or it was delivered to them; the session has been confirmed; and that session was within the last two weeks.  The list is ordered by the date of the session, oldest first, so that whoever is working through it deals with the households closest to dropping off the end.
+
+Each of those four earns its place.  There is nothing to follow up for a household that was expected and never got their parcel, so it is attendance and not a booked place that puts somebody on the list - and a delivery counts as having attended, here as everywhere else.  The session has to be confirmed because until it is signed off its outcomes can still be taken back, and a household whose attendance is about to be reversed should not have been rung about their gas bill in the meantime.  The two weeks make it a rolling list: the point is what has happened since it was last looked at, and a fuel crisis from a year ago is not a reason to ring somebody today.
+
+Each row carries the household's name, address, postcode and phone number, the date of the session, and the answers given on the referral form.  The name and address are who is being helped and where they live, and the phone number is there because the follow-up is a phone call.
+
+The two questions that follow the fuel question - whether the household is on a pre-payment meter, and whether they will let us ring them about it - are ordinary questions on the form rather than fixed columns.  So the list carries the form answers as they were given and the screen picks those two out to show, in the same way the listener sheet shows "Cause Details".  The system does not leave anybody off the list on the strength of them: every household meeting the four conditions is listed, and the person about to make the call reads the answers and decides whether to make it.  That judgement belongs to a person, and a household who said no to a call may still be somebody worth writing to.
+
+The list does not carry the reason for referral.  A fuel administrator is being told that a household needs help with a fuel bill, which is all they need to know to help with it; why the household was referred is not theirs, and the listener sheet remains the only place outside the administrators where the reason appears.
+
+It does not carry the date of birth, the household numbers, or whether the parcel was delivered either.  None of them bears on helping with a fuel bill, and the list already holds enough to identify somebody.
 
 #Model parcels and the household grid
 The "series of rules" that turns a household into a model picking list is a lookup, not a calculation.

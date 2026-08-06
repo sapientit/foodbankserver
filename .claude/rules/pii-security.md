@@ -39,8 +39,11 @@ may leave D1 — not to logs, not to Analytics Engine, not to any third-party fe
 identifying columns are null those become statistics, which is how reporting survives a purge. That
 only works because the reason is chosen from a list rather than typed.
 
-It is wired into the nightly cron and **does nothing until `PII_RETENTION_DAYS` is set**. The period
-is deliberately unset: see **Q2** in `OPEN-QUESTIONS.md`. Do not pick one.
+It is wired into the nightly cron and **does nothing until `PII_RETENTION_DAYS` is set**. The
+charity has settled the period at **twelve months** (`INITIAL_SPEC1.txt`, `#Forgetting a referral`),
+so the value is `365` — but the variable is still unset, because setting it is what actually starts
+deleting. Do not change the period; twelve months is also the floor the repeat-referral count on the
+review screen depends on, and shortening it silently makes that count under-report.
 
 ## Validation
 

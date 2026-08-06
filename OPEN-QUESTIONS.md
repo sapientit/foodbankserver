@@ -50,25 +50,9 @@ was making it invisibly.
 
 ---
 
-## Q2 — How long is personal data kept?
-
-`Status: open` · `Raised by: server` · `Blocks: going live with real data`
-
-Referrals hold names, addresses, phone numbers and a reason for needing food. Nothing currently
-deletes any of it. `PII_RETENTION_DAYS` is deliberately unset, so the purge job runs and purges
-nothing — guessing a period and deleting somebody's data on the guess would be worse than doing
-nothing.
-
-The job, its tests and the cron are all in place. This needs a number, and it is a decision about
-what the charity is comfortable defending, not a technical one.
-
-**A:**
-
----
-
 ## Q12 — When personal data is purged, may any of the form answers be kept?
 
-`Status: open` · `Raised by: server` · `Blocks: nothing today — the purge is dormant until Q2`
+`Status: open` · `Raised by: server` · `Blocks: the purge, once PII_RETENTION_DAYS is set to 365`
 
 Closing Q11 moved the referral form into the client, so the server no longer holds a definition
 saying which questions ask for personal data. The old purge used that definition to keep the
@@ -181,9 +165,9 @@ What the charity should know before deciding:
   including to a third-party fetch, which is exactly what this export is. Sending personal fields
   means changing that rule deliberately, in the spec, not quietly in a job. A Google Workspace with
   EU data regions configured keeps residency; a personal Gmail account does not.
-- **The purge cannot reach the Sheet.** Whatever `PII_RETENTION_DAYS` is eventually set to (**Q2**),
-  it clears rows in D1 only. Personal data in the Sheet stays until somebody deletes it by hand, so
-  the answer to Q2 becomes partly untrue the day this ships with personal columns in it.
+- **The purge cannot reach the Sheet.** The charity has settled on twelve months, but that clears
+  rows in D1 only. Personal data in the Sheet stays until somebody deletes it by hand, so "we hold
+  it for twelve months" becomes partly untrue the day this ships with personal columns in it.
 - **Who can see the Sheet is outside this system entirely.** Roles, `requireRole` and the response
   mappers stop at the API boundary. Anyone the Sheet is shared with sees every column in it.
 
@@ -221,3 +205,57 @@ never coming.
 
 **A:**
 Cancelled and rejected and deliveries not included.
+
+---
+
+## Q27 — When a referral is forgotten, is it anonymised or deleted?
+
+`Status: open` · `Raised by: Pete` · `Blocks: nothing today — the purge is written the anonymising way`
+
+Twelve months is settled (`INITIAL_SPEC1.txt`, `#Forgetting a referral`). What is not settled is what
+"stops holding the household's details" does to the row.
+
+**What it does today — anonymise.** `purgeReferralPii` nulls the referee's name, date of birth,
+address, postcode, phone and every form answer, and stamps `piiPurgedAt`. The row stays. What
+survives is `adults`, `children`, `isDelivery`, `needsFuelHelp` and `reasonId` — deliberately,
+because the spec says those become counts rather than people once nobody is identifiable, and they
+are what the food bank reports on. The referrer's own details and the administrator's
+`reviewComment` survive too, because the point of forgetting is to stop holding details of the
+household, not to lose track of the professional who sent them.
+
+**Pete's view on 2026-08-06** was that since the charity is now committing to hold personal data for
+a full twelve months, deleting outright at the end of it might make more sense than half-keeping the
+record. That is a reasonable instinct and it is why this is being asked rather than left.
+
+What the charity should know before deciding:
+
+- **Deleting ends reporting beyond twelve months.** "We fed 340 households, 890 people, 22% for
+  benefit delay" is answerable today for any period, because the anonymised rows are still countable.
+  Delete them and the food bank can report on the last twelve months only — no year-on-year
+  comparison, which is usually what a funder or a trustee asks for. This is the single biggest cost
+  and it is not recoverable later.
+- **It also deletes the referrer's record.** `referrerOrganisation`, `referrerName`, and the
+  `reviewComment` explaining why a referral was accepted or rejected all live on the same row. The
+  spec currently says those are kept on purpose. Deleting the row reverses that decision as a side
+  effect, so if deletion is chosen the spec needs to say whether that is intended.
+- **It is not currently possible without also deciding about the parcel.** `parcels.referral_id`
+  references `referrals.id` with no `ON DELETE` behaviour, so SQLite refuses to delete a referral
+  while its parcel exists. Deletion would need either a table rebuild to add `ON DELETE SET NULL`,
+  or to delete the parcel too — and the parcel is what records that a household was given food and
+  what was in it. So "just delete it" is really "and what happens to the record that a parcel was
+  issued?", which is a second question the charity has to answer.
+- **The argument for deleting is that anonymised is a claim, not a fact.** A row the charity
+  describes as anonymous is one it must keep confident really is. Today it plainly is — the retained
+  fields are five numbers and a dropdown. But "we no longer hold it" is simpler to say to a
+  household who asks, and simpler to defend, than "we hold a record of you with the identifying parts
+  removed."
+- **There is a precedent pointing both ways.** Text messages are **deleted** after thirty days, and
+  `purge-sms.ts` explains why: the message body _is_ the personal data, so an empty row records
+  nothing worth reporting on. Referrals were made to null rather than delete for the opposite reason.
+  Whether that reasoning still holds is exactly what this question asks.
+
+A middle answer exists if the charity wants one: keep a counts-only row with no link back to the
+referral at all, and delete the referral. That preserves reporting and holds nothing about a person,
+at the cost of a second table and the work to maintain it.
+
+**A:**

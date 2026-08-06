@@ -87,7 +87,13 @@ classified has to be assumed personal. Keeping a key because it looks harmless i
 purge cannot take back. Whether the charity needs any answers to survive for reporting is **Q12** in
 `OPEN-QUESTIONS.md`.
 
-The retention period itself is **Q2** and deliberately unanswered. The schema isolates PII so a
-purge needs no table rebuild, the job is written, tested and scheduled — it simply purges nothing
-until `PII_RETENTION_DAYS` is set. Guessing a period and deleting somebody's data on that guess
-would be worse than doing nothing.
+The retention period is **twelve months**, settled by the charity on 2026-08-06 and recorded in
+`INITIAL_SPEC1.txt` under `#Forgetting a referral`. The schema isolates PII so a purge needs no
+table rebuild, and the job is written, tested and scheduled — it purges nothing until
+`PII_RETENTION_DAYS` is set to `365`, which is deliberately still pending, because setting it is the
+moment deletion begins.
+
+Twelve months is not only a privacy decision. The repeat-referral count on the admin review screen
+looks back twelve months and matches on date of birth, postcode and phone — the columns this purge
+nulls. A shorter period does not fail loudly; it makes that count under-report and tells an
+administrator a household is new when it is not. The two numbers are one decision.

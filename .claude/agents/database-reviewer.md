@@ -79,7 +79,9 @@ migration, repository and schema file in full, plus the service that composes th
   `toSafeError`.
 - Does the purge still work? `purgeReferralPii` nulls the identifying columns and drops the dynamic
   answers whole, keeping `adults`, `children`, `isDelivery` and `reasonId` as statistics. A new PII
-  column that the purge does not null is a finding. Do not choose a retention period — that is Q2.
+  column that the purge does not null is a finding — including a derived match key, which is as
+  identifying as what it was derived from. The retention period is settled at twelve months; do not
+  change it.
 
 **Tests**
 
