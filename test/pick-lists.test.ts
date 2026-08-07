@@ -380,38 +380,49 @@ describe('copying the contents', () => {
     ]);
   });
 
-  it('snapshots the household, and amending the referral cannot move it', async () => {
+  it('snapshots the household, and correcting the referral reports a divergence rather than moving it', async () => {
     const { testApp, token, world: w } = await world();
     const referral = await submitReferral(testApp, w, { adults: 1, children: 0 });
 
     const { id } = await generatePickList(testApp, token, w.sessionId);
 
-    // The household counts are no longer amendable at all (Q23), so the only
-    // amendment that can reach a referral after generation is its answers —
-    // and that must leave the picker's snapshot exactly where it was.
+    // The household counts are correctable again, so this is now reachable: a
+    // family of one turns out to be a family of three after the picker already
+    // has a parcel for one.
     const amended = await testApp.request(`/api/v1/referrals/${referral.id}`, {
       method: 'PATCH',
       headers: { ...authHeaders(token), 'content-type': 'application/json' },
-      body: JSON.stringify({ answers: { Other: 'Two more in the house since Tuesday' } }),
+      body: JSON.stringify({ adults: 2, children: 1 }),
     });
     expect(amended.status).toBe(200);
 
+    // The parcel does not move on its own. The picker's snapshot is what is
+    // being packed, and rewriting it underneath them is the thing the snapshot
+    // exists to prevent.
     const { parcels: rows } = await readPickList(testApp, token, id);
     expect(rows[0]?.adults).toBe(1);
+    expect(rows[0]?.children).toBe(0);
 
     const response = await testApp.request(`/api/v1/pick-lists/${id}/divergence`, {
       headers: authHeaders(token),
     });
     const divergence: {
-      changedHouseholds: { was: { adults: number }; now: { adults: number } }[];
+      changedHouseholds: {
+        parcelId: string;
+        was: { adults: number; children: number };
+        now: { adults: number; children: number };
+      }[];
     } = await response.json();
 
-    // `changedHouseholds` can no longer be produced through the API: the
-    // snapshot is taken at generation and nothing may change the counts
-    // afterwards. The comparison is still made rather than removed — whether
-    // that field should stay in the contract is a question for Pete, not a
-    // decision to take here.
-    expect(divergence.changedHouseholds).toEqual([]);
+    // Instead it is reported, so a team leader can decide whether to change the
+    // parcel. This path was unreachable while the counts were frozen.
+    expect(divergence.changedHouseholds).toEqual([
+      {
+        parcelId: rows[0]?.id,
+        was: { adults: 1, children: 0 },
+        now: { adults: 2, children: 1 },
+      },
+    ]);
   });
 
   it('reports a referral that arrived after generation', async () => {

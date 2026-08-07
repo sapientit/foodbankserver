@@ -388,32 +388,47 @@ next referral from that address is not held up. Three things to build around:
   referral is _not_ accepted either, so the next step is plain accept. A `422`
   means the referral has no referrer address to authorise at all.
 
-### Amending a referral — the surface has narrowed
+### Amending a referral
 
-**Breaking.** `PATCH /api/v1/referrals/{id}` used to accept the referee's name,
-date of birth, address, postcode and phone, the referrer's name and phone, the
-household counts, the delivery and fuel flags, the reason and the answers. It now
-accepts **`sessionId` (a move) and `answers`, and nothing else.** Any other field
-is a `400`.
+**Breaking, and it restores fields that were previously refused.**
+`PATCH /api/v1/referrals/{id}` accepts the household's own details again:
 
-That is the charity's decision, not a tidy-up. A referral records what somebody
-asked for, and a correction taken over the phone goes into the form's **other
-information** answer instead of being edited into the record silently. The reason
-it works that way is where the answers surface: beside the parcel on the picking
-screen, and on the listener sheet. Somebody acting on "they've moved, the address
-is wrong" is standing in the warehouse holding one of those — a quietly corrected
-address field reaches nobody.
+```
+refereeFirstName   refereeSurname     refereeDateOfBirth
+refereeAddress     refereePostcode    refereePhone (nullable)
+adults             children           isDelivery      needsFuelHelp
+reasonId           answers            sessionId (a move)
+```
 
-**What this means for your screens.** A referral edit form with fifteen fields
-has one field now. The household counts are the loss worth naming: if a family is
-four rather than three, the parcel is the thing to change — the pick list is
-editable per parcel and that is the screen the correction belongs on — and the
-note goes in other information so the picker knows why.
+A referrer who mistypes an address, or a household that moves between being
+referred and being fed, has to be correctable — a delivery goes to the address on
+the referral, so a wrong one there is a parcel on the wrong doorstep. **A full
+referral edit form is the right shape again.**
 
-**Which key is "other information" is yours.** The server holds no form
-definition, so it takes the answers as a set and does not police which of them
-moved. `answers` still **replaces** the stored set outright rather than merging,
-so send the complete map, exactly as before.
+**Send only what changed.** Every field is optional and an omitted one is left
+alone, so a one-field correction is a one-field request. `answers` is the
+exception and still **replaces** the stored set outright rather than merging —
+you hold the form, so a key you leave out has been removed.
+
+**The referrer's own details are still refused**: `referrerName`,
+`referrerPhone`, `referrerOrganisation` and above all `referrerEmail`, which is
+what the accept-or-hold decision was made on. The body is strict, so sending one
+is a `400` naming it rather than a `200` that silently changed nothing.
+
+**There is no undo and no history.** A correction overwrites, and the audit
+records which fields changed but never their values — deliberately, so it cannot
+become a second copy of every referral that outlives the twelve-month purge. So
+there is nothing to show as "previously", and no way to recover a value typed
+over. Confirm corrections that look destructive.
+
+**`reasonId` must be a reason the charity currently offers** — a retired one is a
+`422`. A referral already citing a retired reason keeps it.
+
+**Which key is "other information" is still yours.** The server holds no form
+definition and does not police which answers moved. Corrections are still worth
+putting there as well as in the field: a corrected address reaches the driver, a
+note saying why reaches the person handing the bag over — the answers surface
+beside the parcel on the picking screen and on the listener sheet.
 
 ---
 
@@ -479,6 +494,13 @@ missing because it is locked.
 
 No existing parcel is ever changed automatically. Show household-size changes
 and cancelled referrals as warnings and let a human decide what to do.
+
+`changedHouseholds` is reachable now that household counts are correctable
+again: `was` is the snapshot the picker is packing to, `now` is the referral as
+it currently stands. Correcting a referral from one adult to three does **not**
+resize the parcel — rewriting it underneath somebody mid-pick is exactly what
+the snapshot prevents — so this is the warning that lets a team leader edit the
+parcel or leave it.
 
 ### Attendance
 
@@ -732,7 +754,7 @@ one of these is now a `409`:
 
 | Call                                      | Was     | Now                        |
 | ----------------------------------------- | ------- | -------------------------- |
-| `PATCH /referrals/{id}` (amend answers)   | allowed | `409` if session confirmed |
+| `PATCH /referrals/{id}` (any correction)  | allowed | `409` if session confirmed |
 | `PATCH /referrals/{id}` (move to another) | allowed | `409` if session confirmed |
 | `POST /referrals/{id}/cancel`             | allowed | `409` if session confirmed |
 

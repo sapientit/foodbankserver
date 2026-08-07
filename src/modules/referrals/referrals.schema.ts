@@ -85,24 +85,41 @@ export const referralSubmissionSchema = z.object({
 export type ReferralSubmission = z.infer<typeof referralSubmissionSchema>;
 
 /**
- * What an administrator may change after the fact: **the answers, and nothing
- * else.**
+ * What an administrator may change after the fact: **the household's own
+ * details, and the answers.**
  *
- * There is no self-service equivalent any more: a referrer confirms what they
- * sent and phones the food bank if it needs changing. What an administrator
- * then does is write the correction into the form's "other information"
- * answer, because that is what reaches the picking screen and the listener
- * sheet. The fixed columns — the names, the date of birth, the address, the
- * household numbers, the delivery and fuel flags, the reason — stand as the
- * referrer sent them.
+ * There is no self-service equivalent: a referrer confirms what they sent and
+ * phones the food bank if it needs changing, and an administrator makes the
+ * correction. A referrer who spelled an address wrong, or a household that has
+ * moved between being referred and being fed, has to be correctable — a parcel
+ * delivered to the address on the form is delivered to whatever the form says.
  *
- * Which answer counts as "other information" is the client's to know: the
- * server holds no form definition, so it takes the set and does not police
- * which key moved. `referrerEmail` is absent for a second reason on top of
- * that — it is what the authorisation decision was made on, so editing it
- * would leave a referral whose status no longer follows from its address.
+ * **The referrer's own details are not here.** `referrerEmail` above all: it is
+ * what the authorisation decision was made on, so editing it would leave a
+ * referral whose accepted-or-held status no longer follows from its address.
+ * The name, phone and organisation stay with it, because who sent a referral is
+ * a matter of record rather than a field to tidy.
+ *
+ * Every field is optional and only what is sent is written, so a client can
+ * send one corrected field without restating the rest. **`answers` is the
+ * exception**: it replaces the stored set outright rather than merging, because
+ * the client holds the form and a key it omits has been removed. Which answer
+ * counts as "other information" is the client's to know — the server holds no
+ * form definition and does not police which key moved.
  */
 export const referralAmendSchema = z.object({
+  refereeFirstName: personName.optional(),
+  refereeSurname: personName.optional(),
+  refereeDateOfBirth: dateOfBirth.optional(),
+  refereeAddress: address.optional(),
+  refereePostcode: postcode.optional(),
+  /** Nullable: a household may lose a number as well as gain one. */
+  refereePhone: phone.nullable().optional(),
+  adults: z.number().int().min(1).max(30).optional(),
+  children: z.number().int().min(0).max(30).optional(),
+  isDelivery: z.boolean().optional(),
+  needsFuelHelp: z.boolean().optional(),
+  reasonId: z.uuid().optional(),
   /** Replaces the stored set outright; it is not merged into it. */
   answers: answers.optional(),
 });
@@ -117,20 +134,24 @@ export type ReferralAmend = z.infer<typeof referralAmendSchema>;
  * of that.
  *
  * **Strict, and that is the point.** Zod strips unknown keys by default, which
- * would turn a client still sending `refereeAddress` into a `200` that silently
- * changed nothing — an administrator would watch a correction they typed
- * disappear and have no way to tell. The fields that went are named in
- * `ReferralAmend` above; a client sending one now gets a `400` saying so.
+ * would turn a client sending a field this does not accept — `referrerEmail`,
+ * say — into a `200` that silently changed nothing. An administrator would
+ * watch a correction they typed disappear and have no way to tell. A client
+ * sending one gets a `400` naming it instead.
  */
 export const referralAdminAmendSchema = z
   .strictObject({
-    answers: answers.optional(),
+    ...referralAmendSchema.shape,
     sessionId: z.uuid().optional(),
     acknowledgeOverCapacity: z.boolean().default(false),
   })
   .refine(
-    (value) => value.answers !== undefined || value.sessionId !== undefined,
-    'supply answers, a session, or both',
+    (value) =>
+      value.sessionId !== undefined ||
+      Object.keys(referralAmendSchema.shape).some(
+        (field) => value[field as keyof typeof value] !== undefined,
+      ),
+    'supply something to change, a session, or both',
   );
 
 export const cancelReferralSchema = z.object({

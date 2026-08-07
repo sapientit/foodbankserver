@@ -423,19 +423,26 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
   /**
    * Applies an amendment. Admin only — there is no self-service path.
    *
-   * **The answers are the only part of a referral that can be changed**, and
-   * moving it to another session is the only other thing that can happen to it.
-   * A referral is a record of what somebody asked for: the names, the date of
-   * birth, the address, the household numbers, the delivery and fuel questions
-   * and the reason all stand as the referrer sent them, and a correction is
-   * written into the form's "other information" answer instead — which is shown
-   * beside the parcel and on the listener sheet, where somebody acting on it is
-   * standing. Quietly editing an address does not reach those people.
+   * **The household's own details and the answers can be corrected**; moving it
+   * to another session is the other thing that can happen to it. A referrer who
+   * mistyped an address, or a household that has moved between being referred
+   * and being fed, has to be correctable: a delivery goes to the address on the
+   * referral, so a wrong one there is a parcel on the wrong doorstep.
    *
-   * Which answer that is belongs to the form, and the form is the client's. So
-   * this takes the answers as a set and does not police which of them changed;
-   * "only the other-information one may be edited" is a rule only the client
-   * can apply. See `INITIAL_SPEC1.txt`, "Referral maintenance".
+   * **The referrer's own details are not amendable.** `referrerEmail` is what
+   * the authorisation decision was made on, and the rest is the record of who
+   * sent the referral rather than a field to tidy up.
+   *
+   * Only fields actually supplied are written, so a one-field correction stays
+   * a one-field correction. `answers` is the exception and replaces the set
+   * outright: the client holds the form, so a key it omits has been removed.
+   * Which answer counts as "other information" belongs to the form and the form
+   * is the client's, so nothing here polices which key moved. See
+   * `INITIAL_SPEC1.txt`, "Referral maintenance".
+   *
+   * The audit records **field names only, never values** — see `recordAudit`
+   * below. So this overwrites: what the referrer originally sent is not kept,
+   * which is the charity's decision and not an oversight.
    */
   async function applyAmendment(
     referral: Referral,
@@ -444,8 +451,55 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
   ): Promise<Referral> {
     await assertOpenToChange(referral);
 
+    // Same check the submission makes, and for the same reason: `reasonId` is a
+    // foreign key, so an unknown one would surface as a raw database error —
+    // whose message carries the bound row. It must be refused here instead.
+    // Active only: an administrator correcting a reason picks from what the
+    // charity currently offers, even though a referral already citing a retired
+    // one keeps it.
+    if (input.reasonId !== undefined) {
+      const reason = await referrers.findActiveReasonById(input.reasonId);
+      if (reason === undefined) {
+        throw new UnprocessableError('That reason for referral is no longer offered');
+      }
+    }
+
     const patch: Patch<NewReferral> = { updatedAt: clock.nowIso() };
     const changed: string[] = [];
+
+    // Written one at a time rather than by spreading `input`, so the patch can
+    // never carry a key the schema gains later without somebody deciding it
+    // should be amendable. The mapper is the output allowlist; this is the
+    // input one.
+    const assign = <K extends keyof NewReferral>(
+      field: K,
+      value: NewReferral[K] | undefined,
+      name: string,
+    ): void => {
+      if (value === undefined) return;
+      patch[field] = value;
+      changed.push(name);
+    };
+
+    assign('refereeFirstName', input.refereeFirstName, 'refereeFirstName');
+    assign('refereeSurname', input.refereeSurname, 'refereeSurname');
+    assign('refereeDateOfBirth', input.refereeDateOfBirth, 'refereeDateOfBirth');
+    assign('refereeAddress', input.refereeAddress, 'refereeAddress');
+    assign('refereePostcode', input.refereePostcode, 'refereePostcode');
+    assign('refereePhone', input.refereePhone, 'refereePhone');
+    assign('adults', input.adults, 'adults');
+    assign('children', input.children, 'children');
+    assign('reasonId', input.reasonId, 'reasonId');
+
+    // Booleans are integers in SQLite, so they cannot go through `assign`.
+    if (input.isDelivery !== undefined) {
+      patch.isDelivery = input.isDelivery ? 1 : 0;
+      changed.push('isDelivery');
+    }
+    if (input.needsFuelHelp !== undefined) {
+      patch.needsFuelHelp = input.needsFuelHelp ? 1 : 0;
+      changed.push('needsFuelHelp');
+    }
 
     if (input.answers !== undefined) {
       // Replaced wholesale, not merged: the client holds the form and sends

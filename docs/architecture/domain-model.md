@@ -58,10 +58,16 @@ and `cancelled` release the place.
 cancelled; `assertOpenToChange` is the shared guard, and `cancel` refuses a rejected one separately
 so a rejection cannot be relabelled as a cancellation.
 
-**Only the answers are amendable.** The fixed columns stand as the referrer sent them; a correction
-goes into the form's "other information" answer, which reaches the picking screen and the listener
-sheet. One consequence worth knowing before reading `divergence`: household counts can no longer
-change after a pick list is generated, so `changedHouseholds` cannot currently be produced.
+**The household's own details are amendable; the referrer's are not.** Name, date of birth, address,
+postcode, referee phone, household counts, delivery and fuel flags, reason and answers can all be
+corrected — a delivery goes to the address on the referral, so a wrong one there is a parcel on the
+wrong doorstep. `referrerEmail` stays fixed because it is what the authorisation decision was made
+on, and the referrer's name, phone and organisation with it. A correction overwrites: the audit
+records which fields changed, never their values, so there is no history and no undo.
+
+One consequence worth knowing before reading `divergence`: household counts **can** change after a
+pick list is generated, so `changedHouseholds` is reachable. The parcel is not rewritten — the
+snapshot is what the picker is packing — the difference is reported instead.
 
 **Both status transitions are enforced in the `UPDATE`, not in the service.** `updateIfStatus`
 carries `AND status = ?` into the statement so two administrators working the queue cannot both

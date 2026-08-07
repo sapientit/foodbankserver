@@ -905,14 +905,28 @@ paths:
       tags: [Referrals]
       summary: Amend or move a referral
       description: |
-        Admin only, and **narrow on purpose: the session and the answers are
-        the only things that change.** Supplying `sessionId` moves it; moving
-        into a full session requires `acknowledgeOverCapacity: true`, which is
-        the server half of the warning the operator has to accept.
+        Admin only. Corrects the household's own details, the answers, or the
+        session. Supplying `sessionId` moves it; moving into a full session
+        requires `acknowledgeOverCapacity: true`, which is the server half of
+        the warning the operator has to accept.
 
-        Everything else a referral holds now stands as the referrer sent it —
-        see `ReferralAmend` for what went and why a correction goes into the
-        form's "other information" answer instead.
+        **Send only what changed.** Every field is optional and an omitted one
+        is left alone, so a one-field correction is a one-field request. The
+        exception is `answers`, which **replaces** the stored set outright —
+        you hold the form, so a key you leave out has been removed.
+
+        **The referrer's own details cannot be amended** — not `referrerEmail`
+        above all, which is what the accept-or-hold decision was made on. The
+        body is strict: sending a field that is not listed is a `400` naming it,
+        rather than a `200` that silently changed nothing.
+
+        **A correction overwrites and the original is not kept.** The audit
+        records that fields changed and which ones, never their values — so
+        there is no "what did this used to say" to offer a user, and no undo.
+        Confirm destructive-looking corrections in the UI accordingly.
+
+        `reasonId` must be a reason the charity currently offers; a retired one
+        is a `422`. A referral already citing a retired reason keeps it.
 
         A cancelled or rejected referral cannot be amended **or moved** — a move
         is an amendment, and nothing reinstates a referral, so relocating a dead
@@ -944,6 +958,8 @@ paths:
           description: >-
             Target session is full and not acknowledged, the referral is
             cancelled or rejected, or its current session has been confirmed
+        '422':
+          description: The chosen reason for referral is no longer offered
 
   /api/v1/referrals/{id}/accept:
     parameters: [{ $ref: '#/components/parameters/Id' }]
@@ -1849,12 +1865,31 @@ paths:
                       list remains locked.
                   changedHouseholds:
                     type: array
+                    description: >-
+                      Parcels whose household has been corrected since the list
+                      was generated. `was` is the snapshot the picker is packing
+                      to; `now` is the referral as it currently stands. **The
+                      parcel is never rewritten** — rewriting it underneath
+                      somebody mid-pick is what the snapshot exists to prevent —
+                      so this is a warning for a team leader to act on, by
+                      editing the parcel or leaving it.
                     items:
                       type: object
+                      required: [parcelId, was, now]
                       properties:
                         parcelId: { type: string, format: uuid }
-                        was: { type: object }
-                        now: { type: object }
+                        was:
+                          type: object
+                          required: [adults, children]
+                          properties:
+                            adults: { type: integer }
+                            children: { type: integer }
+                        now:
+                          type: object
+                          required: [adults, children]
+                          properties:
+                            adults: { type: integer }
+                            children: { type: integer }
                   cancelledReferrals:
                     type: array
                     items: { type: string, format: uuid }
@@ -2533,28 +2568,53 @@ components:
       type: object
       minProperties: 1
       description: >
-        **The answers, and nothing else.** Admin only — there is no
-        self-service amendment; a referrer who needs a change phones the food
-        bank, and an administrator writes the correction into the form's "other
-        information" answer.
+        **The household's own details, and the answers.** Admin only — there is
+        no self-service amendment; a referrer who needs a change phones the food
+        bank and an administrator makes it.
 
-        The fixed fields — the names, date of birth, address, postcode, phones,
-        household counts, delivery and fuel flags, and the reason — are no
-        longer amendable. A referral records what the referrer asked for, and a
-        correction typed into the form is read by the people who act on it: the
-        answers appear beside the parcel on the picking screen and on the
-        listener sheet, which is where somebody acting on a corrected address is
-        standing. **A previously-shipped client sending any other field now gets
-        a `400`.**
+        Every field is optional and **only what you send is written**, so a
+        one-field correction stays a one-field request. `answers` is the
+        exception: it **replaces** the stored set rather than merging into it,
+        because you hold the form and a key you omit has been removed. Which key
+        counts as "other information" is yours to know — the server holds no
+        form definition and does not police which of them changed.
 
-        Which key counts as "other information" belongs to the form, which is
-        the client's — so the server takes the answers as a set and does not
-        police which of them changed.
+        **The referrer's own details are not here and cannot be amended.**
+        `referrerEmail` above all: it is what the authorisation decision was
+        made on, so editing it would leave a referral whose accepted-or-held
+        status no longer follows from its address. Name, phone and organisation
+        stay fixed too — who sent a referral is a matter of record.
 
-        `referrerEmail` is absent for a second reason on top of that: it is what
-        the authorisation decision was made on, so editing it would leave a
-        referral whose status no longer follows from its address.
+        **A correction overwrites and the original is not kept.** The audit
+        records which fields changed, never their values, so there is nothing to
+        show a user as "previously" and no undo.
+
+        Corrections are still worth writing into the form's "other information"
+        answer as well, and often should be: a corrected address reaches the
+        driver, while a note saying why reaches the person handing the bag over
+        — the answers appear beside the parcel on the picking screen and on the
+        listener sheet.
       properties:
+        refereeFirstName: { type: string, minLength: 1, maxLength: 100 }
+        refereeSurname: { type: string, minLength: 1, maxLength: 100 }
+        refereeDateOfBirth: { type: string, format: date }
+        refereeAddress: { type: string, minLength: 1, maxLength: 500 }
+        refereePostcode: { type: string, minLength: 2, maxLength: 12 }
+        refereePhone:
+          type: [string, 'null']
+          minLength: 5
+          maxLength: 30
+          description: Explicitly `null` to remove a number the household no longer has.
+        adults: { type: integer, minimum: 1, maximum: 30 }
+        children: { type: integer, minimum: 0, maximum: 30 }
+        isDelivery: { type: boolean }
+        needsFuelHelp: { type: boolean }
+        reasonId:
+          type: string
+          format: uuid
+          description: >-
+            Must be a reason the charity currently offers; a retired one is a
+            `422`. A referral already citing a retired reason keeps it.
         answers: { type: object, additionalProperties: true }
 
     ReferralReview:

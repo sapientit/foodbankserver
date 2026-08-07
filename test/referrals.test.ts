@@ -956,38 +956,114 @@ describe('admin referral management', () => {
     await testApp.request(`/api/v1/referrals/${id}`, {
       method: 'PATCH',
       headers: { ...authHeaders(token), 'content-type': 'application/json' },
-      body: JSON.stringify({ answers: { Other: 'Renamed, and moved to 4 Elm Road' } }),
+      body: JSON.stringify({
+        refereeSurname: 'Renamed',
+        refereeAddress: '4 Elm Road',
+        answers: { Other: 'Renamed, and moved to 4 Elm Road' },
+      }),
     });
 
     const audit = await db.select().from(auditEvents).where(eq(auditEvents.entityId, id));
     const amended = audit.find((row) => row.action === 'amended');
 
+    expect(amended?.detailJson).toContain('refereeSurname');
+    expect(amended?.detailJson).toContain('refereeAddress');
     expect(amended?.detailJson).toContain('answers');
     // The whole point: names of fields, never their contents. It matters more
-    // now than it did: the answers are where corrections are written, so this
-    // blob is the one most likely to hold a name or an address.
+    // now that the household's own details are correctable — the values passing
+    // through here are names and addresses, and this table is not purged.
     expect(amended?.detailJson).not.toContain('Renamed');
     expect(amended?.detailJson).not.toContain('Elm Road');
     expect(amended?.actorKind).toBe('user');
   });
 
-  it('refuses every field but the answers and the session', async () => {
+  it("corrects the household's own details", async () => {
     const { testApp, token, world: w } = await world();
     const { id } = await submitReferral(testApp, w);
 
-    // The charity's decision: a referral records what was asked for, and a
-    // correction goes into the form's "other information" answer, which the
-    // picking screen and the listener sheet actually show. See Q23.
+    const response = await testApp.request(`/api/v1/referrals/${id}`, {
+      method: 'PATCH',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({
+        refereeFirstName: 'Alys',
+        refereeSurname: 'Wintergreene',
+        refereeDateOfBirth: '1985-03-15',
+        refereeAddress: '4 Elm Road',
+        refereePostcode: 'GU2 7XH',
+        refereePhone: '07700 900999',
+        adults: 3,
+        children: 2,
+        isDelivery: true,
+        needsFuelHelp: true,
+      }),
+    });
+
+    expect(response.status).toBe(200);
+
+    const [stored] = await db.select().from(referrals).where(eq(referrals.id, id));
+    expect(stored).toMatchObject({
+      refereeFirstName: 'Alys',
+      refereeSurname: 'Wintergreene',
+      refereeDateOfBirth: '1985-03-15',
+      refereeAddress: '4 Elm Road',
+      refereePostcode: 'GU2 7XH',
+      refereePhone: '07700 900999',
+      adults: 3,
+      children: 2,
+      isDelivery: 1,
+      needsFuelHelp: 1,
+    });
+  });
+
+  it('leaves untouched anything the correction did not mention', async () => {
+    const { testApp, token, world: w } = await world();
+    const { id } = await submitReferral(testApp, w);
+
+    // A one-field correction is a one-field request: the client does not have
+    // to restate the referral to fix a postcode.
+    const response = await testApp.request(`/api/v1/referrals/${id}`, {
+      method: 'PATCH',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({ refereePostcode: 'GU2 7XH' }),
+    });
+    expect(response.status).toBe(200);
+
+    const [stored] = await db.select().from(referrals).where(eq(referrals.id, id));
+    expect(stored?.refereePostcode).toBe('GU2 7XH');
+    expect(stored?.refereeSurname).toBe('Wintergreen');
+    expect(stored?.refereeAddress).toBe('12 Bramble Cottages');
+    expect(stored?.adults).toBe(2);
+    expect(stored?.answersJson).toContain('no pork');
+  });
+
+  it('removes a phone number when sent an explicit null', async () => {
+    const { testApp, token, world: w } = await world();
+    const { id } = await submitReferral(testApp, w);
+
+    const response = await testApp.request(`/api/v1/referrals/${id}`, {
+      method: 'PATCH',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({ refereePhone: null }),
+    });
+    expect(response.status).toBe(200);
+
+    const [stored] = await db.select().from(referrals).where(eq(referrals.id, id));
+    expect(stored?.refereePhone).toBeNull();
+  });
+
+  it("refuses the referrer's own details", async () => {
+    const { testApp, token, world: w } = await world();
+    const { id } = await submitReferral(testApp, w);
+
+    // The email above all: it is what the accept-or-hold decision was made on,
+    // so a referral whose address had changed would no longer explain its own
+    // status. The body is strict so these are named rather than dropped.
     for (const body of [
-      { refereeSurname: 'Renamed' },
-      { refereeAddress: '4 Elm Road' },
-      { refereePhone: '07700 900999' },
-      { adults: 4 },
-      { children: 3 },
-      { isDelivery: true },
-      { needsFuelHelp: true },
       { referrerName: 'Someone Else' },
-      { reasonId: w.reasonId },
+      { referrerEmail: 'someone@else.example' },
+      { referrerPhone: '01483 999999' },
+      { referrerOrganisation: 'A Different Council' },
+      { status: 'reviewed' },
     ]) {
       const response = await testApp.request(`/api/v1/referrals/${id}`, {
         method: 'PATCH',
@@ -999,8 +1075,44 @@ describe('admin referral management', () => {
     }
 
     const [stored] = await db.select().from(referrals).where(eq(referrals.id, id));
-    expect(stored?.refereeSurname).toBe('Wintergreen');
-    expect(stored?.adults).toBe(2);
+    expect(stored?.referrerEmail).toBe('jane@guildford.gov.uk');
+  });
+
+  it('refuses a correction that changes nothing', async () => {
+    const { testApp, token, world: w } = await world();
+    const { id } = await submitReferral(testApp, w);
+
+    // An empty body is far more likely to be a client bug than an intent, and
+    // answering 200 to it would report a correction that never happened.
+    // `acknowledgeOverCapacity` alone is the same thing: it qualifies a move
+    // rather than being one.
+    for (const body of [{}, { acknowledgeOverCapacity: true }]) {
+      const response = await testApp.request(`/api/v1/referrals/${id}`, {
+        method: 'PATCH',
+        headers: { ...authHeaders(token), 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+      expect(response.status, `PATCH ${JSON.stringify(body)}`).toBe(400);
+    }
+  });
+
+  it('refuses a reason the charity no longer offers', async () => {
+    const { testApp, token, world: w } = await world();
+    const { id } = await submitReferral(testApp, w);
+
+    const response = await testApp.request(`/api/v1/referrals/${id}`, {
+      method: 'PATCH',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({ reasonId: crypto.randomUUID() }),
+    });
+
+    // 422 rather than a foreign-key violation, whose message would carry the
+    // bound row — that is, the household.
+    expect(response.status).toBe(422);
+
+    const [stored] = await db.select().from(referrals).where(eq(referrals.id, id));
+    expect(stored?.reasonId).toBe(w.reasonId);
   });
 
   it('amends the answers, replacing them outright', async () => {
