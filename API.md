@@ -415,11 +415,12 @@ you hold the form, so a key you leave out has been removed.
 what the accept-or-hold decision was made on. The body is strict, so sending one
 is a `400` naming it rather than a `200` that silently changed nothing.
 
-**There is no undo and no history.** A correction overwrites, and the audit
-records which fields changed but never their values — deliberately, so it cannot
-become a second copy of every referral that outlives the twelve-month purge. So
-there is nothing to show as "previously", and no way to recover a value typed
-over. Confirm corrections that look destructive.
+**There is no undo and no history.** A correction overwrites, and nothing keeps
+what the field used to say. That is deliberate: a record of every change made to
+a vulnerable household's details would be a second store of sensitive
+information to look after and eventually delete, and the charity does not want
+one. So there is nothing to show as "previously", and no way to recover a value
+typed over. Confirm corrections that look destructive.
 
 **`reasonId` must be a reason the charity currently offers** — a retired one is a
 `422`. A referral already citing a retired reason keeps it.

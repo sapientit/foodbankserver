@@ -920,10 +920,10 @@ paths:
         body is strict: sending a field that is not listed is a `400` naming it,
         rather than a `200` that silently changed nothing.
 
-        **A correction overwrites and the original is not kept.** The audit
-        records that fields changed and which ones, never their values — so
-        there is no "what did this used to say" to offer a user, and no undo.
-        Confirm destructive-looking corrections in the UI accordingly.
+        **A correction overwrites and the original is not kept.** Nothing
+        records what a field used to say, deliberately — so there is no "what
+        did this used to say" to offer a user, and no undo. Confirm
+        destructive-looking corrections in the UI accordingly.
 
         `reasonId` must be a reason the charity currently offers; a retired one
         is a `422`. A referral already citing a retired reason keeps it.
@@ -2585,9 +2585,9 @@ components:
         status no longer follows from its address. Name, phone and organisation
         stay fixed too — who sent a referral is a matter of record.
 
-        **A correction overwrites and the original is not kept.** The audit
-        records which fields changed, never their values, so there is nothing to
-        show a user as "previously" and no undo.
+        **A correction overwrites and the original is not kept.** Nothing
+        records what a field used to say, so there is nothing to show a user as
+        "previously" and no undo.
 
         Corrections are still worth writing into the form's "other information"
         answer as well, and often should be: a corrected address reaches the
