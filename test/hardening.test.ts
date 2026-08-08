@@ -280,6 +280,14 @@ describe('purging personal data', () => {
     expect(row?.refereeAddress).toBeNull();
     expect(row?.refereePostcode).toBeNull();
     expect(row?.refereePhone).toBeNull();
+    // The settled forms used for repeat-referral matching, alongside the
+    // values they are derived from. This matters more than it looks: without
+    // it, a household the food bank has promised to forget would go on
+    // matching by a postcode or phone number it says it no longer holds —
+    // the repeat-referral screen would keep surfacing a household that a
+    // purge was supposed to make untraceable.
+    expect(row?.refereePostcodeNormalised).toBeNull();
+    expect(row?.refereePhoneNormalised).toBeNull();
     expect(row?.piiPurgedAt).toEqual(expect.any(String));
   });
 

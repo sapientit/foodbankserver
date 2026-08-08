@@ -23,11 +23,12 @@ async function createItem(
   token: string,
   name: string,
   shelfNumber: string,
+  category = 'Tinned Goods',
 ): Promise<string> {
   const response = await testApp.request('/api/v1/stock/items', {
     method: 'POST',
     headers: json(token),
-    body: JSON.stringify({ name, shelfNumber }),
+    body: JSON.stringify({ name, category, shelfNumber }),
   });
   expect(response.status).toBe(201);
   const { id }: { id: string } = await response.json();
@@ -55,10 +56,32 @@ async function takeCount(
   });
 }
 
-async function levels(testApp: TestApp, token: string) {
-  const response = await testApp.request('/api/v1/stock/levels', { headers: authHeaders(token) });
+async function levels(testApp: TestApp, token: string, order?: string) {
+  const query = order === undefined ? '' : `?order=${order}`;
+  const response = await testApp.request(`/api/v1/stock/levels${query}`, {
+    headers: authHeaders(token),
+  });
   const body: { items: { id: string; name: string; quantityOnHand: number }[] } =
     await response.json();
+  return body.items;
+}
+
+interface ItemFields {
+  readonly id: string;
+  readonly name: string;
+  readonly category: string;
+  readonly description: string | null;
+  readonly shelfNumber: string;
+}
+
+async function itemsResponse(testApp: TestApp, token: string, order?: string): Promise<Response> {
+  const query = order === undefined ? '' : `?order=${order}`;
+  return testApp.request(`/api/v1/stock/items${query}`, { headers: authHeaders(token) });
+}
+
+async function items(testApp: TestApp, token: string, order?: string): Promise<ItemFields[]> {
+  const response = await itemsResponse(testApp, token, order);
+  const body: { items: ItemFields[] } = await response.json();
   return body.items;
 }
 
@@ -85,7 +108,7 @@ describe('stock levels', () => {
 
   it('derives the stock level as the sum of ledger entries', async () => {
     const { testApp, token } = await adminApp();
-    const sugar = await createItem(testApp, token, 'Sugar', 'A1');
+    const sugar = await createItem(testApp, token, 'Sugar', 'A1', 'Baking');
 
     await takeCount(testApp, token, [{ stockItemId: sugar, countedQuantity: 10 }]);
 
@@ -137,7 +160,7 @@ describe('stock levels', () => {
 describe('the stock take', () => {
   it('replaces what the system held rather than adjusting towards it', async () => {
     const { testApp, token } = await adminApp();
-    const sugar = await createItem(testApp, token, 'Sugar', 'A1');
+    const sugar = await createItem(testApp, token, 'Sugar', 'A1', 'Baking');
 
     await takeCount(testApp, token, [{ stockItemId: sugar, countedQuantity: 10 }]);
     await takeCount(testApp, token, [{ stockItemId: sugar, countedQuantity: 4 }]);
@@ -154,7 +177,7 @@ describe('the stock take', () => {
     // The whole point of the change: the count on the shelf wins over whatever
     // the system thought had happened to the item.
     const { testApp, token } = await adminApp();
-    const sugar = await createItem(testApp, token, 'Sugar', 'A1');
+    const sugar = await createItem(testApp, token, 'Sugar', 'A1', 'Baking');
     const now = new Date().toISOString();
 
     await takeCount(testApp, token, [{ stockItemId: sugar, countedQuantity: 10 }]);
@@ -182,7 +205,7 @@ describe('the stock take', () => {
     // An unchanged item is left out of the request. It must keep its history,
     // because "not sent" means either counted-and-correct or never counted.
     const { testApp, token } = await adminApp();
-    const sugar = await createItem(testApp, token, 'Sugar', 'A1');
+    const sugar = await createItem(testApp, token, 'Sugar', 'A1', 'Baking');
     const beans = await createItem(testApp, token, 'Beans', 'A2');
 
     await takeCount(testApp, token, [
@@ -201,7 +224,7 @@ describe('the stock take', () => {
     // The ledger forbids a zero delta, and rightly. Deleting the history and
     // writing nothing leaves SUM() over no rows, which is zero.
     const { testApp, token } = await adminApp();
-    const sugar = await createItem(testApp, token, 'Sugar', 'A1');
+    const sugar = await createItem(testApp, token, 'Sugar', 'A1', 'Baking');
 
     await takeCount(testApp, token, [{ stockItemId: sugar, countedQuantity: 10 }]);
     const response = await takeCount(testApp, token, [{ stockItemId: sugar, countedQuantity: 0 }]);
@@ -218,7 +241,7 @@ describe('the stock take', () => {
     // delete removes what the previous save wrote, so repeating is idempotent
     // by construction.
     const { testApp, token } = await adminApp();
-    const sugar = await createItem(testApp, token, 'Sugar', 'A1');
+    const sugar = await createItem(testApp, token, 'Sugar', 'A1', 'Baking');
 
     await takeCount(testApp, token, [{ stockItemId: sugar, countedQuantity: 6 }]);
     await takeCount(testApp, token, [{ stockItemId: sugar, countedQuantity: 6 }]);
@@ -230,7 +253,7 @@ describe('the stock take', () => {
 
   it('reports the resulting level for each item in the page', async () => {
     const { testApp, token } = await adminApp();
-    const sugar = await createItem(testApp, token, 'Sugar', 'A1');
+    const sugar = await createItem(testApp, token, 'Sugar', 'A1', 'Baking');
     const beans = await createItem(testApp, token, 'Beans', 'A2');
 
     const response = await takeCount(testApp, token, [
@@ -252,7 +275,7 @@ describe('the stock take', () => {
     // Two counts for one item is ambiguous, and picking the later one would be
     // guessing at what is far more likely a client bug.
     const { testApp, token } = await adminApp();
-    const sugar = await createItem(testApp, token, 'Sugar', 'A1');
+    const sugar = await createItem(testApp, token, 'Sugar', 'A1', 'Baking');
 
     const response = await takeCount(testApp, token, [
       { stockItemId: sugar, countedQuantity: 4 },
@@ -265,7 +288,7 @@ describe('the stock take', () => {
 
   it('writes nothing at all when one item in the page is unknown', async () => {
     const { testApp, token } = await adminApp();
-    const sugar = await createItem(testApp, token, 'Sugar', 'A1');
+    const sugar = await createItem(testApp, token, 'Sugar', 'A1', 'Baking');
     await takeCount(testApp, token, [{ stockItemId: sugar, countedQuantity: 10 }]);
 
     const response = await takeCount(testApp, token, [
@@ -280,7 +303,7 @@ describe('the stock take', () => {
 
   it('refuses a page larger than the request cap', async () => {
     const { testApp, token } = await adminApp();
-    const sugar = await createItem(testApp, token, 'Sugar', 'A1');
+    const sugar = await createItem(testApp, token, 'Sugar', 'A1', 'Baking');
 
     const response = await takeCount(
       testApp,
@@ -314,7 +337,7 @@ describe('the stock take', () => {
 describe('the ways stock moves', () => {
   it('accepts the two ways stock moves', async () => {
     const { testApp, token } = await adminApp();
-    const sugar = await createItem(testApp, token, 'Sugar', 'A1');
+    const sugar = await createItem(testApp, token, 'Sugar', 'A1', 'Baking');
     const now = new Date().toISOString();
 
     for (const movementType of ['opening_balance', 'parcel_issued'] as const) {
@@ -338,7 +361,7 @@ describe('the ways stock moves', () => {
     // Shopping, donations, wastage and hand corrections are gone. The CHECK
     // constraint is what stops one coming back through a stray insert.
     const { testApp, token } = await adminApp();
-    const sugar = await createItem(testApp, token, 'Sugar', 'A1');
+    const sugar = await createItem(testApp, token, 'Sugar', 'A1', 'Baking');
     const now = new Date().toISOString();
 
     for (const retired of ['purchase', 'donation', 'wastage', 'correction']) {
@@ -353,7 +376,7 @@ describe('the ways stock moves', () => {
 
   it('refuses a zero delta', async () => {
     const { testApp, token } = await adminApp();
-    const sugar = await createItem(testApp, token, 'Sugar', 'A1');
+    const sugar = await createItem(testApp, token, 'Sugar', 'A1', 'Baking');
     const now = new Date().toISOString();
 
     await expect(
@@ -375,7 +398,7 @@ describe('the ways stock moves', () => {
 describe('autocomplete', () => {
   it('finds sugar from "sug"', async () => {
     const { testApp, token } = await adminApp();
-    await createItem(testApp, token, 'Sugar', 'A1');
+    await createItem(testApp, token, 'Sugar', 'A1', 'Baking');
     await createItem(testApp, token, 'Beans', 'A2');
 
     const response = await testApp.request('/api/v1/stock/search?q=sug', {
@@ -388,7 +411,7 @@ describe('autocomplete', () => {
 
   it('falls back to an infix match when no prefix matches', async () => {
     const { testApp, token } = await adminApp();
-    await createItem(testApp, token, 'Caster Sugar', 'A1');
+    await createItem(testApp, token, 'Caster Sugar', 'A1', 'Baking');
 
     const response = await testApp.request('/api/v1/stock/search?q=sugar', {
       headers: authHeaders(token),
@@ -412,7 +435,7 @@ describe('autocomplete', () => {
 
   it('omits inactive items', async () => {
     const { testApp, token } = await adminApp();
-    const sugar = await createItem(testApp, token, 'Sugar', 'A1');
+    const sugar = await createItem(testApp, token, 'Sugar', 'A1', 'Baking');
     await testApp.request(`/api/v1/stock/items/${sugar}`, {
       method: 'PATCH',
       headers: json(token),
@@ -431,7 +454,7 @@ describe('autocomplete', () => {
 describe('stock authorisation', () => {
   it('lets a team lead count the stock', async () => {
     const { testApp, token } = await adminApp();
-    const sugar = await createItem(testApp, token, 'Sugar', 'A1');
+    const sugar = await createItem(testApp, token, 'Sugar', 'A1', 'Baking');
 
     const { lead, accessToken } = await teamLeadApp();
 
@@ -445,7 +468,7 @@ describe('stock authorisation', () => {
 
   it('refuses a team lead the stock item list itself', async () => {
     const { testApp, token } = await adminApp();
-    const sugar = await createItem(testApp, token, 'Sugar', 'A1');
+    const sugar = await createItem(testApp, token, 'Sugar', 'A1', 'Baking');
 
     const { lead, accessToken } = await teamLeadApp();
 
@@ -470,14 +493,235 @@ describe('stock authorisation', () => {
 
   it('refuses a duplicate item name', async () => {
     const { testApp, token } = await adminApp();
-    await createItem(testApp, token, 'Sugar', 'A1');
+    await createItem(testApp, token, 'Sugar', 'A1', 'Baking');
 
     const duplicate = await testApp.request('/api/v1/stock/items', {
       method: 'POST',
       headers: json(token),
-      body: JSON.stringify({ name: 'sugar', shelfNumber: 'B1' }),
+      body: JSON.stringify({ name: 'sugar', category: 'Baking', shelfNumber: 'B1' }),
     });
 
     expect(duplicate.status).toBe(409);
+  });
+});
+
+describe('list ordering', () => {
+  it('orders /stock/items by category then name by default, and /stock/levels by shelf', async () => {
+    // A fixture where the two orders genuinely disagree: Zebra's category
+    // sorts before Apple's, but Zebra's shelf sorts after Apple's. Passing
+    // under both orderings by accident is impossible here.
+    const { testApp, token } = await adminApp();
+    const zebra = await createItem(testApp, token, 'Zebra', 'Z1', 'Apple');
+    const apple = await createItem(testApp, token, 'Apple', 'A1', 'Zebra');
+
+    // The maintenance screen: category order, Zebra's category (Apple) first.
+    expect((await items(testApp, token)).map((i) => i.id)).toEqual([zebra, apple]);
+
+    // The stock-take screen: shelf order, Apple's shelf (A1) first.
+    expect((await levels(testApp, token)).map((i) => i.id)).toEqual([apple, zebra]);
+  });
+
+  it('lets /stock/items be asked for shelf order and /stock/levels for category order', async () => {
+    const { testApp, token } = await adminApp();
+    const zebra = await createItem(testApp, token, 'Zebra', 'Z1', 'Apple');
+    const apple = await createItem(testApp, token, 'Apple', 'A1', 'Zebra');
+
+    expect((await items(testApp, token, 'shelf')).map((i) => i.id)).toEqual([apple, zebra]);
+    expect((await levels(testApp, token, 'category')).map((i) => i.id)).toEqual([zebra, apple]);
+  });
+
+  it('refuses an unrecognised order on either list', async () => {
+    const { testApp, token } = await adminApp();
+    await createItem(testApp, token, 'Sugar', 'A1', 'Baking');
+
+    expect((await itemsResponse(testApp, token, 'alphabetical')).status).toBe(400);
+    expect(
+      (
+        await testApp.request('/api/v1/stock/levels?order=alphabetical', {
+          headers: authHeaders(token),
+        })
+      ).status,
+    ).toBe(400);
+  });
+
+  it('breaks a category tie on the normalised name, not the raw one', async () => {
+    // Case-sensitive comparison of the raw names would put 'Cherry' (capital
+    // C) before 'banana', because uppercase sorts before lowercase in ASCII.
+    // The normalised tiebreak puts them in the order a person reads them.
+    const { testApp, token } = await adminApp();
+    const cherry = await createItem(testApp, token, 'Cherry', 'A1', 'Fruit');
+    const banana = await createItem(testApp, token, 'banana', 'A2', 'Fruit');
+
+    expect((await items(testApp, token)).map((i) => i.id)).toEqual([banana, cherry]);
+  });
+});
+
+describe('stock item fields', () => {
+  it('round-trips a category and a description', async () => {
+    const { testApp, token } = await adminApp();
+    const response = await testApp.request('/api/v1/stock/items', {
+      method: 'POST',
+      headers: json(token),
+      body: JSON.stringify({
+        name: 'Long-Life Milk',
+        category: 'dairy',
+        description: 'UHT, 1 litre carton',
+        shelfNumber: 'C1',
+      }),
+    });
+
+    expect(response.status).toBe(201);
+    const created: ItemFields = await response.json();
+    expect(created.category).toBe('Dairy');
+    expect(created.description).toBe('UHT, 1 litre carton');
+
+    const [listed] = await items(testApp, token);
+    expect(listed?.category).toBe('Dairy');
+    expect(listed?.description).toBe('UHT, 1 litre carton');
+  });
+
+  it('gives null for a description that was never supplied', async () => {
+    const { testApp, token } = await adminApp();
+    const id = await createItem(testApp, token, 'Sugar', 'A1', 'Baking');
+
+    const [listed] = await items(testApp, token);
+    expect(listed?.id).toBe(id);
+    expect(listed?.description).toBeNull();
+  });
+
+  it('clears a description to null on PATCH, whether sent as null or as an empty string', async () => {
+    const { testApp, token } = await adminApp();
+    const response = await testApp.request('/api/v1/stock/items', {
+      method: 'POST',
+      headers: json(token),
+      body: JSON.stringify({
+        name: 'Sugar',
+        category: 'Baking',
+        description: 'Caster, 1kg bag',
+        shelfNumber: 'A1',
+      }),
+    });
+    const { id }: { id: string } = await response.json();
+
+    const clearedWithNull = await testApp.request(`/api/v1/stock/items/${id}`, {
+      method: 'PATCH',
+      headers: json(token),
+      body: JSON.stringify({ description: null }),
+    });
+    expect(clearedWithNull.status).toBe(200);
+    const afterNull: ItemFields = await clearedWithNull.json();
+    expect(afterNull.description).toBeNull();
+
+    // Put a description back, then clear it again with an empty string.
+    await testApp.request(`/api/v1/stock/items/${id}`, {
+      method: 'PATCH',
+      headers: json(token),
+      body: JSON.stringify({ description: 'Caster, 1kg bag' }),
+    });
+    const clearedWithEmpty = await testApp.request(`/api/v1/stock/items/${id}`, {
+      method: 'PATCH',
+      headers: json(token),
+      body: JSON.stringify({ description: '   ' }),
+    });
+    expect(clearedWithEmpty.status).toBe(200);
+    const afterEmpty: ItemFields = await clearedWithEmpty.json();
+    expect(afterEmpty.description).toBeNull();
+  });
+
+  it('settles the capitalisation of a category amended on PATCH', async () => {
+    const { testApp, token } = await adminApp();
+    const id = await createItem(testApp, token, 'Sugar', 'A1', 'baking');
+
+    const patched = await testApp.request(`/api/v1/stock/items/${id}`, {
+      method: 'PATCH',
+      headers: json(token),
+      body: JSON.stringify({ category: 'BAKING SUPPLIES' }),
+    });
+
+    expect(patched.status).toBe(200);
+    const body: ItemFields = await patched.json();
+    expect(body.category).toBe('Baking Supplies');
+  });
+
+  it('refuses to create an item with no category', async () => {
+    const { testApp, token } = await adminApp();
+    const response = await testApp.request('/api/v1/stock/items', {
+      method: 'POST',
+      headers: json(token),
+      body: JSON.stringify({ name: 'Sugar', shelfNumber: 'A1' }),
+    });
+
+    expect(response.status).toBe(400);
+  });
+
+  it('refuses a category over the forty-character limit', async () => {
+    const { testApp, token } = await adminApp();
+    const response = await testApp.request('/api/v1/stock/items', {
+      method: 'POST',
+      headers: json(token),
+      body: JSON.stringify({ name: 'Sugar', category: 'a'.repeat(41), shelfNumber: 'A1' }),
+    });
+
+    expect(response.status).toBe(400);
+  });
+
+  it('refuses a description over the two-hundred-character limit', async () => {
+    const { testApp, token } = await adminApp();
+    const response = await testApp.request('/api/v1/stock/items', {
+      method: 'POST',
+      headers: json(token),
+      body: JSON.stringify({
+        name: 'Sugar',
+        category: 'Baking',
+        description: 'a'.repeat(201),
+        shelfNumber: 'A1',
+      }),
+    });
+
+    expect(response.status).toBe(400);
+  });
+
+  it('allows a category and a description at exactly the limit', async () => {
+    const { testApp, token } = await adminApp();
+    const response = await testApp.request('/api/v1/stock/items', {
+      method: 'POST',
+      headers: json(token),
+      body: JSON.stringify({
+        name: 'Sugar',
+        category: 'a'.repeat(40),
+        description: 'b'.repeat(200),
+        shelfNumber: 'A1',
+      }),
+    });
+
+    expect(response.status).toBe(201);
+  });
+
+  // The create and amend schemas are written separately, so the limits on one
+  // are no evidence about the limits on the other. An amendment is the easier
+  // of the two to let through by accident, and it reaches the same column.
+  it('holds an amendment to the same limits as a creation', async () => {
+    const { testApp, token } = await adminApp();
+    const id = await createItem(testApp, token, 'Sugar', 'A1', 'Baking');
+
+    for (const body of [
+      { category: 'a'.repeat(41) },
+      { description: 'b'.repeat(201) },
+      // A category may be changed but not emptied: it is what the maintenance
+      // and pick-list screens group by, so an item cannot be left without one.
+      { category: '' },
+      { category: '   ' },
+    ]) {
+      const response = await testApp.request(`/api/v1/stock/items/${id}`, {
+        method: 'PATCH',
+        headers: json(token),
+        body: JSON.stringify(body),
+      });
+      expect(response.status, JSON.stringify(body)).toBe(400);
+    }
+
+    // And the item is untouched by any of them.
+    const [listed] = await items(testApp, token);
+    expect(listed?.category).toBe('Baking');
   });
 });

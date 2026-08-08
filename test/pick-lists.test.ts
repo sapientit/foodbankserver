@@ -570,6 +570,48 @@ describe('editing the pick list', () => {
   });
 });
 
+describe('parcel line descriptions', () => {
+  it('carries null for a line whose stock item has no description', async () => {
+    const { testApp, token, world: w } = await world();
+    await submitReferral(testApp, w, { adults: 1, children: 0 });
+    const { id } = await generatePickList(testApp, token, w.sessionId);
+
+    const { parcels: rows } = await readPickList(testApp, token, id);
+    expect(rows[0]?.lines).not.toHaveLength(0);
+    expect(rows[0]?.lines.every((line) => line.description === null)).toBe(true);
+  });
+
+  it('carries the stock item description on both the maintenance view and the print sheet', async () => {
+    const { testApp, token, world: w } = await world();
+    await testApp.request(`/api/v1/stock/items/${w.stockItems.Beans}`, {
+      method: 'PATCH',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({ description: '400g tin' }),
+    });
+    await submitReferral(testApp, w, { adults: 2, children: 3 });
+    const { id } = await generatePickList(testApp, token, w.sessionId);
+
+    const { parcels: rows } = await readPickList(testApp, token, id);
+    const beansLine = rows[0]?.lines.find((line) => line.stockItemId === w.stockItems.Beans);
+    expect(beansLine?.description).toBe('400g tin');
+    // No category on a parcel line: the sheet is walked in shelf order, and
+    // grouping by category belongs to the stock item list, not here.
+    expect(beansLine).not.toHaveProperty('category');
+
+    const printed = await testApp.request(`/api/v1/pick-lists/${id}/print`, {
+      headers: authHeaders(token),
+    });
+    const printedBody: {
+      parcels: { lines: { stockItemId: string; description: string | null }[] }[];
+    } = await printed.json();
+    const printedBeansLine = printedBody.parcels[0]?.lines.find(
+      (line) => line.stockItemId === w.stockItems.Beans,
+    );
+    expect(printedBeansLine?.description).toBe('400g tin');
+    expect(printedBeansLine).not.toHaveProperty('category');
+  });
+});
+
 describe('the printed sheet', () => {
   it('orders lines by shelf so a picker walks the aisle once', async () => {
     const { testApp, token, world: w } = await world();
@@ -584,6 +626,19 @@ describe('the printed sheet', () => {
 
     // Cereal A1, Beans A2, Pasta A10 — not alphabetical, not insertion order.
     expect(body.parcels[0]?.lines.map((l) => l.name)).toEqual(['Cereal', 'Beans', 'Pasta']);
+  });
+
+  it('orders parcel lines on the maintenance view by shelf too', async () => {
+    const { testApp, token, world: w } = await world();
+    await submitReferral(testApp, w, { adults: 2, children: 3 });
+    const { id } = await generatePickList(testApp, token, w.sessionId);
+
+    const { parcels: rows } = await readPickList(testApp, token, id);
+
+    // Cereal A1, Beans A2, Pasta A10 is shelf order. Category order would
+    // read Cereal (Breakfast), Pasta (Dried Goods), Beans (Tinned Goods) —
+    // Beans and Pasta swapped — so this genuinely distinguishes the two.
+    expect(rows[0]?.lines.map((line) => line.name)).toEqual(['Cereal', 'Beans', 'Pasta']);
   });
 
   it('never carries the reason for referral', async () => {

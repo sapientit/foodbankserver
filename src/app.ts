@@ -9,6 +9,7 @@ import { referrerAdminRoutes } from './modules/referrers/admin.routes.ts';
 import { publicReferrerRoutes } from './modules/referrers/public.routes.ts';
 import { publicReferralRoutes } from './modules/referrals/public.routes.ts';
 import { referralRoutes } from './modules/referrals/referrals.routes.ts';
+import { exportRoutes } from './modules/exports/exports.routes.ts';
 import { fuelHelpRoutes } from './modules/fuel-help/fuel-help.routes.ts';
 import { pickListRoutes } from './modules/pick-lists/pick-lists.routes.ts';
 import { ruleRoutes } from './modules/rules/rules.routes.ts';
@@ -53,6 +54,7 @@ export function buildApp(config: AppConfig, options: ContextOptions = {}): Hono<
   app.route(API_PREFIX, referrerAdminRoutes());
   app.route(API_PREFIX, referralRoutes());
   app.route(API_PREFIX, fuelHelpRoutes());
+  app.route(API_PREFIX, exportRoutes());
   app.route(API_PREFIX, stockRoutes());
   app.route(API_PREFIX, ruleRoutes());
   app.route(API_PREFIX, pickListRoutes());

@@ -26,6 +26,33 @@ export const stockItems = sqliteTable(
     name: text('name').notNull(),
     /** `lower(trim(name))`. The autocomplete match column, and the uniqueness key. */
     nameNormalised: text('name_normalised').notNull().unique(),
+
+    /**
+     * What the item actually is, in the charity's own words — printed on the
+     * pick list beside the name, where 'Pasta' alone does not tell a volunteer
+     * that half a kilo counts as one unit. Optional: an item whose name says
+     * everything needs no second sentence.
+     */
+    description: text('description'),
+
+    /**
+     * The grouping that the maintenance screen and the pick-list amendment
+     * screen sort by, ahead of the name. Free text and no lookup table — there
+     * are few enough categories that a table would be a maintenance screen
+     * nobody wants.
+     *
+     * **Stored with its capitalisation standardised** by `stock/category.ts`,
+     * so `tinned goods` and `Tinned Goods` are one group rather than two.
+     * Nothing else is matched or corrected: two spellings differing by more
+     * than case are two categories, and noticing that is an administrator's
+     * job, not the server's.
+     *
+     * The default is for the rows that predate the column — the migration
+     * leaves them saying exactly that. Every write goes through the service,
+     * which always supplies a value.
+     */
+    category: text('category').notNull().default('Uncategorised'),
+
     /** As displayed: 'A1', '12b'. Alphanumeric, because shelves are labelled by people. */
     shelfNumber: text('shelf_number').notNull(),
     /** Zero-padded so 'A2' sorts before 'A10'. Computed on write in TypeScript. */

@@ -8,10 +8,25 @@ import {
   type StockItem,
 } from '../../db/schema/stock.ts';
 import type { Patch } from '../../core/types.ts';
+import type { StockOrder } from './stock.schema.ts';
 
 export interface StockLevel {
   readonly item: StockItem;
   readonly quantityOnHand: number;
+}
+
+/**
+ * By category, or by shelf.
+ *
+ * Category order falls back to the name — `name_normalised` rather than `name`,
+ * so `beans` and `Beans` do not sort into different places within a group.
+ * Shelf order needs no tiebreak: `shelf_sort_key` is what the picker follows,
+ * and two items on one shelf are in whatever order the shelf has them.
+ */
+function orderColumns(order: StockOrder) {
+  return order === 'category'
+    ? [asc(stockItems.category), asc(stockItems.nameNormalised)]
+    : [asc(stockItems.shelfSortKey)];
 }
 
 export function createStockRepository(db: Database) {
@@ -21,12 +36,12 @@ export function createStockRepository(db: Database) {
       return expectAtMostOne(rows);
     },
 
-    async listItems(activeOnly: boolean): Promise<StockItem[]> {
+    async listItems(activeOnly: boolean, order: StockOrder): Promise<StockItem[]> {
       return db
         .select()
         .from(stockItems)
         .where(activeOnly ? eq(stockItems.isActive, 1) : undefined)
-        .orderBy(asc(stockItems.shelfSortKey));
+        .orderBy(...orderColumns(order));
     },
 
     /**
@@ -39,14 +54,14 @@ export function createStockRepository(db: Database) {
      * The level is `SUM(quantity_delta)` over whatever rows the ledger
      * currently holds — there is no stored balance to drift.
      */
-    async listLevels(activeOnly: boolean): Promise<StockLevel[]> {
+    async listLevels(activeOnly: boolean, order: StockOrder): Promise<StockLevel[]> {
       const rows = await db
         .select({ item: stockItems, total: sum(stockLedger.quantityDelta) })
         .from(stockItems)
         .leftJoin(stockLedger, eq(stockLedger.stockItemId, stockItems.id))
         .where(activeOnly ? eq(stockItems.isActive, 1) : undefined)
         .groupBy(stockItems.id)
-        .orderBy(asc(stockItems.shelfSortKey));
+        .orderBy(...orderColumns(order));
 
       return rows.map((row) => ({ item: row.item, quantityOnHand: Number(row.total ?? 0) }));
     },

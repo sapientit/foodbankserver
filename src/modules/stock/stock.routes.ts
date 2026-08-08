@@ -9,13 +9,17 @@ import { createStockService } from './stock.service.ts';
 import {
   stockItemInputSchema,
   stockItemPatchSchema,
+  stockOrderSchema,
   stockSearchSchema,
   stockTakeCountsSchema,
+  type StockOrder,
 } from './stock.schema.ts';
 
 interface StockItemResponse {
   readonly id: string;
   readonly name: string;
+  readonly category: string;
+  readonly description: string | null;
   readonly shelfNumber: string;
   readonly isActive: boolean;
 }
@@ -35,10 +39,10 @@ export function stockRoutes(): Hono<AppEnv> {
   const staff = [requireAuth, requireRole('admin', 'team_lead')] as const;
   const admins = [requireAuth, requireRole('admin')] as const;
 
-  /** The stock-take and picking list, ordered by shelf so a picker walks once. */
+  /** The stock-take list, ordered by shelf so a picker walks the aisle once. */
   routes.get('/stock/levels', ...staff, async (c) => {
     const includeInactive = c.req.query('includeInactive') === 'true';
-    const levels = await serviceFor(c).listLevels(!includeInactive);
+    const levels = await serviceFor(c).listLevels(!includeInactive, orderOf(c, 'shelf'));
 
     return c.json<{ items: StockLevelResponse[] }>({ items: levels.map(toLevelResponse) });
   });
@@ -52,7 +56,10 @@ export function stockRoutes(): Hono<AppEnv> {
   });
 
   routes.get('/stock/items', ...staff, async (c) => {
-    const items = await serviceFor(c).listItems(c.req.query('includeInactive') !== 'true');
+    const items = await serviceFor(c).listItems(
+      c.req.query('includeInactive') !== 'true',
+      orderOf(c, 'category'),
+    );
     return c.json<{ items: StockItemResponse[] }>({ items: items.map(toItemResponse) });
   });
 
@@ -94,15 +101,33 @@ export function stockRoutes(): Hono<AppEnv> {
 function toItemResponse(item: {
   id: string;
   name: string;
+  category: string;
+  description: string | null;
   shelfNumber: string;
   isActive: number;
 }): StockItemResponse {
   return {
     id: item.id,
     name: item.name,
+    category: item.category,
+    description: item.description,
     shelfNumber: item.shelfNumber,
     isActive: item.isActive === 1,
   };
+}
+
+/**
+ * The order a list is asked for, falling back to the one its screen wants.
+ *
+ * Each route defaults to the order the screen behind it needs — category for
+ * the maintenance and pick-list amendment screens, shelf for the stock take —
+ * so neither has to ask. An unrecognised value is a `400` rather than a silent
+ * fallback: a client that misspells it should hear about it, not quietly get a
+ * pick list in the wrong order.
+ */
+function orderOf(c: Context<AppEnv>, fallback: StockOrder): StockOrder {
+  const requested = c.req.query('order');
+  return requested === undefined ? fallback : parseOrThrow(stockOrderSchema, requested);
 }
 
 function toLevelResponse(level: StockLevel): StockLevelResponse {

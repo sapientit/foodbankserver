@@ -155,6 +155,28 @@ export const referrals = sqliteTable(
     refereePostcode: text('referee_postcode'),
     refereePhone: text('referee_phone'),
     /**
+     * The postcode's settled form, for repeat-referral matching only —
+     * uppercased, whitespace removed, kept only if it matches a UK postcode
+     * shape. `refereePostcode` above is untouched: putting a value into a
+     * settled form never rewrites the value itself, it only records what the
+     * matching rule made of it.
+     *
+     * `null` means "absent, or a value the rule could make nothing of", and a
+     * `null` never matches another `null` — two households with no postcode
+     * on file share an absence, not a detail. See
+     * `src/modules/referrals/matching.ts`.
+     */
+    refereePostcodeNormalised: text('referee_postcode_normalised'),
+    /**
+     * The phone number's settled form (UK E.164), for repeat-referral
+     * matching only. `refereePhone` above is untouched for the same reason
+     * `refereePostcodeNormalised` is: normalising is not editing.
+     *
+     * `null` means "absent, or a value the rule could make nothing of", and a
+     * `null` never matches another `null`. See `src/core/phone.ts`.
+     */
+    refereePhoneNormalised: text('referee_phone_normalised'),
+    /**
      * Dynamic answers, stored exactly as the client sent them.
      *
      * The referral form is client configuration, so the server holds no
@@ -194,6 +216,12 @@ export const referrals = sqliteTable(
   (table) => [
     index('idx_referrals_session').on(table.sessionId, table.status),
     index('idx_referrals_referred_at').on(table.referredAt),
+    // Three single-column indexes, not one composite: the repeat-referral
+    // match predicate is an OR across date of birth, postcode and phone, and
+    // SQLite serves an OR by index union — a composite index cannot help it.
+    index('idx_referrals_match_dob').on(table.refereeDateOfBirth),
+    index('idx_referrals_match_postcode').on(table.refereePostcodeNormalised),
+    index('idx_referrals_match_phone').on(table.refereePhoneNormalised),
     check(
       'referrals_status_valid',
       sql`${table.status} IN ('pending_review', 'active', 'reviewed', 'rejected', 'cancelled')`,

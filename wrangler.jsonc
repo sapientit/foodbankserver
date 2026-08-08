@@ -19,15 +19,23 @@
     // Dummy auth accepts any email. config/env.ts refuses to boot if this is
     // set while ENVIRONMENT is production.
     "AUTH_MODE": "dummy",
+    // The spreadsheet extract. Neither is a secret: the OAuth client id is
+    // public by design, and a spreadsheet id is useless without access to the
+    // spreadsheet. Deliberately DIFFERENT values from production, so a test
+    // deployment can never write into the charity's real spreadsheet.
+    "GOOGLE_SHEETS_SPREADSHEET_ID": "1gQK_ore1UOeHY_CwONpua307GUbh5J0_4zt90hlmcs8",
+    "GOOGLE_OAUTH_CLIENT_ID": "643990075975-48flcohql0sc2cekh3940uscrqflrbnn.apps.googleusercontent.com",
   },
 
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "foodbank",
-      // Placeholder until `wrangler d1 create foodbank --jurisdiction=eu` is run.
-      // The EU jurisdiction is permanent and cannot be changed afterwards.
-      "database_id": "975ce6e4-3d3c-4811-bd60-feb0cbfad966",
+      // A SEPARATE database from production's `foodbank`, for the same reason
+      // the two Google vars differ: a test deployment must not be able to
+      // write into the charity's real data. Both are EU-jurisdiction, which is
+      // permanent and cannot be changed afterwards.
+      "database_name": "foodbank-test",
+      "database_id": "7804f3df-2d3f-40dd-85c1-ecab0d19e760",
       "migrations_dir": "migrations",
     },
   ],
@@ -86,10 +94,16 @@
         // until real authentication exists. Change to "google" only when the
         // Google provider is actually implemented — never to make it start.
         "AUTH_MODE": "dummy",
+        // The charity's real spreadsheet and OAuth client. Set these before
+        // the extract can run; until they are set the button reports itself
+        // unconfigured rather than failing at Google.
+        "GOOGLE_SHEETS_SPREADSHEET_ID": "",
+        "GOOGLE_OAUTH_CLIENT_ID": "",
       },
       "d1_databases": [
         {
           "binding": "DB",
+          // The charity's real data. Never the test database above.
           "database_name": "foodbank",
           "database_id": "975ce6e4-3d3c-4811-bd60-feb0cbfad966",
           "migrations_dir": "migrations",

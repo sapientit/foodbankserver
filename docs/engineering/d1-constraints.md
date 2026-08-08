@@ -44,6 +44,23 @@ single JSON parameter. `inArray` would have been the obvious Drizzle answer and 
 1,000 on paid. We develop against free and deploy to paid. No N+1, ever: load reference data once
 and evaluate in memory. The pick-list generation path has a test that asserts its query count.
 
+## 50 characters per `LIKE` or `GLOB` pattern — and it only fails once there is a row
+
+A longer pattern is refused with `LIKE or GLOB pattern too complex`. Measured against this repo's
+own binding rather than taken from documentation: 48 characters runs, 53 throws.
+
+**The dangerous part is when it fails.** SQLite evaluates the pattern only when there is a row to
+evaluate it against, so an over-long pattern runs perfectly against an empty table. Every test here
+applies the migrations to a fresh database, which means a migration carrying one **passes the entire
+suite** and then fails on the first deployment that has any data. Migration `0019` was written with
+`'+44[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]'` — 53 characters — and the suite was green;
+it was a test that seeded a row first that found it.
+
+Spell long patterns out with `length`, `substr` and a short class instead:
+`length(v) = 13 AND substr(v, 1, 3) = '+44' AND substr(v, 4) NOT GLOB '*[^0-9]*'`. If you write a
+character-class pattern in a migration, **seed a row and run it** — a green suite proves nothing
+about it.
+
 ## 100 columns per table
 
 Part of why dynamic referral answers are a JSON column rather than generic spare columns.

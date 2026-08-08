@@ -17,6 +17,38 @@ hygiene here; it is the control that keeps personal data inside the jurisdiction
 pinned to. Nothing carrying a referee's name, address, phone number or reason for referral may leave
 D1 — not to logs, not to Analytics Engine, not to any third-party fetch.
 
+### The spreadsheet: personal data leaves, but not by this server's hand
+
+The charity keeps its records in a Google spreadsheet and decided, knowingly, that the household's
+own details go into it — name, date of birth, address, postcode, phone — along with the reason, the
+form answers and the review comment. That closed **Q24** and is written into `INITIAL_SPEC1.txt`,
+`#Sending referrals to the spreadsheet`. A spreadsheet of households with the households left out
+would not have been worth keeping.
+
+**The server is not what sends them, and the distinction is not a technicality.** An administrator's
+browser obtains Google Sheets consent against their own Google account, reads a session's referrals
+from this API — the same personal data the referral screens already return to that same
+administrator — and writes them to the spreadsheet itself. No Google credential is sent to, stored
+by, or used by this server, and nothing here calls a Google API. So the residency control above
+holds unchanged on the server side: data still leaves D1 only to an authenticated administrator over
+the API.
+
+Three consequences the charity accepted, recorded here because no code can enforce any of them:
+
+- **Residency past the browser is the Workspace's business.** A Google Workspace with EU data
+  regions configured keeps the residency the D1 jurisdiction was chosen for; a personal Gmail
+  account does not. Whoever owns the spreadsheet owns that decision.
+- **The purge cannot reach it.** Twelve months clears rows in D1 only. A name in the spreadsheet
+  stays until somebody deletes it by hand, so "we hold it for twelve months" is true of this system
+  and not of the charity's records as a whole.
+- **Roles stop at the API boundary.** `requireRole` and the response mappers do not follow a row
+  into a spreadsheet. Everyone it is shared with sees every column, including `reviewComment`, which
+  inside the system is admin-only because it can name a referrer or record a suspicion about one.
+
+What bounds it on this side: the extract is **admin-only**, it is **started deliberately by a person**
+rather than by a timer, and every row passes through `toExtractRow()` — an allowlist, so a column
+added to `referrals` cannot silently widen what leaves.
+
 ### `sms_messages` is the other table holding personal data
 
 Everything in this document was written about `referrals`. Since text reminders

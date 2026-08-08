@@ -102,3 +102,53 @@ export const SMS_SEND_CONCURRENCY = 5;
  * today. See `INITIAL_SPEC1.txt`, #Fuel help list.
  */
 export const FUEL_HELP_WINDOW_DAYS = 14;
+
+/**
+ * How far back the repeat-referral count on the review screen looks, counted
+ * on `referredAt`.
+ *
+ * Twelve months, expressed as days — and **deliberately the same period as
+ * the retention purge** (`INITIAL_SPEC1.txt`, "Forgetting a referral", and
+ * `PII_RETENTION_DAYS` in `config/env.ts`). Once a household's identifying
+ * columns have been nulled there is nothing left on the row to match on, so
+ * the two periods only stay honest together: shortening this window without
+ * shortening the purge's would silently under-report, and the reverse would
+ * count against a household the charity has already promised to forget.
+ */
+export const REPEAT_REFERRAL_LOOKBACK_DAYS = 365;
+
+/**
+ * How many repeat referrals the button behind the count will list.
+ *
+ * Fifty, the fifty most recent. The charity's reasoning, settled 2026-08-07:
+ * past fifty nobody is going to read on, so listing more tells an
+ * administrator nothing they were going to use — and several hundred other
+ * households' names, addresses and phone numbers on one screen, assembled
+ * because somebody opened one unrelated referral, is not a thing to build.
+ * See `INITIAL_SPEC1.txt`, "Reviewing a referral".
+ *
+ * **The count is deliberately not capped.** A list of fifty against a count of
+ * three hundred is what tells the administrator that fifty is not all of them,
+ * so the two must not be made to agree by counting the truncated list.
+ */
+export const REPEAT_REFERRAL_LIST_LIMIT = 50;
+
+/**
+ * How long a session stays reserved to one administrator's browser.
+ *
+ * The browser claims a session, writes it to the spreadsheet, then reports
+ * back. Ten minutes is generous for a write that takes seconds, and the
+ * generosity is the point: expiring a claim out from under a browser that is
+ * merely slow would hand the same session to somebody else and duplicate it.
+ *
+ * It cannot be indefinite either. The browser holds the only Google
+ * credential and the only knowledge of whether its write landed, so a laptop
+ * that closes mid-session leaves a claim nothing can ever complete — without
+ * an expiry that session would be reserved forever and the queue would stop
+ * dead at it. Ten minutes is the balance: long enough that a working browser
+ * is never interrupted, short enough that an abandoned extract recovers
+ * within one coffee break.
+ *
+ * See `INITIAL_SPEC1.txt`, "Sending referrals to the spreadsheet".
+ */
+export const EXTRACT_CLAIM_TTL_MINUTES = 10;

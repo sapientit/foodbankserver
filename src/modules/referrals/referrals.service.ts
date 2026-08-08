@@ -2,8 +2,13 @@ import type { Actor } from '../../core/actor.ts';
 import type { Clock } from '../../core/clock.ts';
 import { ConflictError, NotFoundError, UnprocessableError } from '../../core/errors.ts';
 import type { Logger } from '../../core/log.ts';
+import { normalisePhone } from '../../core/phone.ts';
+import { instantToLondonWallClock, londonWallClockToInstant } from '../../core/time/london.ts';
+import { addDays } from '../../core/time/plain-date.ts';
 import type { Patch } from '../../core/types.ts';
+import { REPEAT_REFERRAL_LOOKBACK_DAYS } from '../../config/constants.ts';
 import type { Database } from '../../db/client.ts';
+import type { AttendanceStatus } from '../../db/schema/pick-lists.ts';
 import {
   REFERRAL_STATUSES_HOLDING_A_PLACE,
   type NewReferral,
@@ -12,8 +17,23 @@ import {
 import type { ReferrersRepository } from '../referrers/referrers.repository.ts';
 import type { ReferrersService } from '../referrers/referrers.service.ts';
 import type { SessionsRepository } from '../sessions/sessions.repository.ts';
-import type { ReferralListFilter, ReferralsRepository } from './referrals.repository.ts';
-import { toListenerSheetHousehold, type ListenerSheetHousehold } from './referrals.mapper.ts';
+import {
+  hasAnythingToMatchOn,
+  matchKinds,
+  normalisePostcode,
+  type MatchableFields,
+  type MatchKind,
+} from './matching.ts';
+import type {
+  RepeatReferralCandidate,
+  ReferralListFilter,
+  ReferralsRepository,
+} from './referrals.repository.ts';
+import {
+  toListenerSheetHousehold,
+  type ListenerSheetHousehold,
+  type RepeatReferralOutcome,
+} from './referrals.mapper.ts';
 import type { ReferralAmend, ReferralSubmission } from './referrals.schema.ts';
 
 export interface ReferralsServiceDeps {
@@ -26,6 +46,32 @@ export interface ReferralsServiceDeps {
   readonly logger: Logger;
 }
 
+/**
+ * One repeat referral in full, for the button behind the summary.
+ *
+ * Extends the repository's candidate row with what only the service can add:
+ * which of the three fields matched, and what became of the referral. Carries
+ * `postcodeNormalised` / `phoneNormalised` through from the candidate —
+ * `referrals.mapper.ts` is the allowlist that drops them before this reaches
+ * a client.
+ */
+export interface RepeatReferralMatch extends RepeatReferralCandidate {
+  readonly outcome: RepeatReferralOutcome;
+  readonly matchedOn: readonly MatchKind[];
+}
+
+/** How many times this household has been referred in the last twelve months, and when. */
+export interface RepeatReferralSummary {
+  readonly count: number;
+  /** The most recent match's session date. May be a date **in the future** — it is the
+   *  session a household is booked for, not a submission or attendance date. */
+  readonly mostRecentSessionDate: string | null;
+}
+
+export interface RepeatReferralList extends RepeatReferralSummary {
+  readonly matches: readonly RepeatReferralMatch[];
+}
+
 export function createReferralsService(deps: ReferralsServiceDeps) {
   const { db, repository, sessions, referrers, referrersService, clock, logger } = deps;
 
@@ -35,6 +81,170 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
       throw new NotFoundError('Referral not found');
     }
     return referral;
+  }
+
+  /**
+   * The reviewed referral's own settled values, for repeat-referral
+   * matching — **recomputed, not read** from `refereePostcodeNormalised` /
+   * `refereePhoneNormalised`.
+   *
+   * Recomputing costs nothing here: this is one referral, not a table scan,
+   * and the query the settled columns exist to speed up runs against every
+   * *other* referral, not this one. Recomputing also cannot be stale, and it
+   * means a referral written before migration `0019` backfilled the two
+   * columns still matches correctly — there is nothing for an old row's
+   * stored `null` to get wrong.
+   */
+  function settledFieldsOf(referral: Referral): MatchableFields {
+    return {
+      dateOfBirth: referral.refereeDateOfBirth,
+      postcodeNormalised: normalisePostcode(referral.refereePostcode),
+      phoneNormalised:
+        referral.refereePhone === null ? null : normalisePhone(referral.refereePhone),
+    };
+  }
+
+  /**
+   * Twelve months back from now, in London, as an ISO instant comparable
+   * with `referredAt`.
+   *
+   * Goes through `core/time` rather than subtracting milliseconds from the
+   * instant directly: a twelve-month window is calendar arithmetic, and
+   * doing calendar arithmetic on instants is how a cutoff ends up an hour
+   * out across the BST changeover. The wall-clock time of day carries
+   * through unchanged; only the date moves.
+   *
+   * **Deliberately the same period as the retention purge** — see
+   * `REPEAT_REFERRAL_LOOKBACK_DAYS`.
+   */
+  function repeatReferralCutoff(): string {
+    const now = instantToLondonWallClock(clock.nowIso());
+    const cutoffDate = addDays(now.date, -REPEAT_REFERRAL_LOOKBACK_DAYS);
+    return londonWallClockToInstant(cutoffDate, now.time);
+  }
+
+  /**
+   * `attended` if any of the referral's parcels was attended, else
+   * `no_show` if any was marked as not turning up, else `booked` — which
+   * covers both "picked but not yet marked" and "no pick list generated for
+   * this referral's session yet". A referral can hold more than one parcel
+   * (a referral moved after a pick list was generated leaves the old one
+   * behind), so this folds over all of them rather than reading one.
+   */
+  function deriveOutcome(attendances: readonly AttendanceStatus[]): RepeatReferralOutcome {
+    if (attendances.includes('attended')) return 'attended';
+    if (attendances.includes('no_show')) return 'no_show';
+    return 'booked';
+  }
+
+  /**
+   * How many times this household has been referred in the last twelve
+   * months, and the session date of the most recent of those.
+   * `INITIAL_SPEC1.txt`, `#Reviewing a referral`: the count is of
+   * referrals, not of parcels handed over — see `countRepeatReferrals` for
+   * why.
+   *
+   * **Neither this nor `listRepeatReferralsFor` takes an `Actor`**, following
+   * `fuel-help.service.ts`: the role decides *whether* somebody may ask at
+   * all, not *what* they get back, so there is nothing here to narrow. Both
+   * are gated at the route by `requireRole('admin')`, which is where every
+   * whole-endpoint role rule in this codebase lives. A referral is the other
+   * shape — an administrator and a team leader both read one and see
+   * different fields — and that narrowing is in the mapper.
+   *
+   * Takes the referral rather than its id because the only caller,
+   * `GET /referrals/{id}`, has already loaded it. Re-reading the same row to
+   * count against it would double the cost of the detail route for every
+   * administrator, on every referral, whether or not the household has ever
+   * been here before.
+   *
+   * One query, unless there is nothing to match on at all: a real case,
+   * since postcode and phone can both be unrecognisable and date of birth
+   * can be absent too, in which case this returns without touching the
+   * database.
+   */
+  async function repeatReferralSummary(referral: Referral): Promise<RepeatReferralSummary> {
+    const fields = settledFieldsOf(referral);
+
+    if (!hasAnythingToMatchOn(fields)) {
+      return { count: 0, mostRecentSessionDate: null };
+    }
+
+    return repository.countRepeatReferrals(fields, referral.id, repeatReferralCutoff());
+  }
+
+  /**
+   * The referrals behind the summary above, in full — the button on the
+   * review screen.
+   *
+   * Three queries when there is anything to find, issued together: the
+   * count, the matching referrals, and their parcel attendance. The
+   * attendance is a query of its own because a referral moved after a pick
+   * list was generated can hold a parcel on each of two lists, and joining
+   * would duplicate the referral row.
+   *
+   * **`count` comes from its own query, not from `matches.length`.** The
+   * list is capped at `REPEAT_REFERRAL_LIST_LIMIT` and the count is not, so
+   * counting the rows returned would quietly report a household matched by a
+   * whole hostel as having been referred fifty times. A list shorter than the
+   * count is exactly how an administrator is told there are more.
+   */
+  async function listRepeatReferralsFor(referralId: string): Promise<RepeatReferralList> {
+    const referral = await getReferral(referralId);
+    const fields = settledFieldsOf(referral);
+
+    if (!hasAnythingToMatchOn(fields)) {
+      return { count: 0, mostRecentSessionDate: null, matches: [] };
+    }
+
+    // One cutoff for all three queries, not one each: they must describe the
+    // same twelve months, and `repeatReferralCutoff()` reads the clock.
+    const cutoff = repeatReferralCutoff();
+
+    // Issued together. The attendance query re-runs the predicate rather than
+    // taking the ids the list returned — see the repository for why — so none
+    // of the three waits on another.
+    const [summary, candidates, attendances] = await Promise.all([
+      repository.countRepeatReferrals(fields, referralId, cutoff),
+      repository.listRepeatReferrals(fields, referralId, cutoff),
+      repository.listAttendanceForRepeatReferrals(fields, referralId, cutoff),
+    ]);
+    const attendanceByReferral = new Map<string, AttendanceStatus[]>();
+    for (const { referralId: id, attendance } of attendances) {
+      const existing = attendanceByReferral.get(id);
+      if (existing === undefined) {
+        attendanceByReferral.set(id, [attendance]);
+      } else {
+        existing.push(attendance);
+      }
+    }
+
+    const matches = candidates.map((candidate): RepeatReferralMatch => {
+      const kinds = matchKinds(fields, {
+        dateOfBirth: candidate.refereeDateOfBirth,
+        postcodeNormalised: candidate.postcodeNormalised,
+        phoneNormalised: candidate.phoneNormalised,
+      });
+      if (kinds.length === 0) {
+        // The predicate this candidate came from guarantees at least one of
+        // the three comparisons matched. An empty result here means the
+        // predicate and this recomputation have drifted apart — a bug, not
+        // a row to show an administrator.
+        throw new Error('Repeat-referral candidate matched on nothing');
+      }
+
+      return {
+        ...candidate,
+        outcome: deriveOutcome(attendanceByReferral.get(candidate.id) ?? []),
+        matchedOn: kinds,
+      };
+    });
+
+    return {
+      count: summary.count,
+      mostRecentSessionDate: summary.mostRecentSessionDate,
+      matches,
+    };
   }
 
   /**
@@ -180,6 +390,7 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
 
     const now = clock.nowIso();
     const referralId = crypto.randomUUID();
+    const refereePhone = input.refereePhone ?? null;
 
     const referral: NewReferral = {
       id: referralId,
@@ -208,7 +419,12 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
       refereeDateOfBirth: input.refereeDateOfBirth,
       refereeAddress: input.refereeAddress,
       refereePostcode: input.refereePostcode,
-      refereePhone: input.refereePhone ?? null,
+      refereePhone,
+      // The settled forms, kept in step with the values they derive from —
+      // see `matching.ts`. Both the public submission and an administrator
+      // entering a referral by phone go through this one path.
+      refereePostcodeNormalised: normalisePostcode(input.refereePostcode),
+      refereePhoneNormalised: refereePhone === null ? null : normalisePhone(refereePhone),
       answersJson: JSON.stringify(input.answers),
       piiPurgedAt: null,
       createdByUserId: null,
@@ -487,6 +703,23 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     assign('refereeAddress', input.refereeAddress, 'refereeAddress');
     assign('refereePostcode', input.refereePostcode, 'refereePostcode');
     assign('refereePhone', input.refereePhone, 'refereePhone');
+
+    // Derived, not amended: set directly on the patch rather than through
+    // `assign`, so they never appear in `changed`. Recomputed whenever the
+    // field they derive from is present in the patch — including when
+    // `refereePhone` is corrected to `null` (its schema is
+    // `phone.nullable().optional()`, so `null` is a real value meaning "no
+    // number now", not "leave it alone"). Correcting one of these is often
+    // the very thing that makes the match: a postcode typed wrongly the
+    // first time is exactly how one household comes to look like two.
+    if (input.refereePostcode !== undefined) {
+      patch.refereePostcodeNormalised = normalisePostcode(input.refereePostcode);
+    }
+    if (input.refereePhone !== undefined) {
+      patch.refereePhoneNormalised =
+        input.refereePhone === null ? null : normalisePhone(input.refereePhone);
+    }
+
     assign('adults', input.adults, 'adults');
     assign('children', input.children, 'children');
     assign('reasonId', input.reasonId, 'reasonId');
@@ -619,6 +852,8 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     applyAmendment,
     cancel,
     move,
+    repeatReferralSummary,
+    listRepeatReferralsFor,
   };
 }
 

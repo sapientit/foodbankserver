@@ -19,11 +19,16 @@ async function adminApp(): Promise<{ testApp: TestApp; token: string }> {
   return { testApp, token: accessToken };
 }
 
-async function createStockItem(testApp: TestApp, token: string, name: string): Promise<string> {
+async function createStockItem(
+  testApp: TestApp,
+  token: string,
+  name: string,
+  category = 'Tinned Goods',
+): Promise<string> {
   const response = await testApp.request('/api/v1/stock/items', {
     method: 'POST',
     headers: json(token),
-    body: JSON.stringify({ name, shelfNumber: 'A1' }),
+    body: JSON.stringify({ name, category, shelfNumber: 'A1' }),
   });
   const { id }: { id: string } = await response.json();
   return id;
@@ -73,8 +78,8 @@ async function preview(testApp: TestApp, token: string, adults: number, children
 }
 
 async function setUp(testApp: TestApp, token: string) {
-  const beans = await createStockItem(testApp, token, 'Beans');
-  const pasta = await createStockItem(testApp, token, 'Pasta');
+  const beans = await createStockItem(testApp, token, 'Beans', 'Tinned Goods');
+  const pasta = await createStockItem(testApp, token, 'Pasta', 'Dried Goods');
 
   await addParcel(testApp, token, 'Single parcel', [{ stockItemId: beans, quantity: 2 }]);
   await addParcel(testApp, token, 'Family parcel', [

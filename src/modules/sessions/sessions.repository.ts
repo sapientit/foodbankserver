@@ -10,6 +10,7 @@ import {
   lt,
   lte,
   or,
+  sql,
   type SQL,
 } from 'drizzle-orm';
 import { referrals, REFERRAL_STATUSES_HOLDING_A_PLACE } from '../../db/schema/referrals.ts';
@@ -213,6 +214,143 @@ export function createSessionsRepository(db: Database) {
     async updateSession(id: string, patch: Patch<NewSession>): Promise<Session | undefined> {
       const rows = await db.update(sessions).set(patch).where(eq(sessions.id, id)).returning();
       return expectAtMostOne(rows);
+    },
+
+    /**
+     * Claims the next session to extract, atomically.
+     *
+     * The oldest confirmed session that has not been extracted and is not
+     * currently claimed by anybody, reserved to this administrator in **one
+     * statement**. That is the whole point: D1 has no interactive
+     * transactions, so "find the next one, then reserve it" cannot be made
+     * safe by doing the two in sequence — two administrators working the
+     * queue together would read the same row and both go on to write it to
+     * the spreadsheet. The subquery picks the row and the `UPDATE` reserves
+     * it in the same breath, so exactly one of two racing callers gets it and
+     * the other gets the next one down.
+     *
+     * The `WHERE` guards are repeated outside the subquery on purpose. They
+     * are what makes the statement claim *that specific row only if it is
+     * still free*, rather than trusting the subquery's answer to still be
+     * true by the time the write lands.
+     *
+     * A claim whose expiry has passed counts as free. That is how an
+     * abandoned extract recovers: the browser holding it closed, slept or
+     * reloaded, and nothing else can ever finish that session.
+     *
+     * Returns `undefined` when the queue is empty — nothing confirmed is
+     * waiting, or everything waiting is claimed by somebody still working.
+     */
+    async claimNextForExtract(claim: {
+      readonly claimId: string;
+      readonly userId: string;
+      readonly expiresAt: string;
+      readonly now: string;
+    }): Promise<Session | undefined> {
+      const claimable = and(
+        eq(sessions.status, 'confirmed'),
+        isNull(sessions.extractedAt),
+        or(isNull(sessions.extractClaimExpiresAt), lte(sessions.extractClaimExpiresAt, claim.now)),
+      );
+
+      const next = db
+        .select({ id: sessions.id })
+        .from(sessions)
+        .where(claimable)
+        // `id` breaks the tie so two sessions on the same date cannot leave
+        // the order undefined, which would make the queue non-deterministic.
+        .orderBy(asc(sessions.sessionDate), asc(sessions.id))
+        .limit(1);
+
+      const rows = await db
+        .update(sessions)
+        .set({
+          extractClaimId: claim.claimId,
+          extractClaimedByUserId: claim.userId,
+          extractClaimExpiresAt: claim.expiresAt,
+          updatedAt: claim.now,
+        })
+        .where(and(inArray(sessions.id, next), claimable))
+        .returning();
+
+      return expectAtMostOne(rows);
+    },
+
+    /** The session a claim id refers to, whatever state that claim is in. */
+    async findByExtractClaim(claimId: string): Promise<Session | undefined> {
+      const rows = await db
+        .select()
+        .from(sessions)
+        .where(eq(sessions.extractClaimId, claimId))
+        .limit(1);
+      return expectAtMostOne(rows);
+    },
+
+    /**
+     * Marks a claimed session extracted.
+     *
+     * **Guarded on the claim id and on the claim not having lapsed**, so a
+     * completion cannot land on a session that has since been handed to
+     * somebody else. The condition travels with the write for the same reason
+     * the claim does: there is no transaction to hold it still in between.
+     *
+     * The claim columns are deliberately **left in place**. A browser that
+     * retried a completion whose response it never saw presents the same
+     * claim id again, and the service recognises it as this claim having
+     * already finished this session rather than as a conflict.
+     *
+     * `undefined` means the guard did not hold; the service re-reads to say
+     * why, which is the only way to tell "expired" from "not yours" from
+     * "already done".
+     */
+    async markExtracted(claim: {
+      readonly claimId: string;
+      readonly userId: string;
+      readonly at: string;
+    }): Promise<Session | undefined> {
+      const rows = await db
+        .update(sessions)
+        .set({ extractedAt: claim.at, updatedAt: claim.at })
+        .where(
+          and(
+            eq(sessions.extractClaimId, claim.claimId),
+            // **The holder, not merely the holder of the id.** Without this the
+            // guard would accept any administrator presenting an unexpired
+            // claim id, and a session would be marked extracted on the
+            // strength of a write that browser never did — after which it is
+            // never offered again, silently dropping it from the spreadsheet.
+            // That is the one failure the charity said must not happen
+            // quietly. It also makes the service's "belongs to another
+            // administrator" branch reachable, which it otherwise is not.
+            eq(sessions.extractClaimedByUserId, claim.userId),
+            isNull(sessions.extractedAt),
+            gte(sessions.extractClaimExpiresAt, claim.at),
+          ),
+        )
+        .returning();
+      return expectAtMostOne(rows);
+    },
+
+    /**
+     * How many confirmed sessions are still waiting, and how many have gone.
+     *
+     * Feeds the progress the browser shows while it works through a batch,
+     * and the "carry on?" question it asks after twenty. `remaining` counts
+     * everything unextracted, including sessions another administrator holds
+     * a live claim on — from the operator's point of view those are still
+     * outstanding work, just not theirs this minute.
+     */
+    async extractProgress(): Promise<{ remaining: number; extracted: number }> {
+      const rows = await db
+        .select({
+          remaining: sql<number>`sum(case when ${sessions.extractedAt} is null then 1 else 0 end)`,
+          extracted: sql<number>`sum(case when ${sessions.extractedAt} is not null then 1 else 0 end)`,
+        })
+        .from(sessions)
+        .where(eq(sessions.status, 'confirmed'));
+
+      const row = expectAtMostOne(rows);
+      return { remaining: row?.remaining ?? 0, extracted: row?.extracted ?? 0 };
     },
 
     // ---- Statement builders. Compose these, then run ONE db.batch(). ----

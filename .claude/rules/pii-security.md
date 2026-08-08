@@ -16,7 +16,26 @@ sensitive. Background and the residency reasoning:
 **The control that makes the rest work:** the D1 database is pinned to the EU jurisdiction, but
 Workers compute runs globally and **Workers Logs are not EU-pinned**. So "never log PII" is a
 compliance control, not hygiene. Nothing carrying a referee's name, address, phone number or reason
-may leave D1 — not to logs, not to Analytics Engine, not to any third-party fetch.
+may leave D1 — not to logs, not to Analytics Engine, **not to any third-party fetch**.
+
+That last clause survives the spreadsheet extract, and it is worth understanding why. The charity
+keeps its records in a Google spreadsheet and the food bank's referrals go into it, personal columns
+and all (`INITIAL_SPEC1.txt`, `#Sending referrals to the spreadsheet`; it closed Q24). But **this
+server does not send them.** It hands the rows to an authenticated administrator over the ordinary
+API — the same personal data it already returns on a referral screen — and that administrator's
+browser writes them to the spreadsheet using their own Google account. There is no service account
+here, no Google token reaches this server, and no code in this repo calls a Google API. **A design
+that did all of that was built and then deliberately replaced; do not reintroduce it.**
+
+So the server-side rule is unchanged and absolute: if you find yourself adding an outbound `fetch`
+carrying a referee's details, you are doing something nobody agreed to.
+
+What the charity accepted is real all the same, and lives in
+[`docs/engineering/personal-data.md`](../../docs/engineering/personal-data.md): the purge cannot
+reach a spreadsheet, `requireRole` does not follow a row into one, and residency past that point
+depends on the Workspace rather than on the D1 jurisdiction. The controls that remain on this side
+are that the extract is **admin-only**, and that every row goes through `toExtractRow()` — an
+allowlist, so a column added to `referrals` cannot widen what an administrator is handed to write.
 
 - **Logging goes through `core/log.ts`, which cannot accept PII by construction.** `LogContext`
   enumerates the permitted fields and they are all identifiers or counts, so

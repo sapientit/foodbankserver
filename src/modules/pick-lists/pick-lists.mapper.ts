@@ -29,6 +29,15 @@ export function toPickListResponse(pickList: PickList): PickListResponse {
 export interface ParcelLineResponse {
   readonly stockItemId: string;
   readonly name: string;
+  /**
+   * The item's description, printed under the name on the sheet — it is what
+   * tells a volunteer that half a kilo of pasta counts as one unit. `null` for
+   * an item whose name says everything.
+   *
+   * Not the category: the sheet is walked in shelf order, and the amendment
+   * screen gets its grouping from the stock item list rather than from here.
+   */
+  readonly description: string | null;
   readonly shelfNumber: string;
   readonly quantity: number;
   readonly source: string;
@@ -86,6 +95,7 @@ export function toParcelResponse(
     lines: lines.map((line) => ({
       stockItemId: line.stockItemId,
       name: line.item.name,
+      description: line.item.description,
       shelfNumber: line.item.shelfNumber,
       quantity: line.quantity,
       source: line.source,
@@ -110,6 +120,10 @@ export function toParcelResponse(
  * - **No reason for referral**, ever — not even for an admin. A sheet gets
  *   carried round a hall and left on tables. Why someone is hungry is not
  *   picking information.
+ * - **Each line carries the item's description**, which is where a unit or a
+ *   caveat that does not belong in the name gets to the person packing the bag.
+ *   The sheet stays in shelf order; the description does not change what is
+ *   printed where, only what each line says.
  * - **No answers.** The preferences belong on the maintenance screen, where
  *   somebody is deciding what goes in the parcel; by print time that decision
  *   is in `lines`.

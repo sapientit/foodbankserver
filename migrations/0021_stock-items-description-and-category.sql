@@ -1,0 +1,38 @@
+-- A stock item gains a description and a category. See `INITIAL_SPEC1.txt`,
+-- "Stock".
+--
+-- The description is what the item actually is, printed on the pick list beside
+-- the name: several of the charity's existing item names carry that sentence
+-- inside the name itself today ("Pasta - when rice also selected - 0.5 kg = 1
+-- unit"), which is the name doing a job it was not meant to do.
+--
+-- The category is the grouping the maintenance screen and the pick-list
+-- amendment screen order by, ahead of the name. Free text and no lookup table —
+-- there are few enough categories that a table would be one more maintenance
+-- screen for no gain. Its capitalisation is standardised on write by
+-- `src/modules/stock/category.ts` so that `tinned goods` and `Tinned Goods` are
+-- one group; nothing else about it is matched or corrected.
+--
+-- ## Why this is two ALTERs and not a rebuild
+--
+-- Both are plain adds. `ALTER TABLE ... ADD COLUMN` is always available in
+-- SQLite, and it is what drizzle-kit generated here — but check every future
+-- change to this table against `0010`'s header before accepting what it emits.
+-- `stock_items` is a foreign-key parent to `stock_ledger` and `parcel_lines`,
+-- and the drop-and-recreate drizzle-kit reaches for when it thinks a rebuild is
+-- needed is justified by "the table is empty", which is true of a fresh
+-- database and the test run and of nothing else.
+--
+-- ## The default on `category`, and why `description` has none
+--
+-- `category` is `NOT NULL` because the charity settled that every item has one
+-- and none can be left without, so the ~94 items that predate this migration
+-- need a value, and `ALTER TABLE ... ADD COLUMN NOT NULL` requires a default to
+-- supply it. 'Uncategorised' is the charity's own answer for the take-on: a
+-- real category an administrator can see on the screen, sort by and work
+-- through a few at a time, rather than a blank that reads as a rendering fault.
+--
+-- `description` is optional, so it is nullable with no default and no backfill:
+-- NULL already means what an absent description means.
+ALTER TABLE `stock_items` ADD `description` text;--> statement-breakpoint
+ALTER TABLE `stock_items` ADD `category` text DEFAULT 'Uncategorised' NOT NULL;

@@ -7,6 +7,76 @@ sees what, and the handful of things that will otherwise be got wrong.
 Base path is `/api/v1`. Everything is JSON. There is no HTML, no server-side
 rendering and no PDF — printing and layout are the client's.
 
+## Where the server is
+
+|            | URL                                              |
+| ---------- | ------------------------------------------------ |
+| Local      | `http://127.0.0.1:8787`                          |
+| Test       | `https://foodbank-server.losttemple.workers.dev` |
+| Production | not yet deployed                                 |
+
+`/health` and `/ready` sit at the **root**, not under `/api/v1`. Everything else
+is under the base path.
+
+The test system runs dummy authentication, so anyone who knows a seeded address
+is an admin. **Never put real personal data in it.** The seeded address is
+deliberately not written down here — ask Pete for it.
+
+### Why the browser must not call this host directly
+
+The refresh cookie is `SameSite=Strict`, and browsers decide "same site" from the
+Public Suffix List — on which **both `workers.dev` and `pages.dev` appear**. A
+client on its own `*.workers.dev` or `*.pages.dev` host is therefore cross-site
+from this API, the browser silently drops the cookie, and the session dies
+fifteen minutes after login looking exactly like an auth bug. It is not one.
+
+**The agreed arrangement avoids this**: the client Worker serves the app and
+forwards `/api/v1/**` to this Worker over a Cloudflare **service binding**, so
+the browser only ever talks to one origin. Nothing is cross-origin, no preflight
+happens, and `ALLOWED_ORIGINS` stays empty — which is what `src/http/cors.ts`
+already calls the correct same-origin default. There is nothing to configure
+here.
+
+### What the proxy must get right
+
+Four requirements. Each fails quietly, and two of them fail as something that
+looks like a server bug.
+
+**1. Forward the original `Request`, so `cf-connecting-ip` survives.** This API
+reads that header in two places: the rate limiter's bucket key
+(`http/middleware/rate-limit.ts`) and Turnstile's `remoteip` on siteverify
+(`modules/referrals/public.routes.ts`). Building a fresh `Request` without
+copying headers drops it, the limiter falls back to a single literal key, and
+**every visitor on earth shares one bucket** — at which point `REFERRAL_LIMITER`
+throttles the entire public referral form to five submissions a minute. Pass the
+request through (`env.API.fetch(request)`), or copy the header explicitly.
+
+**2. Proxy path-for-path.** The refresh cookie is scoped to
+`path=/api/v1/auth`. If the client mounts the API anywhere else — `/backend/**`,
+`/proxy/**`, anything rewritten — the browser will not match the path and will
+never send the cookie back, producing the same fifteen-minute death this
+arrangement exists to prevent. Browser `/api/v1/**` must arrive here as
+`/api/v1/**`.
+
+**3. Return the response with its headers intact**, `Set-Cookie` above all. A
+proxy that constructs a new `Response` from just the body and status silently
+discards the refresh cookie, and login appears to succeed while nothing persists.
+
+**4. Forward `authorization` and `cf-turnstile-response`.** The first carries
+every authenticated call; the second is how the referral form passes its
+Turnstile token.
+
+`/health` and `/ready` are at the **root**, not under `/api/v1`, so they are
+outside the proxied prefix. Route them separately if you want them, and mind the
+collision if the client Worker has a `/health` of its own.
+
+**Worth verifying once, from two networks.** Trip the referral limiter from one
+device (six or more submissions inside a minute) and check a second device on a
+different connection — mobile data, say — is unaffected. If the second is also
+throttled, `cf-connecting-ip` is not reaching this API and requirement 1 is
+broken. It is a two-minute test that catches the one failure here that would
+otherwise be found by a referrer unable to submit.
+
 ## Generating types
 
 ```bash
@@ -283,6 +353,48 @@ of them. The referrer's name, email and phone survive, as does `reviewComment`:
 the point of the purge is to stop holding the household's details, not to lose
 track of who referred them.
 
+### The postcode has a settled form, and you apply it too
+
+**This is a rule both repos implement, not a server behaviour you consume.** It
+is written down here because it has to be the same at both ends, and because
+neither of us can see the other's code.
+
+The review screen matches a household against earlier referrals on date of
+birth, postcode and phone number, so `gu14aa` and `GU1 4AA` have to be the same
+postcode. Turning one into the other is the **settled form**:
+
+1. Uppercase it and remove every whitespace character.
+2. Keep the result only if it matches
+   `^[A-Z]{1,2}[0-9][A-Z0-9]?[0-9][A-Z]{2}$`. If it does not, there is no
+   settled form for that postcode.
+3. To **display** it, put a single space before the final three characters:
+   `GU14AA` → `GU1 4AA`.
+
+**Do it in the form, as the referrer types.** That is the better place for it,
+because you can show them what has been understood while they can still correct
+it. The server does it again when the referral arrives, and stores the result
+in a column of its own — a referral can reach the food bank by routes that never
+went through your form, and matching cannot assume every one of them tidied up
+first. Doing it twice is deliberate.
+
+Three things that follow, and they matter:
+
+- **Normalising is not validating.** A postcode the rule cannot make sense of
+  does not stop the referral. It is taken, stored exactly as typed, and simply
+  never matched on. **Do not reject the submission** — the charity would rather
+  look at a referral with an odd postcode on it than turn away a household over
+  the way an address was written down.
+- **The stored value is what the referrer wrote**, not the settled form.
+  `refereePostcode` comes back on every response exactly as it was sent; putting
+  a value into a settled form never rewrites the value itself. If your form
+  normalises the text in the input box, that is what gets sent and that is what
+  is stored — which is fine, and is why showing the display form matters.
+- **The same holds for the phone number**, on the server side only. It is put
+  into UK E.164 (`+447700900123`) for matching, from `07700 900123`,
+  `+44 7700 900123` or `(07700) 900-123` alike. Anything that is not a UK
+  number has no settled form and is not matched on. Nothing is asked of your
+  form here; the number is stored as typed either way.
+
 ### Deliveries can be switched off per session
 
 `Session` and `PublicSession` both carry **`deliveriesAllowed`**. False means
@@ -360,6 +472,88 @@ charity asked for the status for.
 > `active` alone as the live set makes a household vanish from a list the moment
 > an administrator reads their referral. The server-side sets have all been
 > widened; yours have not.
+
+### Has this household been here before? (admin only)
+
+A food bank parcel is emergency support, not a way of living. A household coming
+back again and again is a sign the emergency was never resolved, and the
+administrator reviewing the referral is the person who should see that. So the
+review screen carries a count, and a button behind it.
+
+`GET /api/v1/referrals/{id}` gains, **for an administrator only**:
+
+```json
+"repeatReferrals": { "count": 3, "mostRecentSessionDate": "2026-08-11" }
+```
+
+`GET /api/v1/referrals/{id}/repeat-referrals` is the button — admin only, and
+the only place another household's details are returned:
+
+```json
+{
+  "count": 3,
+  "mostRecentSessionDate": "2026-08-11",
+  "matches": [
+    {
+      "referralId": "…",
+      "sessionId": "…",
+      "sessionDate": "2026-08-11",
+      "outcome": "booked",
+      "matchedOn": ["postcode", "phone"],
+      "refereeFirstName": "…",
+      "refereeSurname": "…",
+      "refereeDateOfBirth": "1990-03-02",
+      "refereeAddress": "…",
+      "refereePostcode": "…",
+      "refereePhone": "…"
+    }
+  ]
+}
+```
+
+Ordered most recent session first. `outcome` is `attended`, `no_show` or
+`booked`; `matchedOn` is a non-empty subset of `date_of_birth`, `postcode` and
+`phone`.
+
+Six things to build around:
+
+- **`matches` stops at 50 and `count` does not.** When `count` is larger there
+  are more, and there is no page two to ask for. **Render both numbers when
+  they differ** — "50 of 312" — because a screen showing only the rows tells an
+  administrator that fifty is all there is, which is the one thing this must
+  not do. It is a postcode shared by a hostel or a refuge that produces numbers
+  like that, and past fifty nobody reads on anyway; the honest answer there is
+  the count with a sample of it, not three hundred names on a page.
+
+- **`mostRecentSessionDate` can be in the future.** It is the date of the
+  session the referral is on, not a date the household was fed — so a household
+  booked in for next Tuesday reports next Tuesday. Do not label it "last
+  attended" or format it as a past date. `null` when `count` is 0.
+- **The count is referrals, not parcels.** Everything except a cancelled or
+  rejected referral counts: fed, did not turn up, and still to come alike. That
+  is deliberate and it is the point — a household referred to two sessions in the
+  same week is exactly what this exists to catch, and counting only parcels
+  handed over would hide the second one until after it had been picked, packed
+  and given out. `outcome` on each row is how the administrator tells food given
+  from places booked; show it.
+- **Do not fetch the list to render the count.** The summary is on the referral
+  you already have. The button is a second call because it returns other
+  households' names, addresses, phone numbers and dates of birth, and those
+  should not cross the wire until an administrator asks for them.
+- **`matchedOn` is not decoration.** A match on all three is almost certainly the
+  same household; a match on postcode alone may be two families in one block of
+  flats, a hostel or a refuge — which is exactly the housing these households
+  live in. Show which it was, or the number becomes one an administrator learns
+  to ignore.
+- **Nothing is blocked, and you must not add a block.** No refusal, no warning
+  banner, no "are you sure". The administrator is shown what was found and makes
+  the call; a rule that turned a household away on the strength of a shared
+  postcode would be the wrong kind of help. The charity was explicit about this.
+
+The lookback is twelve months, counted from when each referral was made — the
+same clock the retention purge runs on, so a household whose details have been
+forgotten cannot be found. That is accepted, not a bug: there is nothing left to
+match on.
 
 ### The second accept button
 
@@ -482,6 +676,20 @@ sheet is printed.
 `PUT /parcels/{id}/lines` with `quantity: 0` **removes** the line — that is how
 "we had none" is recorded.
 
+**The amendment screen shows every stock item, not only the ones in the
+parcel**, in category order with a blank against anything the household is not
+getting. Adding to a parcel is then typing a number against a line already on
+the screen rather than hunting for the item.
+
+**Assembling that is yours, and deliberately so.** `GET /pick-lists/{id}`
+returns only the lines that exist; overlay them on `GET /stock/items` (which
+now defaults to category order — see **5f**) keyed by `stockItemId`. The server
+does not pad the parcel out to every item, for two reasons: it would be ~120
+lines per parcel across 25 parcels on a session, and it would destroy the
+parcel's own record of what was chosen — a line at zero and a line never added
+would become the same thing, and `quantity: 0` already means something else
+here.
+
 Before recording either attendance outcome, call `POST /parcels/{id}/review`.
 The session list exposes `reviewedAt` on each parcel so it can distinguish a
 pending review from a reviewed pick list.
@@ -576,6 +784,11 @@ Two things worth knowing when you build a report:
 `GET /pick-lists/{id}/print` returns one object per parcel, **lines already
 ordered by shelf** so a picker walks the aisle once (`A1, A2, A10` — not
 alphabetically). Render in the order given.
+
+Each line now carries the stock item's `description` (`null` where the item has
+none) — print it under the item name. It is where a caveat that does not belong
+in the name, like "half a kilo counts as one unit", reaches the person packing
+the bag. There is no `category` on a line: the sheet is in shelf order.
 
 What is **on every sheet**: `pickNumber`, and `refereeFirstName` /
 `refereeSurname`. The name used to be withheld on collections; it is now on all
@@ -824,8 +1037,9 @@ The parts of the count screen that will catch you out:
 - **The same `stockItemId` twice in one body is a `400`**, not a
   last-one-wins.
 
-`GET /stock/levels`, `/stock/items`, `/stock/search` and item maintenance are
-unchanged. **Levels can still be negative** — parcels go out between counts.
+`GET /stock/levels` and `/stock/search` behave as they did; `/stock/items` and
+item maintenance changed when items gained a category — see **5f**.
+**Levels can still be negative** — parcels go out between counts.
 
 ### Attendance is reversible until the session is confirmed
 
@@ -893,6 +1107,61 @@ rather than assuming a shape, and it may be `null`.
 
 ---
 
+## 5f. Stock items gain a description and a category
+
+`StockItem` has two new fields, and one default changed. **The changed default
+is the part that will surprise you**, so it is first.
+
+### `GET /stock/items` now defaults to category order
+
+It used to come back in shelf order. It now comes back **by category, then by
+item name within the category** — the order the maintenance screen shows and
+the order the pick-list amendment screen offers items in.
+
+Both list endpoints take `?order=category` or `?order=shelf`, and each defaults
+to what its own screen wants:
+
+| Endpoint            | Default    | Because                               |
+| ------------------- | ---------- | ------------------------------------- |
+| `GET /stock/items`  | `category` | maintenance, and amending a pick list |
+| `GET /stock/levels` | `shelf`    | the stock take, clipboard in hand     |
+
+An unrecognised `order` is a `400`, not a silent fallback — a pick list quietly
+in the wrong order is worse than an error.
+
+### `category`
+
+Free text, required on `POST /stock/items`, `maxLength` 40. There is no
+category table and no enumeration to fetch: build a datalist from the
+categories present in the item list if you want to help an admin avoid typos.
+
+**The server settles the capitalisation.** Send `tinned goods`, store and read
+back `Tinned Goods`. That is what stops one category splitting into two groups
+on a screen. Nothing else is corrected — `Tins` and `Tinned` stay two
+categories.
+
+`UHT milk` therefore comes back as `Uht Milk`. That is settled and accepted, not
+a bug to work around: **display what the server returns**, never what was typed,
+or the screen will disagree with the grouping.
+
+An item **cannot exist without a category** and cannot be amended to have none —
+it is what two screens are ordered by. The existing items were given
+`Uncategorised` on take-on, so expect a group of that name until an admin has
+worked through them.
+
+### `description`
+
+Free text, **optional and nullable**, `maxLength` 200. What the item actually
+is, where the name does not say it — "half a kilo counts as one unit when rice
+is also given". Shown on the maintenance screen and **printed on the pick
+list** (see **5**).
+
+On `PATCH /stock/items/{id}`, `null` clears it — and so does `""`. The two mean
+the same thing and both read back as `null`, so a cleared field never comes
+back as an empty string to special-case.
+
+---
+
 ## 6. Errors
 
 Every failure has the same shape:
@@ -931,6 +1200,111 @@ you cannot render "you entered X" from the response. Keep your own copy of what
 the user typed.
 
 ---
+
+## 6a. Extracting to the spreadsheet (admin only)
+
+The charity keeps its records in a Google spreadsheet and this feeds it. **The
+server never talks to Google.** It holds no service account, no refresh token
+and no access token, and makes no request to any Google API. Your browser
+obtains Sheets consent against the administrator's own Google account and does
+every write itself; the server hands out configuration, hands out one session
+at a time, and records that a session has been written.
+
+```
+GET  /api/v1/extracts/config                       → ExtractConfig
+GET  /api/v1/extracts                              → ExtractProgress
+POST /api/v1/extracts/claims                       → ExtractClaimResponse
+POST /api/v1/extracts/claims/{claimId}/complete    → ExtractCompleteResponse
+```
+
+All four are admin only.
+
+### The loop
+
+1. The administrator asks to extract. **Confirm first that this might take some
+   time** — that confirmation is part of the agreed design, not decoration.
+2. Only _after_ they agree, `GET /extracts/config` and ask Google for Sheets
+   consent with the `googleClientId` it returns. Do not ask on page load.
+3. Read the spreadsheet's **hidden metadata sheet** for the `answerKey → column`
+   mapping (see below).
+4. `POST /extracts/claims`. `claim: null` means you are done — that is how a
+   batch ends, not an error.
+5. Write `claim.rows` to the spreadsheet yourself.
+6. Only once that write has **actually succeeded**, `POST
+/extracts/claims/{claimId}/complete`.
+7. After **20 successfully extracted sessions**, stop and ask whether to carry
+   on. `remaining` and `extracted` come back on every claim and completion, so
+   you have the progress to show without a separate call.
+
+### Claims, and why they expire
+
+A claim reserves one session to one browser, atomically — two administrators
+working the queue at once get different sessions, never the same one twice.
+
+**A claim lasts 10 minutes and is not extended by activity.** If the browser
+closes, reloads, or the machine sleeps, it lapses and the session returns to the
+queue; without that, one abandoned extract would block the queue forever.
+
+Completion fails in three distinguishable ways, and they are not the same event:
+
+| Response              | Means                                                           |
+| --------------------- | --------------------------------------------------------------- |
+| `404`                 | No such claim — never issued, or the session has been reclaimed |
+| `409` "has expired"   | You were away too long. Your write may well have landed         |
+| `409` "belongs to..." | Another administrator's claim; not yours to finish              |
+| `422`                 | The deployment has no spreadsheet configured                    |
+
+Show the message. An operator who sees "expired" needs to check the spreadsheet;
+one who sees "belongs to another administrator" needs to know a colleague is
+working.
+
+### At-least-once, and the one thing you must not automate
+
+The spreadsheet and the database cannot be one transaction. If your Sheets write
+succeeds and the completion call then fails, the session stays unextracted and a
+later batch sends it again — **duplicate rows are possible, and that is the
+intended failure direction.** A duplicate carries `referralId` and can be found
+and deleted; a household that quietly never arrived cannot be found at all.
+
+> **Never retry a timed-out Google write automatically.** It may have succeeded.
+> Stop, tell the administrator, and let them check the spreadsheet by
+> `referralId`.
+
+Retrying the **completion call** is a different thing and is safe: if you never
+saw the response, send it again. The second call returns
+`alreadyExtracted: true` and changes nothing. It never triggers a Google write.
+
+### The row, and the metadata sheet
+
+`claim.rows` carries **every referral on the session whatever its status** —
+cancelled and rejected included, because a referral that was turned away still
+happened.
+
+The named fields are the fixed columns: `referralId`, `status`, `referredAt`,
+the four `referrer*` fields, the six `referee*` fields, `adults`, `children`,
+`isDelivery`, `needsFuelHelp`, `reason` (the label, not the id) and
+`reviewComment`.
+
+The claim itself carries the two session columns every row on it shares:
+**`sessionDate` and `sessionLocation`**. Write those. **`claim.sessionId` is not
+a spreadsheet column** — it is there to complete the claim and to reconcile a
+duplicate, and a UUID in a spreadsheet helps nobody, which is the same reason
+`reason` is the label rather than the id.
+
+`answers` is an **object, not a JSON string**. The spreadsheet's hidden metadata
+sheet owns the `answerKey → column` mapping: read it before your first write,
+put each key's answer in that key's column, and write the metadata sheet back
+whenever you add a key. **That mapping is spreadsheet state and the server does
+not store it** — there is no API for it and there should not be, because the
+form is yours and so are the columns.
+
+> **This is the one place personal data leaves the system**, including
+> `reviewComment`, which is admin-only in the API because it can name a
+> referrer. Everyone the spreadsheet is shared with sees every column, and the
+> twelve-month purge cannot reach it. The charity decided that knowingly.
+
+Nothing is offered before its session is confirmed, so an administrator who
+cannot find a session in the spreadsheet should check it has been signed off.
 
 ## 7. Things that will bite
 

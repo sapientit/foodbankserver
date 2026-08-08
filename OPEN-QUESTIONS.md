@@ -102,7 +102,7 @@ Worth answering before pick lists and printing are built, because that is the sl
 would discover they wanted it.
 
 **A:**
-No reason for the team leader to ever look.
+No reason for the team leader to ever look. This should be documented and closed.
 
 ---
 
@@ -141,41 +141,6 @@ The list that would settle all of it is the stock item list — these are all th
 either has on a shelf or does not.
 
 **A:**
-
----
-
-## Q24 — Does the Google Sheets export carry names and addresses?
-
-`Status: open` · `Raised by: server` · `Blocks: the export's row shape — see [docs/planned/google-sheets-export.md](./docs/planned/google-sheets-export.md)`
-
-The charity wants every referral to end up in a Google Sheet, fed automatically by a cron job. What
-is unsettled is **which columns**: the referee's name, date of birth, address, postcode, phone and
-reason for referral, or only the non-identifying parts — session, date, household counts, delivery
-flag, attendance outcome.
-
-Pete's view on 2026-08-05 was that he saw no reason to copy names and addresses, and also that the
-charity already keeps this data in Google Sheets today. Both are true and neither settles it, so it
-is being asked rather than assumed.
-
-What the charity should know before deciding:
-
-- **The database is pinned to the EU jurisdiction and cannot be moved.** That pinning is why
-  [`docs/engineering/personal-data.md`](./docs/engineering/personal-data.md) currently states that
-  nothing carrying a referee's name, address, phone number or reason for referral may leave D1 —
-  including to a third-party fetch, which is exactly what this export is. Sending personal fields
-  means changing that rule deliberately, in the spec, not quietly in a job. A Google Workspace with
-  EU data regions configured keeps residency; a personal Gmail account does not.
-- **The purge cannot reach the Sheet.** The charity has settled on twelve months, but that clears
-  rows in D1 only. Personal data in the Sheet stays until somebody deletes it by hand, so "we hold
-  it for twelve months" becomes partly untrue the day this ships with personal columns in it.
-- **Who can see the Sheet is outside this system entirely.** Roles, `requireRole` and the response
-  mappers stop at the API boundary. Anyone the Sheet is shared with sees every column in it.
-
-None of this makes the answer no. The charity may have a good reason and already has this data in
-Sheets. It makes it a decision worth taking on purpose.
-
-**A:**
-Tbc
 
 ---
 

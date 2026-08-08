@@ -112,6 +112,64 @@ export const sessions = sqliteTable(
     generatedAt: text('generated_at'),
     confirmedAt: text('confirmed_at'),
     confirmedByUserId: text('confirmed_by_user_id').references(() => users.id),
+    /**
+     * Set once this session and every referral on it — including the
+     * cancelled and rejected ones — has been written to the charity's Google
+     * spreadsheet. `NULL` is the extract queue: "what has not gone yet" is a
+     * `WHERE extracted_at IS NULL` query, not something inferred from a
+     * cursor. That makes the marker order-independent by construction — a
+     * row that commits late is still `NULL`, so the next batch picks it up.
+     * Self-healing, not a bug to guard against.
+     *
+     * A timestamp cursor over `confirmedAt` was considered and rejected:
+     * stamp order is not commit order on Workers, so a session stamped
+     * microseconds before another but committed after it would land behind
+     * a "confirmed before X" cursor and never be extracted — a completed
+     * session silently missing from the spreadsheet. A marker on the row
+     * cannot fail that way.
+     *
+     * **The server never writes to Google.** This is stamped only when the
+     * administrator's browser reports that its Sheets write succeeded. See
+     * `INITIAL_SPEC1.txt`, "Sending referrals to the spreadsheet".
+     *
+     * No personal data lives here — it is a fact about the session, not
+     * about a household.
+     */
+    extractedAt: text('extracted_at'),
+
+    // ---- The reservation, so two administrators cannot extract at once ----
+    //
+    // The browser takes one session at a time, and between being handed a
+    // session's referrals and reporting the write done it holds a claim on
+    // it. All three columns move together: they are set as one, and a row
+    // with one of them set and the others null is a bug.
+    //
+    // **A claim is not cleared on completion.** `extractClaimId` stays put
+    // beside `extractedAt` so that repeating a completion — the browser
+    // retried, the response was lost — can be recognised as the same claim
+    // finishing the same session, and answered successfully rather than with
+    // a conflict. Retrying completion must be safe; it is the one call the
+    // browser may repeat.
+    /** Opaque id handed to the browser; it presents this to complete. */
+    extractClaimId: text('extract_claim_id'),
+    /**
+     * Who holds it. Completion by anyone else is refused — a second
+     * administrator working the queue must not be able to mark a session
+     * extracted on the strength of the first one's write.
+     */
+    extractClaimedByUserId: text('extract_claimed_by_user_id').references(() => users.id),
+    /**
+     * When the claim lapses, after which the session is claimable again.
+     *
+     * This is what makes a closed laptop recoverable. The browser holds the
+     * only Google credential and the only knowledge of whether the write
+     * happened, so if it goes away mid-session nothing can finish the job —
+     * without an expiry that session would be reserved forever and the queue
+     * would stop at it. Completing an expired claim is refused rather than
+     * quietly accepted: by then somebody else may hold it, and stamping on
+     * their behalf would mark a session extracted that nobody wrote.
+     */
+    extractClaimExpiresAt: text('extract_claim_expires_at'),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
   },
@@ -124,6 +182,17 @@ export const sessions = sqliteTable(
     unique('idx_sessions_occurrence').on(table.recurringSessionId, table.occurrenceDate),
     index('idx_sessions_starts_at').on(table.startsAtUtc),
     index('idx_sessions_status_date').on(table.status, table.sessionDate),
+    /**
+     * The extract queue is the small unextracted tail of a table that only
+     * grows, so a partial index keeps the scan proportional to the backlog
+     * rather than to the whole table. See `stock.ts`'s
+     * `idx_stock_ledger_parcel_movement` for the same technique.
+     */
+    index('idx_sessions_unextracted')
+      .on(table.extractedAt)
+      .where(sql`${table.extractedAt} IS NULL`),
+    /** Completion looks a session up by the claim the browser presents. */
+    index('idx_sessions_extract_claim').on(table.extractClaimId),
     check(
       'sessions_status_valid',
       sql`${table.status} IN ('planned', 'in_progress', 'confirmed', 'cancelled')`,

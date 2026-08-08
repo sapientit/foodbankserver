@@ -1,6 +1,7 @@
 import type { Actor } from '../../core/actor.ts';
 import { parseAnswers } from '../../core/answers.ts';
 import type { Referral } from '../../db/schema/referrals.ts';
+import type { MatchKind } from './matching.ts';
 
 /**
  * Response mappers are the output allowlist — and for referrals they are also
@@ -45,9 +46,21 @@ export interface ReferralResponse {
   readonly referrerEmail?: string | null | undefined;
   readonly referrerPhone?: string | null | undefined;
   readonly reviewComment?: string | null | undefined;
+  /**
+   * How many times this household has been referred in the last twelve
+   * months, and the session date of the most recent of those. Admin-only,
+   * like the four fields above, and only present when the caller supplies
+   * it — `GET /referrals/:id` fetches it for an administrator only, so a
+   * team lead's request costs no extra query.
+   */
+  readonly repeatReferrals?: RepeatReferralSummaryResponse | undefined;
 }
 
-export function toReferralResponse(referral: Referral, actor: Actor): ReferralResponse {
+export function toReferralResponse(
+  referral: Referral,
+  actor: Actor,
+  repeatReferrals?: RepeatReferralSummaryResponse,
+): ReferralResponse {
   const base: ReferralResponse = {
     id: referral.id,
     sessionId: referral.sessionId,
@@ -78,6 +91,7 @@ export function toReferralResponse(referral: Referral, actor: Actor): ReferralRe
     referrerEmail: referral.referrerEmail,
     referrerPhone: referral.referrerPhone,
     reviewComment: referral.reviewComment,
+    ...(repeatReferrals === undefined ? {} : { repeatReferrals }),
   };
 }
 
@@ -173,5 +187,122 @@ export function toListenerSheetHousehold(
     reason: reasonLabel ?? null,
     needsFuelHelp: referral.needsFuelHelp === 1,
     answers: parseAnswers(referral.answersJson),
+  };
+}
+
+/**
+ * `attended` | `no_show` | `booked` — the vocabulary attendance already
+ * uses, rather than a second set of words for the same three states.
+ */
+export type RepeatReferralOutcome = 'attended' | 'no_show' | 'booked';
+
+/** `{ count, mostRecentSessionDate }` — admin-only, embedded in `ReferralResponse`. */
+export interface RepeatReferralSummaryResponse {
+  readonly count: number;
+  /**
+   * The most recent match's session date, or `null` when `count` is 0.
+   *
+   * **May be a date in the future.** It is the session the most recent
+   * matching referral is booked for, not a submission date or an
+   * attendance date — a household referred twice for next Tuesday reports
+   * next Tuesday before either referral has been picked, packed or handed
+   * out. Do not assume this is in the past.
+   */
+  readonly mostRecentSessionDate: string | null;
+}
+
+/**
+ * Trivial by design. `referrals.repository.ts#countRepeatReferrals` and the
+ * service's empty-result short-circuit already return exactly this shape —
+ * this function still exists because it is the allowlist boundary a reader
+ * checks, not a query that happens to keep it narrow.
+ */
+export function toRepeatReferralSummary(summary: {
+  readonly count: number;
+  readonly mostRecentSessionDate: string | null;
+}): RepeatReferralSummaryResponse {
+  return { count: summary.count, mostRecentSessionDate: summary.mostRecentSessionDate };
+}
+
+/**
+ * What the "list them in full" button on the review screen shows for one
+ * repeat referral — `INITIAL_SPEC1.txt`, `#Reviewing a referral`.
+ *
+ * **No reason, no answers, no review comment, no normalised columns, no
+ * status.** The spec names what the button shows and this is it, plus the
+ * session date and outcome. This is more sensitive than `reviewComment`
+ * (already admin-only) — it carries another household's name, address,
+ * phone number and date of birth — so it is only ever reached through
+ * `GET /referrals/{id}/repeat-referrals`, which is admin-only.
+ */
+export interface RepeatReferralMatchResponse {
+  readonly referralId: string;
+  readonly sessionId: string;
+  /** `YYYY-MM-DD`, London. The referral's **own** session, not a parcel's. */
+  readonly sessionDate: string;
+  readonly outcome: RepeatReferralOutcome;
+  /** Non-empty: which of date of birth, postcode and phone this referral shares. */
+  readonly matchedOn: readonly MatchKind[];
+  readonly refereeFirstName: string | null;
+  readonly refereeSurname: string | null;
+  readonly refereeDateOfBirth: string | null;
+  readonly refereeAddress: string | null;
+  readonly refereePostcode: string | null;
+  readonly refereePhone: string | null;
+}
+
+/**
+ * The mapper's own input shape, deliberately **not** the service's
+ * `RepeatReferralMatch` — that type also carries `postcodeNormalised` and
+ * `phoneNormalised`, and declaring a narrower shape here is what stops them
+ * leaking, rather than trusting every field-by-field copy below to remember
+ * to omit them.
+ */
+interface RepeatReferralMatchInput {
+  readonly id: string;
+  readonly sessionId: string;
+  readonly sessionDate: string;
+  readonly outcome: RepeatReferralOutcome;
+  readonly matchedOn: readonly MatchKind[];
+  readonly refereeFirstName: string | null;
+  readonly refereeSurname: string | null;
+  readonly refereeDateOfBirth: string | null;
+  readonly refereeAddress: string | null;
+  readonly refereePostcode: string | null;
+  readonly refereePhone: string | null;
+}
+
+export function toRepeatReferralMatch(
+  match: RepeatReferralMatchInput,
+): RepeatReferralMatchResponse {
+  return {
+    referralId: match.id,
+    sessionId: match.sessionId,
+    sessionDate: match.sessionDate,
+    outcome: match.outcome,
+    matchedOn: match.matchedOn,
+    refereeFirstName: match.refereeFirstName,
+    refereeSurname: match.refereeSurname,
+    refereeDateOfBirth: match.refereeDateOfBirth,
+    refereeAddress: match.refereeAddress,
+    refereePostcode: match.refereePostcode,
+    refereePhone: match.refereePhone,
+  };
+}
+
+/** The `GET /referrals/{id}/repeat-referrals` body in full. */
+export interface RepeatReferralListResponse extends RepeatReferralSummaryResponse {
+  readonly matches: readonly RepeatReferralMatchResponse[];
+}
+
+export function toRepeatReferralListResponse(list: {
+  readonly count: number;
+  readonly mostRecentSessionDate: string | null;
+  readonly matches: readonly RepeatReferralMatchInput[];
+}): RepeatReferralListResponse {
+  return {
+    count: list.count,
+    mostRecentSessionDate: list.mostRecentSessionDate,
+    matches: list.matches.map(toRepeatReferralMatch),
   };
 }

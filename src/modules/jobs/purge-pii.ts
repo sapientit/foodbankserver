@@ -82,6 +82,13 @@ export async function purgeReferralPii(deps: {
         refereeAddress: null,
         refereePostcode: null,
         refereePhone: null,
+        // The settled forms used for repeat-referral matching, alongside the
+        // values they are derived from. Missing this is not a bug, it is a
+        // data-protection failure: a household the food bank has promised to
+        // forget would go on matching by a postcode or phone number it says
+        // it no longer holds.
+        refereePostcodeNormalised: null,
+        refereePhoneNormalised: null,
         answersJson: null,
         piiPurgedAt: now,
         updatedAt: now,

@@ -21,8 +21,16 @@ info:
 servers:
   - url: http://127.0.0.1:8787
     description: Local wrangler dev
-  - url: https://foodbank-server-production.workers.dev
-    description: Production
+  - url: https://foodbank-server.losttemple.workers.dev
+    description: >-
+      Test system. Dummy authentication, so anyone knowing a seeded address is an
+      admin — never put real personal data in it. The browser does not call this
+      host directly: the client Worker forwards to it over a service binding, so
+      the refresh cookie stays same-origin. See API.md.
+  - url: https://foodbank-server-production.losttemple.workers.dev
+    description: >-
+      Production — NOT YET DEPLOYED. Expected to move to a custom domain before
+      go-live; the spreadsheet extract needs one Google can verify.
 
 tags:
   - name: Auth
@@ -36,6 +44,11 @@ tags:
     description: >-
       Households to follow up about a gas or electricity bill. One endpoint,
       and a role that reaches nothing else in the API.
+  - name: Extracts
+    description: >-
+      Handing confirmed sessions to an administrator's browser, which writes
+      them to the charity's Google spreadsheet itself. Admin only. **The server
+      never calls Google and holds no Google credential.**
   - name: SMS
     description: >-
       Reminding households about a session by text, and the replies that come
@@ -853,6 +866,167 @@ paths:
                     type: array
                     items: { $ref: '#/components/schemas/FuelHelpHousehold' }
 
+  /api/v1/extracts/config:
+    get:
+      tags: [Extracts]
+      summary: Which spreadsheet, and which Google OAuth client
+      description: |
+        **Admin only.** What the browser needs before it can start an extract.
+
+        **The server never talks to Google.** It holds no service account, no
+        refresh token and no access token, and makes no request to any Google
+        API. The administrator's browser obtains its own Sheets consent against
+        their Google account and does every write itself. These two values are
+        the only Google-related thing the server knows.
+
+        Neither is a secret — an OAuth client id is public by design, and a
+        spreadsheet id is useless without access to the spreadsheet — but both
+        are handed only to an administrator, because nobody else starts an
+        extract. **Both differ per deployment**, so a test deployment cannot
+        write into the charity's real spreadsheet.
+
+        Read this **after** the administrator has confirmed they want to start
+        and that it may take some time, and only then ask Google for consent.
+
+        `configured: false` means the deployment has not set them; `spreadsheetId`
+        and `googleClientId` are then absent and every other route here is a
+        `422`. Say so rather than starting a flow that cannot finish.
+      responses:
+        '200':
+          description: The extract configuration
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExtractConfig' }
+        '403':
+          description: The caller is not an administrator
+
+  /api/v1/extracts:
+    get:
+      tags: [Extracts]
+      summary: How much is left to extract
+      description: |
+        **Admin only.** Progress, for the screen and for the "carry on?"
+        question the browser asks after twenty sessions.
+
+        `remaining` counts confirmed sessions not yet extracted, **including
+        any another administrator currently holds a claim on** — from an
+        operator's point of view those are outstanding work, just not theirs
+        this minute.
+      responses:
+        '200':
+          description: Progress
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExtractProgress' }
+        '403':
+          description: The caller is not an administrator
+
+  /api/v1/extracts/claims:
+    post:
+      tags: [Extracts]
+      summary: Reserve the next session and get its referrals
+      description: |
+        **Admin only.** Reserves the oldest confirmed, unextracted, unclaimed
+        session and returns it with every referral on it.
+
+        **The reservation is made atomically, in one statement.** Two
+        administrators working the queue at the same time get different
+        sessions; neither can be handed one the other is already writing.
+
+        `claim: null` means nothing is waiting — the queue is empty, or
+        everything in it is claimed by somebody still working. **This is how a
+        batch ends and is not an error.**
+
+        The referrals come back with the claim rather than behind a second
+        call: the browser can do nothing with one without the other, and a
+        second round trip would only widen the window in which the claim can
+        expire before its rows have arrived.
+
+        `rows` carries **every referral on the session whatever its status** —
+        cancelled and rejected included, because a referral that was turned
+        away still happened and the spreadsheet is the record of what happened.
+
+        **The claim expires** (see `expiresAt`, 10 minutes). If the browser
+        closes, reloads or the machine sleeps, the claim lapses and the session
+        returns to the queue, so an abandoned extract cannot block it forever.
+        A claim is not renewed by activity; write the session and complete it.
+      responses:
+        '200':
+          description: 'A reserved session, or `claim: null` when none remain'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExtractClaimResponse' }
+        '403':
+          description: The caller is not an administrator
+        '422':
+          description: The extract is not configured. Nothing was reserved.
+
+  /api/v1/extracts/claims/{claimId}/complete:
+    parameters:
+      - in: path
+        name: claimId
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [Extracts]
+      summary: Record that this claim's session has been written
+      description: |
+        **Admin only.** Marks the claimed session extracted, after the browser
+        has written its rows to the spreadsheet.
+
+        **This never writes to Google and never can** — it is the browser
+        saying "that one is safely in the spreadsheet", nothing more. Call it
+        only once the Sheets write has actually succeeded.
+
+        **Safe to retry against this server.** A completion whose response was
+        lost can be sent again: the second call recognises the same claim
+        finishing the same session and returns `alreadyExtracted: true` without
+        changing anything. Retrying *this* is safe; retrying a timed-out
+        **Google** write is not, and must never be automatic — see below.
+
+        ### At-least-once, deliberately
+
+        The spreadsheet and this database cannot be one transaction. If the
+        Sheets write succeeds and this call then fails, the session stays
+        unextracted and a later batch sends it again — **duplicate rows are
+        possible and that is the intended failure direction.** A duplicate
+        carries `referralId` and can be found and deleted; a household that
+        quietly never arrived cannot be found at all.
+
+        So: **never retry a timed-out Google write automatically.** It may have
+        succeeded. Stop, tell the administrator, and let them check the
+        spreadsheet by `referralId` before extracting again.
+
+        ### The three ways it fails, and what each means
+
+        - **`404`** — no claim with this id. Either it was never issued, or the
+          session has since been reclaimed and carries somebody else's id now.
+        - **`409`, expired** — the browser was away longer than the claim
+          lasted. Its write may well have landed, so the server refuses to
+          stamp a session nobody can vouch for. `details.sessionId` says which.
+          If somebody else has since extracted it, rows may be duplicated.
+        - **`409`, another administrator's** — two people are working at once
+          and this one is finishing the other's session. Stamping it here would
+          mark a session extracted on the strength of a write this browser did
+          not do.
+
+        Show the message; the two `409`s are not the same event and an operator
+        needs to tell them apart.
+      responses:
+        '200':
+          description: Marked extracted, or already was
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExtractCompleteResponse' }
+        '403':
+          description: The caller is not an administrator
+        '404':
+          description: No such claim
+        '409':
+          description: The claim has expired, or belongs to another administrator
+        '422':
+          description: The extract is not configured
+
   /api/v1/referrals:
     get:
       tags: [Referrals]
@@ -960,6 +1134,80 @@ paths:
             cancelled or rejected, or its current session has been confirmed
         '422':
           description: The chosen reason for referral is no longer offered
+
+  /api/v1/referrals/{id}/repeat-referrals:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    get:
+      tags: [Referrals]
+      summary: Every referral this household has had in the last twelve months
+      description: |
+        **Admin only**, and the button behind `repeatReferrals` on the referral
+        itself. A team lead gets a `403`.
+
+        A food bank parcel is emergency support and not a way of living. A
+        household coming back again and again is not a fraud to be caught but a
+        sign that the emergency was never resolved, and the administrator
+        reviewing the referral is the person who should see that and decide what
+        to do about it. This is what they press to see who those households
+        were.
+
+        **The count is of referrals, not of parcels handed over.** Everything
+        except a cancelled or rejected referral counts — fed, did not turn up,
+        and still to come alike. That is deliberate and it is the point: a
+        household referred to two sessions in the same week is exactly what this
+        exists to catch, and counting only parcels actually received would hide
+        the second referral until after it had been picked, packed and given
+        out, which is the moment it is too late to do anything about it.
+        `outcome` on each row is how an administrator tells food given from
+        places booked, so **show it**.
+
+        Matching is on **date of birth, postcode and phone number, any one
+        sufficient**. Names are deliberately never matched on: different people
+        from the same household are referred at different times, and the same
+        name is typed differently by different referrers. An absent or
+        unrecognisable value matches nothing — two households with no phone
+        number share an absence, not a detail.
+
+        **`matchedOn` is not decoration.** A match on all three is almost
+        certainly the same household; a match on postcode alone may be nothing
+        more than two families in one block of flats, a hostel or a refuge —
+        which is exactly the housing these households live in. Show which it
+        was, or the number becomes one an administrator learns to ignore.
+
+        **Nothing is blocked and you must not add a block.** No refusal, no
+        warning banner, no "are you sure". The administrator is shown what was
+        found and makes the call; a rule that turned a household away on the
+        strength of a shared postcode would be the wrong kind of help. The
+        charity was explicit about this.
+
+        The lookback is twelve months, counted from when each referral was
+        made — the same clock the retention purge runs on, so a household whose
+        details have been forgotten cannot be found. That is accepted, not a
+        gap: there is nothing left on the row to match on.
+
+        Ordered by session date, **most recent first**. `matches` is empty when
+        the household has not been here before, or when this referral has
+        nothing matchable on it at all.
+
+        **`matches` holds at most 50 and `count` is not capped**, so
+        `count > matches.length` means there are more. That is not an error and
+        there is no paging: past fifty nobody reads on, and several hundred
+        other households' names and addresses on one screen — assembled because
+        somebody opened one unrelated referral — is not something the charity
+        wants built. A postcode shared by a hostel or a refuge is what produces
+        numbers like that, and the honest answer there is the count with a
+        sample of it. **Show both numbers** when they differ; a screen that
+        renders only the rows tells an administrator that fifty is all there is.
+      responses:
+        '200':
+          description: The matching referrals, in full
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RepeatReferralList' }
+        '403':
+          description: The caller is a team lead
+        '404':
+          description: No such referral
 
   /api/v1/referrals/{id}/accept:
     parameters: [{ $ref: '#/components/parameters/Id' }]
@@ -1346,11 +1594,15 @@ paths:
       tags: [Stock]
       summary: Stock levels, ordered by shelf
       description: |
-        The picking and stock-take screen. Ordered so a picker walks the aisle
-        once: A1, A2, A10 — not alphabetically. Levels are derived by summing
-        the ledger; there is no stored balance.
+        The stock-take screen. Ordered so a picker walks the aisle once: A1,
+        A2, A10 — not alphabetically. Levels are derived by summing the ledger;
+        there is no stored balance.
+
+        **Defaults to shelf order**, unlike `GET /stock/items`, because the
+        screen behind it is somebody walking the warehouse with a clipboard.
       parameters:
         - { in: query, name: includeInactive, schema: { type: string, enum: ['true'] } }
+        - { $ref: '#/components/parameters/StockOrder' }
       responses:
         '200':
           description: Levels
@@ -1395,11 +1647,18 @@ paths:
     get:
       tags: [Stock]
       summary: List stock items
+      description: |
+        **Defaults to category order** — category first, then item name within
+        the category. That is the order the maintenance screen shows and the
+        order the pick-list amendment screen offers items in. It changed from
+        shelf order when items gained a category; pass `order=shelf` for the
+        old behaviour.
       parameters:
         - { in: query, name: includeInactive, schema: { type: string, enum: ['true'] } }
+        - { $ref: '#/components/parameters/StockOrder' }
       responses:
         '200':
-          description: Items, by shelf
+          description: Items, by category then name unless `order` says otherwise
           content:
             application/json:
               schema:
@@ -1412,7 +1671,10 @@ paths:
     post:
       tags: [Stock]
       summary: Add a stock item
-      description: Admin only.
+      description: |
+        Admin only. **A category is required** — an item cannot exist without
+        one, because it is what the maintenance and pick-list amendment screens
+        are ordered by.
       requestBody:
         required: true
         content:
@@ -1420,9 +1682,17 @@ paths:
             schema:
               type: object
               # Unit and low-stock controls are deliberately not part of stock maintenance.
-              required: [name, shelfNumber]
+              required: [name, category, shelfNumber]
               properties:
                 name: { type: string, maxLength: 120 }
+                category:
+                  type: string
+                  maxLength: 40
+                  examples: ['Tinned Goods']
+                  description: >-
+                    Required. Stored with its capitalisation settled, so
+                    `tinned goods` comes back as `Tinned Goods`.
+                description: { type: string, maxLength: 200 }
                 shelfNumber: { type: string, maxLength: 20, examples: ['A1', '12b'] }
       responses:
         '201':
@@ -1447,6 +1717,13 @@ paths:
               minProperties: 1
               properties:
                 name: { type: string }
+                category: { type: string, maxLength: 40 }
+                description:
+                  type: [string, 'null']
+                  maxLength: 200
+                  description: >-
+                    `null` clears it, and so does an empty string — the two are
+                    the same thing and both read back as `null`.
                 shelfNumber: { type: string }
                 isActive: { type: boolean }
       responses:
@@ -2230,6 +2507,18 @@ components:
       name: sessionId
       required: true
       schema: { type: string, format: uuid }
+    StockOrder:
+      in: query
+      name: order
+      required: false
+      schema: { type: string, enum: [category, shelf] }
+      description: >-
+        How to order the list. `category` sorts by category and then by item
+        name within it — the maintenance screen and the pick-list amendment
+        screen. `shelf` follows the shelf numbers so a volunteer walks the
+        warehouse once — the stock take and the printed pick list. Each
+        endpoint defaults to the one its own screen wants; an unrecognised
+        value is a `400` rather than a silent fallback.
 
   responses:
     BadRequest:
@@ -2736,10 +3025,292 @@ components:
         refereePostcode: { type: [string, 'null'] }
         referredAt: { type: string, format: date-time }
 
+    ExtractConfig:
+      type: object
+      description: >-
+        The two values the browser needs. Neither is a secret, and neither is a
+        Google credential — the server has none.
+      required: [configured]
+      properties:
+        configured:
+          type: boolean
+          description: >-
+            False when the deployment has set neither value. `spreadsheetId`
+            and `googleClientId` are then absent and the other extract routes
+            are `422`.
+        spreadsheetId:
+          type: string
+          description: >-
+            The spreadsheet to write into. Differs per deployment, so a test
+            deployment cannot touch the charity's real one.
+        googleClientId:
+          type: string
+          description: >-
+            The public Google OAuth client id to request Sheets consent
+            against, using the administrator's own Google account in the
+            browser.
+
+    ExtractProgress:
+      type: object
+      required: [remaining, extracted]
+      properties:
+        remaining:
+          type: integer
+          description: >-
+            Confirmed sessions not yet extracted, including any another
+            administrator currently holds a claim on.
+        extracted:
+          type: integer
+          description: Confirmed sessions already extracted. For a progress display.
+
+    ExtractRow:
+      type: object
+      description: >
+        One referral, as one spreadsheet row.
+
+        The named fields are the fixed columns. `answers` is an **object, not a
+        JSON string**, because the spreadsheet's hidden metadata sheet owns the
+        `answerKey → column` mapping: the browser reads that mapping, puts each
+        key's answer in that key's column, and updates the metadata sheet when
+        it meets a new key. **That mapping is spreadsheet state and is not
+        stored in this database** — the server neither knows nor cares which
+        column anything lands in.
+      required:
+        [
+          referralId,
+          status,
+          referredAt,
+          referrerOrganisation,
+          referrerName,
+          referrerEmail,
+          referrerPhone,
+          refereeFirstName,
+          refereeSurname,
+          refereeDateOfBirth,
+          refereeAddress,
+          refereePostcode,
+          refereePhone,
+          adults,
+          children,
+          isDelivery,
+          needsFuelHelp,
+          reason,
+          reviewComment,
+          answers,
+        ]
+      properties:
+        referralId:
+          type: string
+          format: uuid
+          description: >-
+            **Put this in the sheet.** It is how a duplicate row is found and
+            removed after an at-least-once retry, and the only key anyone
+            reconciling the spreadsheet against the system has.
+        status:
+          type: string
+          enum: [pending_review, active, reviewed, rejected, cancelled]
+        referredAt: { type: string, format: date-time }
+        referrerOrganisation: { type: string }
+        referrerName: { type: [string, 'null'] }
+        referrerEmail: { type: [string, 'null'] }
+        referrerPhone: { type: [string, 'null'] }
+        refereeFirstName: { type: [string, 'null'] }
+        refereeSurname: { type: [string, 'null'] }
+        refereeDateOfBirth: { type: [string, 'null'], format: date }
+        refereeAddress: { type: [string, 'null'] }
+        refereePostcode: { type: [string, 'null'] }
+        refereePhone: { type: [string, 'null'] }
+        adults: { type: integer }
+        children: { type: integer }
+        isDelivery: { type: boolean }
+        needsFuelHelp: { type: boolean }
+        reason:
+          type: [string, 'null']
+          description: The label, not the id. A UUID in a spreadsheet helps nobody.
+        reviewComment:
+          type: [string, 'null']
+          description: >-
+            **Admin-only inside the system**, because it can name a referrer or
+            record a suspicion about one. On the spreadsheet everyone it is
+            shared with can read it. The charity decided that knowingly.
+        answers:
+          type: object
+          description: Answer key to answer, exactly as submitted.
+          additionalProperties: true
+
+    ExtractClaim:
+      type: object
+      required: [claimId, expiresAt, sessionId, sessionDate, sessionLocation, rows]
+      properties:
+        claimId:
+          type: string
+          format: uuid
+          description: Present this to complete. Valid until `expiresAt`.
+        expiresAt:
+          type: string
+          format: date-time
+          description: >-
+            When the reservation lapses and the session returns to the queue.
+            Ten minutes. Not extended by activity — write the session and
+            complete it.
+        sessionId:
+          type: string
+          format: uuid
+          description: >-
+            For completing the claim and for reconciling a duplicate. **Not a
+            spreadsheet column** — a UUID in a spreadsheet helps nobody, which
+            is the same reason `ExtractRow.reason` is the label and not the id.
+            Write `sessionLocation` instead.
+        sessionDate: { type: string, format: date }
+        sessionLocation:
+          type: string
+          description: >-
+            Where the session is held. This is the session column the
+            spreadsheet gets, alongside `sessionDate`.
+        rows:
+          type: array
+          description: >-
+            Every referral on the session, whatever its status — cancelled and
+            rejected included.
+          items: { $ref: '#/components/schemas/ExtractRow' }
+
+    ExtractClaimResponse:
+      allOf:
+        - $ref: '#/components/schemas/ExtractProgress'
+        - type: object
+          required: [claim]
+          properties:
+            claim:
+              oneOf:
+                - $ref: '#/components/schemas/ExtractClaim'
+                - type: 'null'
+              description: >-
+                `null` when nothing is waiting, or everything waiting is
+                claimed by somebody still working. That is how a batch ends,
+                not an error.
+
+    ExtractCompleteResponse:
+      allOf:
+        - $ref: '#/components/schemas/ExtractProgress'
+        - type: object
+          required: [sessionId, extractedAt, alreadyExtracted]
+          properties:
+            sessionId: { type: string, format: uuid }
+            extractedAt: { type: string, format: date-time }
+            alreadyExtracted:
+              type: boolean
+              description: >-
+                True when this claim had already completed and this call
+                changed nothing — a safe retry, not a problem.
+
+    RepeatReferralSummary:
+      type: object
+      description: >
+        How many times this household has been referred in the last twelve
+        months, and the session date of the most recent of those.
+      required: [count, mostRecentSessionDate]
+      properties:
+        count:
+          type: integer
+          description: >-
+            Referrals, not parcels: everything except a cancelled or rejected
+            one. Excludes the referral being looked at. **Never capped** — on
+            the list route it can exceed the 50 rows in `matches`, which is how
+            an administrator is told there are more.
+        mostRecentSessionDate:
+          type: [string, 'null']
+          format: date
+          description: >
+            The session the most recent matching referral is on — `null` when
+            `count` is 0.
+
+            **This may be a date in the future.** It is the day the household
+            was fed or is to be fed, not a submission date and not an attendance
+            date, so a household booked in for next Tuesday reports next
+            Tuesday. Do not label it "last attended" or assume it is in the
+            past.
+
+    RepeatReferralMatch:
+      type: object
+      description: >
+        One earlier referral from what looks like the same household. Carries
+        that household's own details, which is why the route returning it is
+        admin-only. No reason for referral, no answers and no review comment —
+        the charity named what this shows and this is it.
+      required:
+        [
+          referralId,
+          sessionId,
+          sessionDate,
+          outcome,
+          matchedOn,
+          refereeFirstName,
+          refereeSurname,
+          refereeDateOfBirth,
+          refereeAddress,
+          refereePostcode,
+          refereePhone,
+        ]
+      properties:
+        referralId: { type: string, format: uuid }
+        sessionId: { type: string, format: uuid }
+        sessionDate:
+          type: string
+          format: date
+          description: >-
+            The session this referral is on, London. May be in the future, for
+            the same reason `mostRecentSessionDate` may be.
+        outcome:
+          type: string
+          enum: [attended, no_show, booked]
+          description: >
+            What became of this referral. `attended` — they were given their
+            parcel, collected or delivered. `no_show` — they were booked in and
+            did not turn up. `booked` — still to come, covering both "picked but
+            not yet marked" and "no pick list generated yet".
+
+            The same three words attendance already uses, rather than a second
+            vocabulary for the same states.
+        matchedOn:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            enum: [date_of_birth, postcode, phone]
+          description: >-
+            Which of the three this referral shares with the one being
+            reviewed. Never empty, and never worth hiding — see the route.
+        refereeFirstName: { type: [string, 'null'] }
+        refereeSurname: { type: [string, 'null'] }
+        refereeDateOfBirth: { type: [string, 'null'], format: date }
+        refereeAddress: { type: [string, 'null'] }
+        refereePostcode:
+          type: [string, 'null']
+          description: >-
+            As the referrer wrote it. The settled form used for matching is not
+            returned; putting a value into a settled form never rewrites the
+            value itself.
+        refereePhone: { type: [string, 'null'] }
+
+    RepeatReferralList:
+      allOf:
+        - $ref: '#/components/schemas/RepeatReferralSummary'
+        - type: object
+          required: [matches]
+          properties:
+            matches:
+              type: array
+              maxItems: 50
+              description: >-
+                The 50 most recent, at most. Compare against `count` to know
+                whether there are more; there is no paging and no further page
+                to ask for.
+              items: { $ref: '#/components/schemas/RepeatReferralMatch' }
+
     Referral:
       type: object
       description: |
-        The staff view. **The last four fields are admin-only** — a team lead
+        The staff view. **The last five fields are admin-only** — a team lead
         receives the object without them, so treat them as optional.
 
         **A team lead does not see rejected referrals at all.** They are absent
@@ -2861,14 +3432,44 @@ components:
             **Admin only.** The reviewing administrator's one line. It can name a
             referrer or record a suspicion, which is not a team lead's business.
             Who reviewed is stored but never returned — no screen asks.
+        repeatReferrals:
+          allOf: [{ $ref: '#/components/schemas/RepeatReferralSummary' }]
+          description: >
+            **Admin only, and on `GET /referrals/{id}` only** — it is not on the
+            list, where it would cost a query per row.
+
+            Present for an administrator fetching one referral, absent for a
+            team lead, whose read costs nothing extra. `GET
+            /referrals/{id}/repeat-referrals` is the button behind it; **do not
+            call that route just to render this count.** It returns other
+            households' names, addresses, phone numbers and dates of birth, and
+            those should not cross the wire until an administrator asks for
+            them.
 
     StockItem:
       type: object
       # Unit and low-stock controls are deliberately not part of stock maintenance.
-      required: [id, name, shelfNumber, isActive]
+      required: [id, name, category, description, shelfNumber, isActive]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
+        category:
+          type: string
+          maxLength: 40
+          examples: ['Tinned Goods']
+          description: >-
+            Free text, and the first sort key on the maintenance and pick-list
+            amendment screens. **Its capitalisation is settled by the server**,
+            so `tinned goods` is stored and returned as `Tinned Goods` and one
+            category cannot split into two over casing. Nothing else about it is
+            matched or corrected — `Tins` and `Tinned` are two categories.
+        description:
+          type: [string, 'null']
+          maxLength: 200
+          examples: ['Half a kilo counts as one unit when rice is also given']
+          description: >-
+            What the item is, in the charity's words. Printed on the pick list
+            under the item name. `null` where the name says everything.
         shelfNumber: { type: string }
         isActive: { type: boolean }
 
@@ -2990,10 +3591,16 @@ components:
 
     ParcelLine:
       type: object
-      required: [stockItemId, name, shelfNumber, quantity, source]
+      required: [stockItemId, name, description, shelfNumber, quantity, source]
       properties:
         stockItemId: { type: string, format: uuid }
         name: { type: string }
+        description:
+          type: [string, 'null']
+          description: >-
+            The stock item's description, for printing under the name. No
+            `category` here: the sheet is walked in shelf order, and the
+            amendment screen takes its grouping from `GET /stock/items`.
         shelfNumber: { type: string }
         quantity: { type: integer }
         source:

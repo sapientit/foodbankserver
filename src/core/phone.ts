@@ -1,9 +1,11 @@
 /**
  * UK phone number normalisation. Pure, no I/O.
  *
- * `referrals.refereePhone` is free text a referrer typed, and TheSMSWorks
- * needs E.164 (`+447700900123`). The webhook also has to match an inbound
- * number back to whatever shape the referral holds it in — so both directions
+ * `referrals.refereePhone` is free text a referrer typed. `modules/referrals`
+ * uses this to compute a settled form of the number for repeat-referral
+ * matching, and `modules/sms` uses it because TheSMSWorks needs E.164
+ * (`+447700900123`) and its webhook has to match an inbound number back to
+ * whatever shape the referral holds it in. Both directions, and both callers,
  * go through the same normaliser, and two numbers are "the same" exactly when
  * they normalise to the same string.
  *

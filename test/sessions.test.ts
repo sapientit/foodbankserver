@@ -499,6 +499,31 @@ describe('staff session horizon', () => {
     expect(visible).toContain(TODAY);
   });
 
+  it('shows a team lead a past session that is still unconfirmed', async () => {
+    const { testApp } = await seedCalendar();
+    const { accessToken } = await devLogin(testApp, {
+      email: 'lead@foodbank.org',
+      role: 'team_lead',
+    });
+
+    // Only the far end of the window is capped: outcomes and details are
+    // often completed after the event, so a team lead still needs the
+    // session just gone, right through to the boundary six days ahead — and
+    // not the one the day after that.
+    const visible = await listDates(testApp, accessToken);
+    expect(visible).toContain(YESTERDAY);
+    expect(visible).toContain(SIX_DAYS_OUT);
+    expect(visible).not.toContain(SEVEN_DAYS_OUT);
+
+    // The past session being visible is not an artefact of it having been
+    // confirmed — it is still awaiting a team lead's attention.
+    const [yesterdaySession] = await db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.sessionDate, YESTERDAY));
+    expect(yesterdaySession?.status).toBe('planned');
+  });
+
   it('does not show a team lead the session seven days out', async () => {
     const { testApp } = await seedCalendar();
     const { accessToken } = await devLogin(testApp, {

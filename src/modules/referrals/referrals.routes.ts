@@ -11,8 +11,11 @@ import { createReferralsRepository } from './referrals.repository.ts';
 import { createReferralsService } from './referrals.service.ts';
 import {
   toReferralResponse,
+  toRepeatReferralListResponse,
+  toRepeatReferralSummary,
   type ListenerSheetHousehold,
   type ReferralResponse,
+  type RepeatReferralListResponse,
 } from './referrals.mapper.ts';
 import {
   acceptReferralSchema,
@@ -67,8 +70,31 @@ export function referralRoutes(): Hono<AppEnv> {
 
   routes.get('/referrals/:id', ...readers, async (c) => {
     const actor = actorOf(c);
-    const referral = await serviceFor(c).viewReferral(c.req.param('id'), actor);
-    return c.json(toReferralResponse(referral, actor));
+    const service = serviceFor(c);
+    const referral = await service.viewReferral(c.req.param('id'), actor);
+
+    // Admin only, and only then: a team lead's read costs no extra query.
+    const repeatReferrals =
+      actor.role === 'admin'
+        ? toRepeatReferralSummary(await service.repeatReferralSummary(referral))
+        : undefined;
+
+    return c.json(toReferralResponse(referral, actor, repeatReferrals));
+  });
+
+  /**
+   * The button behind the summary above: this household's referrals from the
+   * last twelve months, each shown in full — capped at the fifty most recent,
+   * while `count` stays the true total.
+   *
+   * Admin only, and more sensitive than the summary — it carries another
+   * household's name, address, phone number and date of birth, which is why
+   * it is its own route rather than a field on the one above. Nothing fetches
+   * it until an administrator presses the button.
+   */
+  routes.get('/referrals/:id/repeat-referrals', ...admins, async (c) => {
+    const result = await serviceFor(c).listRepeatReferralsFor(c.req.param('id'));
+    return c.json<RepeatReferralListResponse>(toRepeatReferralListResponse(result));
   });
 
   routes.patch('/referrals/:id', ...admins, async (c) => {

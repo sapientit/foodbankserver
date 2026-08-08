@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { composeReminder } from '../src/modules/sms/messages.ts';
-import { normalisePhone, phonesMatch } from '../src/modules/sms/phone.ts';
 import type { Session } from '../src/db/schema/sessions.ts';
 
 function session(overrides: Partial<Session> = {}): Session {
@@ -22,46 +21,15 @@ function session(overrides: Partial<Session> = {}): Session {
     generatedAt: null,
     confirmedAt: null,
     confirmedByUserId: null,
+    extractedAt: null,
+    extractClaimId: null,
+    extractClaimedByUserId: null,
+    extractClaimExpiresAt: null,
     createdAt: '2026-08-01T00:00:00.000Z',
     updatedAt: '2026-08-01T00:00:00.000Z',
     ...overrides,
   };
 }
-
-describe('normalisePhone', () => {
-  it('normalises the four shapes a referrer or the provider might use', () => {
-    expect(normalisePhone('07700 900123')).toBe('+447700900123');
-    expect(normalisePhone('+447700900123')).toBe('+447700900123');
-    expect(normalisePhone('447700900123')).toBe('+447700900123');
-    expect(normalisePhone('07700900123')).toBe('+447700900123');
-  });
-
-  it('tolerates hyphens and parentheses', () => {
-    expect(normalisePhone('(07700) 900-123')).toBe('+447700900123');
-  });
-
-  it('returns null for a number that is not a recognisable UK number', () => {
-    expect(normalisePhone('not a number')).toBeNull();
-    expect(normalisePhone('12345')).toBeNull();
-    expect(normalisePhone('+1 555 0100')).toBeNull(); // a different country code
-    expect(normalisePhone('')).toBeNull();
-    expect(normalisePhone('   ')).toBeNull();
-  });
-});
-
-describe('phonesMatch', () => {
-  it('matches two numbers written differently that are the same number', () => {
-    expect(phonesMatch('07700 900123', '+447700900123')).toBe(true);
-  });
-
-  it('does not match two different numbers', () => {
-    expect(phonesMatch('07700 900123', '07700 900124')).toBe(false);
-  });
-
-  it('does not match when either side cannot be normalised', () => {
-    expect(phonesMatch('not a number', '+447700900123')).toBe(false);
-  });
-});
 
 describe('composeReminder', () => {
   it('gives a collecting household the date, time and place, and no more', () => {

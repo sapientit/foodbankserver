@@ -38,15 +38,19 @@ export async function setUpPickingWorld(
     Pasta: '',
     Cereal: '',
   };
-  for (const [name, shelf] of [
-    ['Beans', 'A2'],
-    ['Pasta', 'A10'],
-    ['Cereal', 'A1'],
+  // Categories that genuinely differ from one another and from shelf order,
+  // so a test asserting category grouping cannot pass by accident against
+  // shelf grouping: category order is Breakfast, Dried Goods, Tinned Goods
+  // while shelf order is Cereal (A1), Beans (A2), Pasta (A10).
+  for (const [name, category, shelf] of [
+    ['Beans', 'Tinned Goods', 'A2'],
+    ['Pasta', 'Dried Goods', 'A10'],
+    ['Cereal', 'Breakfast', 'A1'],
   ] as const) {
     const response = await testApp.request('/api/v1/stock/items', {
       method: 'POST',
       headers: json(token),
-      body: JSON.stringify({ name, shelfNumber: shelf }),
+      body: JSON.stringify({ name, category, shelfNumber: shelf }),
     });
     const { id }: { id: string } = await response.json();
     created[name] = id;
@@ -132,7 +136,13 @@ export async function readPickList(testApp: TestApp, token: string, pickListId: 
       pickNumber: number;
       adults: number;
       children: number;
-      lines: { stockItemId: string; name: string; quantity: number; source: string }[];
+      lines: {
+        stockItemId: string;
+        name: string;
+        description: string | null;
+        quantity: number;
+        source: string;
+      }[];
     }[];
   } = await response.json();
   return body;

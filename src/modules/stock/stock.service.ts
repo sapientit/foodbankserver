@@ -6,8 +6,10 @@ import type { Patch } from '../../core/types.ts';
 import type { Database } from '../../db/client.ts';
 import type { NewStockItem, StockItem } from '../../db/schema/stock.ts';
 import { isUniqueViolation } from '../../db/unique-violation.ts';
+import { standardiseCategory } from './category.ts';
 import { shelfSortKey } from './shelf-sort.ts';
 import type { StockLevel, StockRepository } from './stock.repository.ts';
+import type { StockOrder } from './stock.schema.ts';
 
 export interface StockServiceDeps {
   readonly db: Database;
@@ -30,7 +32,12 @@ export function createStockService({ db, repository, clock, logger }: StockServi
     return item;
   }
 
-  async function createItem(input: { name: string; shelfNumber: string }): Promise<StockItem> {
+  async function createItem(input: {
+    name: string;
+    category: string;
+    description?: string | undefined;
+    shelfNumber: string;
+  }): Promise<StockItem> {
     const now = clock.nowIso();
 
     try {
@@ -38,6 +45,8 @@ export function createStockService({ db, repository, clock, logger }: StockServi
         id: crypto.randomUUID(),
         name: input.name,
         nameNormalised: input.name.trim().toLowerCase(),
+        category: standardiseCategory(input.category),
+        description: emptyToNull(input.description),
         shelfNumber: input.shelfNumber,
         shelfSortKey: shelfSortKey(input.shelfNumber),
         isActive: 1,
@@ -54,7 +63,12 @@ export function createStockService({ db, repository, clock, logger }: StockServi
 
   async function updateItem(
     id: string,
-    patch: Patch<NewStockItem> & { name?: string | undefined; shelfNumber?: string | undefined },
+    patch: Patch<NewStockItem> & {
+      name?: string | undefined;
+      category?: string | undefined;
+      description?: string | null | undefined;
+      shelfNumber?: string | undefined;
+    },
   ): Promise<StockItem> {
     const next: Patch<NewStockItem> = { ...patch, updatedAt: clock.nowIso() };
 
@@ -62,6 +76,12 @@ export function createStockService({ db, repository, clock, logger }: StockServi
     // or the list silently sorts or matches on stale data.
     if (patch.name !== undefined) next.nameNormalised = patch.name.trim().toLowerCase();
     if (patch.shelfNumber !== undefined) next.shelfSortKey = shelfSortKey(patch.shelfNumber);
+
+    // The category is settled the same way on amendment as on creation, or an
+    // administrator correcting a typo would be the one person who can create a
+    // second group that looks identical to the first.
+    if (patch.category !== undefined) next.category = standardiseCategory(patch.category);
+    if (patch.description !== undefined) next.description = emptyToNull(patch.description);
 
     const updated = await repository.updateItem(id, next);
     if (updated === undefined) {
@@ -156,8 +176,9 @@ export function createStockService({ db, repository, clock, logger }: StockServi
 
   return {
     getItem,
-    listItems: (activeOnly: boolean) => repository.listItems(activeOnly),
-    listLevels: (activeOnly: boolean): Promise<StockLevel[]> => repository.listLevels(activeOnly),
+    listItems: (activeOnly: boolean, order: StockOrder) => repository.listItems(activeOnly, order),
+    listLevels: (activeOnly: boolean, order: StockOrder): Promise<StockLevel[]> =>
+      repository.listLevels(activeOnly, order),
     searchItems: (term: string) => repository.searchItems(term),
     createItem,
     updateItem,
@@ -166,3 +187,15 @@ export function createStockService({ db, repository, clock, logger }: StockServi
 }
 
 export type StockService = ReturnType<typeof createStockService>;
+
+/**
+ * No description and an empty one are the same thing.
+ *
+ * Zod trims, so a client that sends a field of spaces arrives here as `''`.
+ * Storing that would put a blank line on a printed sheet and give the
+ * maintenance screen a value it cannot tell from absence, so it becomes the
+ * absent column — an explicit `null`, per the repo's convention.
+ */
+function emptyToNull(value: string | null | undefined): string | null {
+  return value === undefined || value === null || value === '' ? null : value;
+}

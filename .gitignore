@@ -18,3 +18,6 @@ coverage/
 
 # Local secrets for wrangler dev
 .dev.vars
+
+# The charity's stock item list, kept locally for reference
+stockitems.csv

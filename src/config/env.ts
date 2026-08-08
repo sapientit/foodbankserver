@@ -7,6 +7,25 @@ import { z } from 'zod';
  * configuration inputs is declared in one schema.
  */
 
+/**
+ * A `var` declared in `wrangler.jsonc` but left blank means "not set yet".
+ *
+ * Removing the key instead would be the obvious way to say that, and it is
+ * the wrong one: `wrangler types --strict-vars` generates the binding type
+ * from the keys present, so a var declared in one environment and absent in
+ * another types as a `string` that is actually `undefined` at runtime. Keeping
+ * the key and treating blank as unset keeps the generated types honest, and
+ * leaves the production placeholder visible to whoever has to fill it in.
+ *
+ * `.min(1)` would refuse to boot on a blank placeholder, which is the last
+ * thing an optional feature should do to a deployment.
+ */
+const blankIsUnset = z
+  .string()
+  .trim()
+  .optional()
+  .transform((value) => (value === undefined || value === '' ? undefined : value));
+
 const configSchema = z
   .object({
     ENVIRONMENT: z.enum(['development', 'test', 'production']).default('development'),
@@ -63,6 +82,28 @@ const configSchema = z
      * sensitive table in the system.
      */
     SMS_WEBHOOK_SECRET: z.string().min(16).optional(),
+
+    /**
+     * The spreadsheet extract's two settings. **Neither is a secret and
+     * neither is a credential**, because the server does not have one: the
+     * administrator's browser obtains Google consent against their own Google
+     * account and does the writing itself. There is no service account here
+     * and there must not be one — that design was built and deliberately
+     * replaced. See `INITIAL_SPEC1.txt`, `#Sending referrals to the
+     * spreadsheet`.
+     *
+     * Both are plain `vars` in `wrangler.jsonc` with **different values per
+     * environment**, so a test deployment writes to a test spreadsheet and
+     * cannot touch the charity's real one.
+     *
+     * Both optional so development and CI boot without them, and there is
+     * deliberately **no production tripwire**: unlike Turnstile or the SMS
+     * webhook secret, an unconfigured extract is a closed feature reporting
+     * itself closed, not an open door.
+     */
+    GOOGLE_SHEETS_SPREADSHEET_ID: blankIsUnset,
+    /** The public OAuth client id the browser asks for Sheets consent against. */
+    GOOGLE_OAUTH_CLIENT_ID: blankIsUnset,
   })
   .superRefine((value, ctx) => {
     // The dummy provider accepts any email address and issues a real admin
@@ -112,6 +153,8 @@ export interface AppConfig {
   readonly smsApiKey: string | undefined;
   readonly smsSender: string | undefined;
   readonly smsWebhookSecret: string | undefined;
+  readonly googleSpreadsheetId: string | undefined;
+  readonly googleOauthClientId: string | undefined;
   readonly isProduction: boolean;
 }
 
@@ -147,6 +190,8 @@ export function loadConfig(bindings: object): AppConfig {
     smsApiKey: result.data.SMS_API_KEY,
     smsSender: result.data.SMS_SENDER,
     smsWebhookSecret: result.data.SMS_WEBHOOK_SECRET,
+    googleSpreadsheetId: result.data.GOOGLE_SHEETS_SPREADSHEET_ID,
+    googleOauthClientId: result.data.GOOGLE_OAUTH_CLIENT_ID,
     isProduction: result.data.ENVIRONMENT === 'production',
   };
 

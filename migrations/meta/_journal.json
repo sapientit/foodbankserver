@@ -134,6 +134,27 @@
       "when": 1786100000000,
       "tag": "0018_fuel-administrator-role",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1786083200898,
+      "tag": "0019_referral-matching-columns",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1786105551733,
+      "tag": "0020_session-extract-claims",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1786197550956,
+      "tag": "0021_stock-items-description-and-category",
+      "breakpoints": true
     }
   ]
 }

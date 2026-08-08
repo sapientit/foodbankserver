@@ -17,7 +17,7 @@ Use these words in code, tests and API paths. Do not invent synonyms.
 | **Household**         | The people a referral feeds. Its size drives parcel contents.                                                       |
 | **Parcel**            | One household's food for one session.                                                                               |
 | **Pick list**         | The set of parcels for a session, generated on first view.                                                          |
-| **Stock item**        | A food line held in inventory, with a shelf number.                                                                 |
+| **Stock item**        | A food line held in inventory: a name, a description, a category and a shelf number.                                |
 | **Attendance**        | Whether a referred household turned up.                                                                             |
 
 ## Lifecycles
