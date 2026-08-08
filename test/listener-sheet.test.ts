@@ -183,6 +183,20 @@ describe('the listener sheet', () => {
     expect(sheet.households?.map((household) => household.referralId)).toEqual([coming.id]);
   });
 
+  it('leaves out a delivery, because nobody walks in for one', async () => {
+    // A listener sheet is for the conversation that happens when somebody
+    // arrives. A delivery household never arrives, so their name and their
+    // crisis on a sheet carried round the hall exposes somebody who was never
+    // going to be there.
+    const { testApp, token, world } = await adminWorld();
+    const collecting = await submitReferral(testApp, world, {}, { clientIp: '203.0.113.4' });
+    await submitReferral(testApp, world, { isDelivery: true }, { clientIp: '203.0.113.5' });
+
+    const sheet = await readSheet(testApp, token, world.sessionId);
+
+    expect(sheet.households?.map((household) => household.referralId)).toEqual([collecting.id]);
+  });
+
   it('carries no address, postcode or phone number', async () => {
     // A minimised sheet: a listener needs to know what happened, not where
     // somebody lives.

@@ -235,6 +235,8 @@ The food bank gives selected volunteers - listeners - the job of talking to hous
 
 There is one listener sheet for a session, not one per household, and it is printed.  It carries, for each household: the name, the reason for referral, the "Cause Details" the referrer typed on the form, and whether the household needs help with fuel.  Nothing else - not the address, not the phone number, not what is in the parcel.
 
+The sheet lists the households who are coming to the session in person.  A household whose referral was cancelled or rejected is not on it: they are not coming, and a listener sheet is a list of named people and what went wrong for each of them, so somebody the food bank turned away has no business on it.  Neither is a delivery, for a different reason: nobody walks in for a delivery, so a listener will never have that conversation, and printing the household's name and crisis on a sheet carried round the hall would be exposing somebody who was never going to be there.  A household still waiting to be reviewed is on the sheet, because whether an administrator has got round to reading the referral says nothing about whether the household is turning up.
+
 Producing the listener sheet is a team leader job, like everything else that happens on the day, and it is the only place a team leader sees the reason for referral.  Everywhere else - the picking list, the printed picking sheet, the referral as a team leader reads it - the reason stays with the administrators.
 
 The listener sheet is the most sensitive thing the food bank prints: a list of named households and what went wrong for each of them.  It is meant for the volunteers chosen to do the listening and for nobody else.

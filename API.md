@@ -857,11 +857,19 @@ or anything about the referrer.** It ends up on paper in a hall. If a screen
 needs more than these five fields, that is a conversation rather than a field to
 add.
 
-**Who is on it is an assumption**, flagged `x-assumed` against **Q26**: every
-household holding a place appears — awaiting review, accepted and read alike —
-and cancelled and rejected ones do not. If
-your users expect to find somebody who cancelled, say so before building around
-it.
+**Who is on it: the households coming to the session in person.** Settled, no
+longer assumed. Awaiting review, accepted and read alike — whether an admin has
+read the referral says nothing about whether the household is turning up.
+
+Two groups are **left off, and the sheet is shorter than a session's household
+list because of it**:
+
+- **Cancelled and rejected referrals.** They are not coming, and this sheet is a
+  list of named people and what went wrong for each of them.
+- **Deliveries.** Nobody walks in for one, so a listener will never have that
+  conversation. This changed — deliveries used to appear — so a screen that
+  reconciles this sheet against the session's households will now find fewer
+  rows here, and that is correct.
 
 ---
 

@@ -108,35 +108,6 @@ either has on a shelf or does not.
 
 ---
 
-## Q26 — Who appears on the listener sheet?
-
-`Status: open` · `Raised by: server` · `Blocks: nothing — built on an assumption, marked x-assumed`
-
-The listener sheet lists the households on a session. Which households was never settled, and the
-build had to choose.
-
-**What it does today:** the sheet lists referrals that are `active` or `pending_review` — the same
-set that holds a place on the session, i.e. everybody who might walk through the door. Cancelled and
-rejected households are left off.
-
-The reasoning, which is a guess and not a requirement: they are not coming, and a listener sheet is
-a list of named people against what went wrong for them. Handing a volunteer the name and the crisis
-of somebody the food bank turned away, or who cancelled, is the harm this endpoint most obviously
-risks.
-
-But it is arguable the other way. A household that cancelled may still appear on the day, and a
-listener who cannot find them on the sheet has nothing to work from. And a rejected referral is
-still a household that asked.
-
-Worth a human answer because the cost of being wrong points in two different directions: too narrow
-and a listener is unprepared, too wide and somebody's crisis is on a sheet in a hall when they were
-never coming.
-
-**A:**
-Cancelled and rejected and deliveries not included.
-
----
-
 ## Q27 — When a referral is forgotten, is it anonymised or deleted?
 
 `Status: open` · `Raised by: Pete` · `Blocks: nothing today — the purge is written the anonymising way`

@@ -296,10 +296,14 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
    * Who appears is `REFERRAL_STATUSES_HOLDING_A_PLACE` — awaiting review,
    * accepted and read alike, because whether an administrator has got round to
    * reading a referral says nothing about whether the household is coming. A
-   * cancelled or rejected household is not coming, and handing a
-   * volunteer the name and crisis of somebody the food bank turned away is the
-   * harm this endpoint exists to avoid. **That choice is an assumption**, not a
-   * stated requirement: see Q26.
+   * cancelled or rejected household is not coming, and handing a volunteer the
+   * name and crisis of somebody the food bank turned away is the harm this
+   * endpoint exists to avoid.
+   *
+   * **Deliveries are left off too**, and for a different reason: a listener
+   * sheet is for the conversation that happens when somebody walks in, and
+   * nobody walks in for a delivery. Their name and their crisis on a sheet in
+   * the hall would be somebody who was never going to be there.
    */
   async function listenerSheet(sessionId: string): Promise<ListenerSheetHousehold[]> {
     const session = await sessions.findById(sessionId);
@@ -315,8 +319,10 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     const labelById = new Map(reasons.map((reason) => [reason.id, reason.label]));
 
     return households
-      .filter((referral) =>
-        REFERRAL_STATUSES_HOLDING_A_PLACE.some((status) => status === referral.status),
+      .filter(
+        (referral) =>
+          REFERRAL_STATUSES_HOLDING_A_PLACE.some((status) => status === referral.status) &&
+          referral.isDelivery !== 1,
       )
       .sort(bySurnameThenFirstName)
       .map((referral) => toListenerSheetHousehold(referral, labelById.get(referral.reasonId)));

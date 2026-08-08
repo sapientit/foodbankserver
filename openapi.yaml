@@ -781,12 +781,13 @@ paths:
         The sheet's *Cause Details* is one of them, and **the client extracts
         it**: the client owns the form definition and the server holds none, so
         naming the key here would be a guess rather than a contract.
-      x-assumed: >-
-        Q26 — who appears on the sheet. Every household holding a place is
-        listed — `pending_review`, `active` and `reviewed` alike; cancelled and
-        rejected ones are not, on the reasoning that
-        they are not coming and that handing a volunteer the name and crisis of
-        somebody turned away is the harm to avoid. Nobody has confirmed that.
+        **Who is on it: the households coming to the session in person.**
+        `pending_review`, `active` and `reviewed` alike — whether an
+        administrator has read the referral says nothing about whether the
+        household is turning up. Cancelled and rejected households are left off
+        because they are not coming, and **deliveries are left off** because
+        nobody walks in for one, so a listener will never have that
+        conversation.
       responses:
         '200':
           description: The sheet
