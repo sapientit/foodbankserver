@@ -200,19 +200,19 @@ gap — say so rather than assuming this closes it.
 
 Three roles. Use them for menus; **never for access control.**
 
-|                                                 | `admin` | `team_lead` | `fuel_admin` |
-| ----------------------------------------------- | ------- | ----------- | ------------ |
-| Run a session: pick lists, printing, attendance | ✅      | ✅          | ❌           |
-| Read sessions, stock, referrals, model parcels  | ✅      | ✅          | ❌           |
-| See the session list more than six days ahead   | ✅      | ❌          | ❌           |
-| The weekly stock take                           | ✅      | ✅          | ❌           |
-| Create or amend sessions and referrals          | ✅      | ❌          | ❌           |
-| Maintain the stock item list                    | ✅      | ❌          | ❌           |
-| Model parcels and the household grid            | ✅      | ❌          | ❌           |
-| Referrers and reasons for referral              | ✅      | ❌          | ❌           |
-| User maintenance                                | ✅      | ❌          | ❌           |
-| **See why someone was referred**                | ✅      | ❌          | ❌           |
-| **The fuel help list**                          | ✅      | ❌          | ✅           |
+|                                                          | `admin` | `team_lead` | `fuel_admin` |
+| -------------------------------------------------------- | ------- | ----------- | ------------ |
+| Run a session: pick lists, printing, attendance          | ✅      | ✅          | ❌           |
+| Read sessions, stock, referrals                          | ✅      | ✅          | ❌           |
+| See the session list more than six days ahead            | ✅      | ❌          | ❌           |
+| The weekly stock take                                    | ✅      | ✅          | ❌           |
+| Create or amend sessions and referrals                   | ✅      | ❌          | ❌           |
+| Maintain the stock item list                             | ✅      | ❌          | ❌           |
+| Model parcels and the household grid (**incl. reading**) | ✅      | ❌          | ❌           |
+| Referrers and reasons for referral                       | ✅      | ❌          | ❌           |
+| User maintenance                                         | ✅      | ❌          | ❌           |
+| **See why someone was referred**                         | ✅      | ❌          | ❌           |
+| **The fuel help list**                                   | ✅      | ❌          | ✅           |
 
 **`fuel_admin` is not a lesser `admin`, and a menu built by subtracting from
 one will be wrong for it.** It reaches `GET /api/v1/fuel-help-list` and

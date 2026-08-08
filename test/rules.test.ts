@@ -299,7 +299,12 @@ describe('authorisation', () => {
     expect(grid.status).toBe(403);
   });
 
-  it('lets a team lead read and preview, so a picker can be answered', async () => {
+  // This asserted the opposite until the charity answered: a team lead could
+  // read the parcels and run a preview, on the guess that a picker asking "why
+  // has this parcel got three tins?" deserved an answer. There is no reason for
+  // a team lead ever to look — the sheet in their hand already carries the
+  // contents — so reading is admin-only along with writing.
+  it('refuses a team lead reading the parcels, the grid or a preview', async () => {
     const { testApp, token } = await adminApp();
     await setUp(testApp, token);
 
@@ -311,7 +316,23 @@ describe('authorisation', () => {
 
     expect(
       (await lead.request('/api/v1/model-parcels', { headers: authHeaders(accessToken) })).status,
+    ).toBe(403);
+    expect(
+      (await lead.request('/api/v1/parcel-grid', { headers: authHeaders(accessToken) })).status,
+    ).toBe(403);
+    expect((await preview(lead, accessToken, 2, 3)).status).toBe(403);
+  });
+
+  it('still lets an administrator read all three', async () => {
+    const { testApp, token } = await adminApp();
+    await setUp(testApp, token);
+
+    expect(
+      (await testApp.request('/api/v1/model-parcels', { headers: authHeaders(token) })).status,
     ).toBe(200);
-    expect((await preview(lead, accessToken, 2, 3)).status).toBe(200);
+    expect(
+      (await testApp.request('/api/v1/parcel-grid', { headers: authHeaders(token) })).status,
+    ).toBe(200);
+    expect((await preview(testApp, token, 2, 3)).status).toBe(200);
   });
 });

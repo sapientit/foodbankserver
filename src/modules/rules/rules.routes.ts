@@ -47,21 +47,25 @@ const previewSchema = z.object({
 });
 
 /**
- * Model parcels and the household grid.
+ * Model parcels and the household grid. **Administrator only, reading as well
+ * as writing.**
  *
- * Changing them is admin-only: what goes in a parcel is charity policy. Team
- * leads may read them — a picker asking "why has this parcel got three tins?"
- * deserves an answer.
+ * What goes in a parcel is charity policy, and the charity has said there is no
+ * reason for a team lead ever to look. A picker holding a sheet already has the
+ * thing that matters on it — the parcel's actual contents, copied at
+ * generation — and the model it came from tells them nothing they can act on.
+ * These routes were briefly readable by a team lead on the guess that it would
+ * help answer "why has this parcel got three tins?"; that guess was wrong, and
+ * it is the same one that made the stock roles wrong before it.
  *
  * There is no draft or publish step. A pick list copies the contents it needs
  * when it is generated, so an edit here affects future pick lists only.
  */
 export function ruleRoutes(): Hono<AppEnv> {
   const routes = new Hono<AppEnv>();
-  const readers = [requireAuth, requireRole('admin', 'team_lead')] as const;
   const admins = [requireAuth, requireRole('admin')] as const;
 
-  routes.get('/model-parcels', ...readers, async (c) => {
+  routes.get('/model-parcels', ...admins, async (c) => {
     const parcels = await serviceFor(c).listModelParcels();
     return c.json({ modelParcels: parcels.map(toModelParcelResponse) });
   });
@@ -87,7 +91,7 @@ export function ruleRoutes(): Hono<AppEnv> {
   });
 
   /** The grid, plus what is still missing from it. */
-  routes.get('/parcel-grid', ...readers, async (c) => {
+  routes.get('/parcel-grid', ...admins, async (c) => {
     const status = await serviceFor(c).gridStatus();
 
     return c.json({
@@ -111,10 +115,11 @@ export function ruleRoutes(): Hono<AppEnv> {
   /**
    * "What would a family of two adults and three children get?"
    *
-   * Runs the same lookup generation does, so what a coordinator checks here is
-   * what a picker will see.
+   * Runs the same lookup generation does, so what an administrator checks here
+   * is what a picker will see. Admin-only with the rest: it is a window onto
+   * the same model parcels.
    */
-  routes.post('/parcel-grid/preview', ...readers, async (c) => {
+  routes.post('/parcel-grid/preview', ...admins, async (c) => {
     const household = await parseJsonBody(c, previewSchema);
     const resolved = await serviceFor(c).resolveForHousehold(household);
 

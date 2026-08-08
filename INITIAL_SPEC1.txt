@@ -288,6 +288,8 @@ Each row carries the referral's own identifier.  Sending is the one part of this
 The browser never retries a Google Sheets write automatically after a timeout: it may have succeeded.  The administrator can inspect the referral identifiers in the sheet, remove a duplicate if necessary, and start another extract later.
 
 #Model parcels and the household grid
+The model picking lists and the household grid belong to the administrator, to look at as well as to change.  A team leader never needs to see either of them: the picking sheet in their hand already says what the household is getting, and the model it was copied from a week ago tells a picker nothing they can do anything about.  So neither appears on a team leader's screens at all.
+
 The "series of rules" that turns a household into a model picking list is a lookup, not a calculation.
 
 There is a table of model picking lists.  Each has a name as its key and its contents as JSON - the stock items and quantities that make up that parcel.

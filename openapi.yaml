@@ -1817,6 +1817,10 @@ paths:
     get:
       tags: [Parcel rules]
       summary: List model parcels
+      description: >-
+        Admin only, **reading included**. A team lead never sees a model parcel:
+        the picking sheet already carries the contents that were copied from it,
+        and the model itself is charity policy rather than picking information.
       responses:
         '200':
           description: Model parcels
@@ -1902,6 +1906,8 @@ paths:
       tags: [Parcel rules]
       summary: The household grid
       description: |
+        Admin only, **reading included** — see `GET /model-parcels`.
+
         Thirty cells: 1-5 adults by 0-5 children, keyed `adults-children`. Each
         holds the **name** of a model parcel. `cells` lists every key that must
         be filled, so an empty grid can still be rendered.
@@ -1952,8 +1958,9 @@ paths:
       tags: [Parcel rules]
       summary: What would this household receive?
       description: >
-        Runs the same lookup generation uses, so a preview cannot diverge from
-        what gets picked. Households larger than the grid clamp into its corner.
+        Admin only, like the grid it reads. Runs the same lookup generation
+        uses, so a preview cannot diverge from what gets picked. Households
+        larger than the grid clamp into its corner.
       requestBody:
         required: true
         content:

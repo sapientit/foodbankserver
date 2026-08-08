@@ -70,42 +70,6 @@ durable than a client that may have moved on several form versions by then.
 
 ---
 
-## Q15 — Does a team lead ever need to look at a model parcel or the household grid?
-
-`Status: open` · `Raised by: client` · `Blocks: nothing today — the menu is admin-only meanwhile`
-
-The role table in `API.md` §2 says two things that pull apart once there is a screen to point at.
-"Read sessions, stock, referrals, **model parcels**" is ticked for both roles. "**Model parcels and
-the household grid**" is admin only. The spec agrees with both readings at once: `GET
-/api/v1/model-parcels` and `GET /api/v1/parcel-grid` carry no "Admin only" note, while every
-mutation on them does.
-
-That is the same read/maintain split stock has, and the client already renders stock that way —
-`/stock` is on a team lead's menu and `/stock/items` is not. So the shape is available if it is
-wanted.
-
-**What the client did, and why it is a guess.** Slice 6 built one screen per concern — a model
-parcel list with create and delete on it, and a grid editor — and put both on the admin menu only.
-There is no read-only view of either, so today a team lead cannot see what a model parcel contains
-at all. That is defensible for a maintenance screen and it is still a guess: it was inferred from
-the table while building, which is precisely how the stock roles came out wrong in Q0.
-
-The real question is about the warehouse, not the code: **when a picker is holding a pick sheet,
-does it ever help to look up what the model parcel for that household size is meant to contain?**
-If it does, the fix is a read-only model parcel list on both menus with the maintenance controls
-admin-only, and the grid can stay admin-only or come too. If it does not — because the pick sheet
-already lists the actual contents, which is the thing being picked — then admin-only is right and
-the "read model parcels" row in the table should lose its team lead tick, because it is describing
-an ability nobody uses.
-
-Worth answering before pick lists and printing are built, because that is the slice where a picker
-would discover they wanted it.
-
-**A:**
-No reason for the team leader to ever look. This should be documented and closed.
-
----
-
 ## Q20 — What are the actual choices on six of the referral form's questions?
 
 `Status: open` · `Raised by: client` · `Blocks: nothing — the form works, but six questions offer a guess`
