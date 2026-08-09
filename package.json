@@ -12,6 +12,7 @@
     "deploy": "wrangler deploy --env production",
     "deploy:test": "wrangler deploy",
     "cf-typegen": "wrangler types --strict-vars",
+    "load:stock": "node scripts/load-stock-data.mjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate:local": "wrangler d1 migrations apply foodbank-test --local",
     "db:migrate:test": "wrangler d1 migrations apply foodbank-test --remote",

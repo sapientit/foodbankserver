@@ -86,7 +86,10 @@ export default tseslint.config(
     files: ['scripts/**/*.mjs'],
     extends: [tseslint.configs.disableTypeChecked],
     languageOptions: {
-      globals: { console: 'readonly', process: 'readonly' },
+      // `fetch` is a global from Node 18 on. The stock loader is a client of
+      // the running API rather than of the database, deliberately, so it needs
+      // it — see the header of `scripts/load-stock-data.mjs`.
+      globals: { console: 'readonly', process: 'readonly', fetch: 'readonly' },
     },
     rules: {
       'no-console': 'off',

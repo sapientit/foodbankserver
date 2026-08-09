@@ -44,6 +44,7 @@ and **deleting the entry**; the file holds open questions only.
 | Test                | `npm test` (`test:watch`, `test:coverage`) |
 | Check the contract  | `npm run check:openapi`                    |
 | **Everything**      | `npm run check`                            |
+| Load stock data     | `npm run load:stock -- --email <admin>`    |
 | Generate migration  | `npm run db:generate`                      |
 | Apply migrations    | `npm run db:migrate:local` / `:remote`     |
 | Regenerate bindings | `npm run cf-typegen`                       |
