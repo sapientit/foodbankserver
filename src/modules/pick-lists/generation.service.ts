@@ -64,14 +64,19 @@ const NOTHING_GENERATED = {
  *
  * ## Query budget
  *
- * Five reads and one batched write, **regardless of how many referrals there
- * are**: existing pick list, session, referrals, model parcels, grid — plus a
- * sixth, the stock catalogue, only when the request carries preference lines.
- * Everything else happens in memory. A per-referral lookup would be 25+
- * queries on a plan that allows 50 per invocation, and this is the endpoint a
- * team lead opens first thing on a session morning. The catalogue is fetched
- * whole for the same reason: one query however many items are named, where
- * `inArray` would bind one parameter per id against a limit of 100.
+ * **Six to eight reads and one batched write, regardless of how many referrals
+ * there are.** Always: the existing pick list (in `getOrGenerate`), the
+ * session, the referrals, the model parcels, the grid, and a re-read of the
+ * pick list after the batch. Plus the existing parcels when reconciling, and
+ * the stock catalogue when the request carries preference lines. Each retry
+ * after a concurrent write adds one more.
+ *
+ * Everything else happens in memory, and that is the point: a per-referral
+ * lookup would be 25+ queries on a plan that allows 50 per invocation, and
+ * this is the endpoint a team lead opens first thing on a session morning. The
+ * catalogue is fetched whole for the same reason — one query however many
+ * items are named, where `inArray` would bind one parameter per id against a
+ * limit of 100.
  *
  * ## Why the contents are copied
  *

@@ -155,6 +155,26 @@ something already done.
 Twelve months is also the lookback the repeat-referral count on the review screen depends on. Do not
 shorten one without the other: a shorter retention makes that count under-report silently.
 
+## Migrating production the first time
+
+Production is at `0006` and has every migration since ahead of it. **Four of them — `0008`, `0015`,
+`0016` and `0018` — rebuild a table using a `CHECK` that names its column qualified
+(`"__new_x"."col"`), which depends on SQLite rewriting the reference during `ALTER TABLE … RENAME
+TO`.** D1's SQLite does rewrite it, which is why the test database took all twenty-one cleanly on
+2026-08-08. SQLite 3.51 does not, and on that version the migration fails **after** its `DROP TABLE`
+has run — old table gone, no renamed one to replace it.
+
+So do not run the first production migration unattended:
+
+- Migrate when a Time Travel restore point exists and you can watch it.
+- Afterwards, check the rebuilt tables are actually there — `referrals`, `stock_ledger`, `users`.
+- If one has vanished, restore to the point in time and stop; do not re-run.
+
+Nothing needs rewriting today and rewriting applied migrations would be its own risk. The reasoning
+and the reproduction are in
+[`../engineering/d1-constraints.md`](../engineering/d1-constraints.md); migration `0022` onwards
+avoids the construct.
+
 ## Backups
 
 **Time Travel is the backup** — **7 days on the free plan**, 30 on paid, whole-database restore

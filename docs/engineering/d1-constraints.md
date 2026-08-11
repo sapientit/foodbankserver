@@ -131,10 +131,19 @@ the reference on `ALTER TABLE ... RENAME TO` and they apply cleanly, in producti
 `error in table x after rename: no such column: __new_x.col`. Run any of those three through the
 `sqlite3` CLI on a current machine and watch it happen.
 
-Nothing is wrong with the migrations already applied; a database never applies one twice. But
-production is still at `0006` and will run every one of them forward, on whatever SQLite D1 is
-running by then. `CHECK("col" ...)` means the same thing to every version and does not depend on the
-rewrite. `0022` uses it.
+**The failure is not graceful.** By the time the rename runs, the `DROP TABLE` already has: the
+migration fails with the old table gone and no renamed one to replace it. `0008`, `0015`, `0016` and
+`0018` were each replayed through `sqlite3` 3.51 and every one failed that way.
+
+Nothing is wrong with the databases that have already applied them; a database never applies a
+migration twice, and the test database took all twenty-one cleanly on 2026-08-08. **But production is
+still at `0006` and has every one of them ahead of it**, on whatever SQLite D1 is running the day it
+migrates. That is a go-live risk on migrations nobody is going to touch again, and it belongs on the
+pre-flight checklist rather than in a rewrite: apply to production while a restore point exists, and
+check the tables are there afterwards.
+
+For anything new, `CHECK("col" ...)` means the same thing to every version and does not depend on
+the rewrite. `0022` uses it.
 
 **Emptying the children first is the other way to settle the counter**, and it is only available
 when the rows are expendable. `0012` rebuilt `referrals` that way — `DELETE FROM parcel_lines`, then
