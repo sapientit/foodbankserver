@@ -13,6 +13,7 @@ import {
   type SQL,
 } from 'drizzle-orm';
 import { REPEAT_REFERRAL_LIST_LIMIT } from '../../config/constants.ts';
+import type { AgeBands } from './age-bands.ts';
 import type { Database } from '../../db/client.ts';
 import { expectAtMostOne } from '../../db/expect.ts';
 import { parcels, type AttendanceStatus } from '../../db/schema/pick-lists.ts';
@@ -200,6 +201,50 @@ export function createReferralsRepository(db: Database) {
         .update(referrals)
         .set(patch)
         .where(and(eq(referrals.id, id), eq(referrals.status, from)))
+        .returning();
+      return expectAtMostOne(rows);
+    },
+
+    /**
+     * Amends a referral, but **only** while its four age bands are still the
+     * ones the caller validated against.
+     *
+     * The condition travels with the write for the same reason it does in
+     * `updateIfStatus`, and the failure it prevents is subtler. A patch may
+     * carry one band; the rule that a household must include somebody aged
+     * twelve or over is about two of them; and `adults` is derived from both.
+     * So the service has to merge the patch with the stored row before it can
+     * decide anything — and on D1 that read cannot be held. Two administrators
+     * amending the same household, one clearing `teenagers12To17` and the other
+     * clearing `adults18Plus`, would each merge against a row that still had
+     * the other's value, each see a household with somebody twelve or over,
+     * and both write. The row left behind has neither, and an `adults` count
+     * derived from a household that never existed.
+     *
+     * Comparing the bands rather than a version column keeps the guard on
+     * exactly what the derivation reads: an amendment that touches only an
+     * address never contends with one that touches only a band.
+     *
+     * Returns `undefined` when nothing matched, which the service reads as
+     * "the household changed underneath this amendment".
+     */
+    async updateIfBandsUnchanged(
+      id: string,
+      patch: Patch<NewReferral>,
+      expected: AgeBands,
+    ): Promise<Referral | undefined> {
+      const rows = await db
+        .update(referrals)
+        .set(patch)
+        .where(
+          and(
+            eq(referrals.id, id),
+            eq(referrals.infants, expected.infants),
+            eq(referrals.children4To11, expected.children4To11),
+            eq(referrals.teenagers12To17, expected.teenagers12To17),
+            eq(referrals.adults18Plus, expected.adults18Plus),
+          ),
+        )
         .returning();
       return expectAtMostOne(rows);
     },

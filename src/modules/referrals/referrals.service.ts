@@ -17,6 +17,7 @@ import {
 import type { ReferrersRepository } from '../referrers/referrers.repository.ts';
 import type { ReferrersService } from '../referrers/referrers.service.ts';
 import type { SessionsRepository } from '../sessions/sessions.repository.ts';
+import { deriveHousehold, hasSomeoneTwelveOrOver, type AgeBands } from './age-bands.ts';
 import {
   hasAnythingToMatchOn,
   matchKinds,
@@ -397,6 +398,9 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     const now = clock.nowIso();
     const referralId = crypto.randomUUID();
     const refereePhone = input.refereePhone ?? null;
+    // `adults` and `children` are derived here, once, rather than left for a
+    // reader downstream to recompute — see `deriveHousehold`.
+    const household = deriveHousehold(input);
 
     const referral: NewReferral = {
       id: referralId,
@@ -412,8 +416,12 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
       // submitted string never decides which organisation gets the credit.
       referrerOrganisation: input.referrerOrganisation,
       authorisedReferrerId: authorisation.matchedId,
-      adults: input.adults,
-      children: input.children,
+      infants: input.infants,
+      children4To11: input.children4To11,
+      teenagers12To17: input.teenagers12To17,
+      adults18Plus: input.adults18Plus,
+      adults: household.adults,
+      children: household.children,
       isDelivery: input.isDelivery ? 1 : 0,
       reasonId: input.reasonId,
       needsFuelHelp: input.needsFuelHelp ? 1 : 0,
@@ -686,6 +694,27 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
       }
     }
 
+    // Same pre-check pattern as `reasonId` above, and for the same reason: no
+    // partial write. A patch is partial, so whichever of the four bands were
+    // not supplied are filled in from the stored referral before the rule is
+    // checked against the household the write would actually leave behind.
+    const bandsSupplied =
+      input.infants !== undefined ||
+      input.children4To11 !== undefined ||
+      input.teenagers12To17 !== undefined ||
+      input.adults18Plus !== undefined;
+    const mergedBands: AgeBands | undefined = bandsSupplied
+      ? {
+          infants: input.infants ?? referral.infants,
+          children4To11: input.children4To11 ?? referral.children4To11,
+          teenagers12To17: input.teenagers12To17 ?? referral.teenagers12To17,
+          adults18Plus: input.adults18Plus ?? referral.adults18Plus,
+        }
+      : undefined;
+    if (mergedBands !== undefined && !hasSomeoneTwelveOrOver(mergedBands)) {
+      throw new UnprocessableError('A household must include at least one person aged 12 or over');
+    }
+
     const patch: Patch<NewReferral> = { updatedAt: clock.nowIso() };
     const changed: string[] = [];
 
@@ -726,9 +755,22 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
         input.refereePhone === null ? null : normalisePhone(input.refereePhone);
     }
 
-    assign('adults', input.adults, 'adults');
-    assign('children', input.children, 'children');
+    assign('infants', input.infants, 'infants');
+    assign('children4To11', input.children4To11, 'children4To11');
+    assign('teenagers12To17', input.teenagers12To17, 'teenagers12To17');
+    assign('adults18Plus', input.adults18Plus, 'adults18Plus');
     assign('reasonId', input.reasonId, 'reasonId');
+
+    // `adults` and `children` are derived, not amended: set directly on the
+    // patch — never through `assign` — so they never appear in `changed`.
+    // Follows the same precedent as `refereePostcodeNormalised` above. The
+    // rule that forbids an under-12-only household is already checked, above,
+    // against this same `mergedBands`.
+    if (mergedBands !== undefined) {
+      const household = deriveHousehold(mergedBands);
+      patch.adults = household.adults;
+      patch.children = household.children;
+    }
 
     // Booleans are integers in SQLite, so they cannot go through `assign`.
     if (input.isDelivery !== undefined) {
@@ -747,8 +789,29 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
       changed.push('answers');
     }
 
-    const updated = await repository.update(referral.id, patch);
+    // When a band was touched, the write is conditional on the bands still
+    // being the ones the rule above was checked against. D1 cannot hold the
+    // read, and the check spans two columns while a patch may carry one — so
+    // without the condition two administrators clearing different bands would
+    // each validate against the other's value and both write, leaving a
+    // household with nobody aged twelve or over. See `updateIfBandsUnchanged`.
+    const updated =
+      mergedBands === undefined
+        ? await repository.update(referral.id, patch)
+        : await repository.updateIfBandsUnchanged(referral.id, patch, {
+            infants: referral.infants,
+            children4To11: referral.children4To11,
+            teenagers12To17: referral.teenagers12To17,
+            adults18Plus: referral.adults18Plus,
+          });
     if (updated === undefined) {
+      // A referral is never deleted, so with a band in the patch the only way
+      // to match nothing is that somebody else changed the household first.
+      if (mergedBands !== undefined) {
+        throw new ConflictError(
+          'This household was changed while you were amending it. Read the referral again and reapply the change.',
+        );
+      }
       throw new NotFoundError('Referral not found');
     }
 

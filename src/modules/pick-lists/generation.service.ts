@@ -109,15 +109,25 @@ export async function generatePickList(
     throw new ConflictError('This session has been confirmed and can no longer be changed');
   }
 
-  // Pick-list eligibility deliberately matches SMS reminders: a household
-  // holding a place may turn up, so it needs a parcel and a named row for the
-  // team running the session. Cancelled and rejected referrals hold no place.
-  const [pickableReferrals, modelParcels, gridRow, stockItems] = await Promise.all([
-    referrals.list({ sessionId, statuses: REFERRAL_STATUSES_HOLDING_A_PLACE }),
+  // Every referral on the session, not only the pickable ones, and still one
+  // query. The extra rows are what lets a preference line be checked against
+  // the session it claims to belong to: filtering in SQL would leave a line
+  // naming a cancelled household indistinguishable from one naming a household
+  // on a different session altogether, and those want different answers.
+  const [sessionReferrals, modelParcels, gridRow, stockItems] = await Promise.all([
+    referrals.list({ sessionId }),
     rules.listModelParcels(),
     rules.findGrid(),
     preferenceLines.length === 0 ? Promise.resolve([]) : stock.listItems(false, 'shelf'),
   ]);
+
+  // Pick-list eligibility deliberately matches SMS reminders: a household
+  // holding a place may turn up, so it needs a parcel and a named row for the
+  // team running the session. Cancelled and rejected referrals hold no place.
+  // Filtered in memory, which preserves `list`'s `referredAt` order and so the
+  // order pick numbers are handed out in.
+  const holdsAPlace = new Set<string>(REFERRAL_STATUSES_HOLDING_A_PLACE);
+  const pickableReferrals = sessionReferrals.filter((referral) => holdsAPlace.has(referral.status));
 
   const existingParcels =
     existingPickList === undefined ? [] : await repository.listParcels(existingPickList.id);
@@ -133,6 +143,30 @@ export async function generatePickList(
   const contentsByName = new Map(
     modelParcels.map((parcel) => [parcel.name, parseContents(parcel.contentsJson)]),
   );
+
+  // A preference line names the referral it was resolved for, and that referral
+  // has to be one on this session. The client builds these from its own view of
+  // a session's households, so an id from somewhere else is a bug in that view
+  // — a stale tab, the wrong session, a mistyped request — and the honest
+  // answer is to refuse the whole request rather than to write parcels for
+  // everyone else and report a number the client has no way to interpret.
+  //
+  // A household that *is* on the session but is not owed a parcel — cancelled,
+  // rejected, or already picked — is a different matter and is still counted as
+  // ignored below. That one is an ordinary race between the client evaluating
+  // its rules and somebody cancelling a referral, and failing a session's
+  // generation over it would be the wrong trade on a Tuesday morning.
+  const sessionReferralIds = new Set(sessionReferrals.map((referral) => referral.id));
+  const offSessionReferralIds = [
+    ...new Set(
+      preferenceLines.map((entry) => entry.referralId).filter((id) => !sessionReferralIds.has(id)),
+    ),
+  ].sort();
+  if (offSessionReferralIds.length > 0) {
+    throw new UnprocessableError('Preference lines name referrals that are not on this session', {
+      details: { offSessionReferralIds },
+    });
+  }
 
   // Every supplied id is checked against the catalogue before a single
   // statement is composed. An id the catalogue does not know would otherwise

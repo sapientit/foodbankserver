@@ -590,9 +590,24 @@ next referral from that address is not held up. Three things to build around:
 ```
 refereeFirstName   refereeSurname     refereeDateOfBirth
 refereeAddress     refereePostcode    refereePhone (nullable)
-adults             children           isDelivery      needsFuelHelp
+infants            children4To11      teenagers12To17 adults18Plus
+isDelivery         needsFuelHelp
 reasonId           answers            sessionId (a move)
 ```
+
+**`adults` and `children` are no longer amendable** — they are derived. Send the
+age band you mean to correct. Each band is patched on its own, but the
+twelve-or-over rule is checked against the merged household, so sending
+`adults18Plus: 0` to a household whose only other member is a nine-year-old is a
+`422` and writes nothing.
+
+**An amendment carrying any age band is written only while all four are still
+what they were when you read them.** Two people correcting different bands at
+once would otherwise each check the rule against the other's stale value and
+between them leave a household with nobody aged twelve or over. If it happens
+you get a `409` and nothing is written: re-read the referral and reapply. An
+amendment with no band in it never contends, so a plain address correction is
+unaffected.
 
 A referrer who mistypes an address, or a household that moves between being
 referred and being fed, has to be correctable — a delivery goes to the address on
@@ -624,6 +639,80 @@ definition and does not police which answers moved. Corrections are still worth
 putting there as well as in the field: a corrected address reaches the driver, a
 note saying why reaches the person handing the bag over — the answers surface
 beside the parcel on the picking screen and on the listener sheet.
+
+---
+
+## 3a. The household is four age bands — breaking
+
+`adults` and `children` are **no longer submitted**. `POST /public/referrals` and
+`PATCH /referrals/{id}` take four counts instead, each a whole number `0`–`30`,
+all four required on submission:
+
+| Field             | Ages  | Operationally           |
+| ----------------- | ----- | ----------------------- |
+| `infants`         | 0–3   | **ignored** — see below |
+| `children4To11`   | 4–11  | the whole of `children` |
+| `teenagers12To17` | 12–17 | counts towards `adults` |
+| `adults18Plus`    | 18+   | counts towards `adults` |
+
+Send `0` for a band nobody falls into; a missing band is a `400`.
+
+### What you get back is unchanged
+
+Every response that carried `adults`, `children` and `householdSize` still
+carries them, meaning exactly what they meant before:
+
+```
+children      = children4To11
+adults        = teenagers12To17 + adults18Plus
+householdSize = adults + children
+```
+
+**Nothing about the grid, the model parcels, `familySize` in your preference
+rules, the parcel snapshot, the print payload or divergence changes.** If you
+consume any of those, you need no change at all — the derivation is the server's
+and it happens on write.
+
+The four raw bands are additionally on `Referral` (the referral list and detail,
+both roles) and on the submission receipt, so staff can see what the referrer
+actually typed. They are deliberately **not** on the parcel, the print payload or
+the listener sheet: a picker needs the size the parcel was chosen for, not the
+shape of the household.
+
+### Infants change nothing about the parcel
+
+A household of one adult and two babies has `householdSize: 1` and gets the same
+model parcel as an adult living alone. That is deliberate, not an oversight —
+what a baby needs is nappies and milk, and those reach the parcel through the
+household's preference answers, not through a bigger box of tins. Do not add
+infants into a size you display beside a parcel; you will be describing a parcel
+that was never picked that way.
+
+If you show a household's size to staff on a _referral_ screen, though, showing
+all four bands is the honest thing — "2 adults, 3 children" for a household with
+a baby in it is true operationally and misleading humanly.
+
+### The rule that replaced "at least one adult"
+
+```
+teenagers12To17 + adults18Plus >= 1
+```
+
+Refused on submission with a `400` whose issue message is `a household must
+include at least one person aged 12 or over` and whose `path` is **empty** — the
+rule is about the combination, so bind it to the fieldset rather than to a field.
+On `PATCH` the same rule is checked against the merged household and comes back
+as a `422` with that message capitalised; nothing is written.
+
+### Existing referrals
+
+Migration `0023` backfilled every referral already in the database as
+`infants: 0`, `teenagers12To17: 0`, `children4To11: <old children>`,
+`adults18Plus: <old adults>`. That reproduces the derived pair exactly, so every
+existing household still resolves to the same grid cell and the same model
+parcel. **It is a compatibility statement and not a claim about anybody's actual
+ages** — nobody asked those referrers how old the household was. Do not present a
+purged or pre-migration referral's bands as though the referrer supplied them.
 
 ---
 
@@ -1183,10 +1272,8 @@ back as an empty string to special-case.
 
 ## 5g. Preference lines, and `source` is gone
 
-**Both halves of this rest on an assumed answer to Q28 and are not settled with
-the charity.** They are built so you can work against them; if the charity
-answers differently, `-1` goes and this section changes. `grep x-assumed
-openapi.yaml` is the standing list.
+This is the charity-agreed Q28 design: Option 2's client-evaluated preference
+lines, with `-1` representing item-level team-leader attention.
 
 ### `ParcelLine.source` has been removed — a breaking change
 
@@ -1212,8 +1299,10 @@ nobody asked for the answer.
 definition, so it cannot know which answers are preferences or what they mean.
 Evaluate your own configuration and send the stock items you resolved — **ids,
 never names**. `GET /referrals?sessionId=` gives you everything to evaluate
-against (`id`, `adults`, `children` and the whole `answers` map) before any
-pick list exists; there is no separate inputs endpoint and none is needed.
+against (`id`, the derived `adults` and `children`, and the whole `answers` map)
+before any pick list exists; there is no separate inputs endpoint and none is
+needed. `familySize.adults`, `.children` and `.total` in your rules are those
+derived counts and `adults + children` — **infants are not in any of them**.
 
 What the server does with them:
 
@@ -1235,6 +1324,12 @@ What the server does with them:
 - The same referral twice, or the same stock item twice for one referral, is a
   `400`. Two quantities for one item is ambiguous and the server will not pick
   one.
+- **A `referralId` that is not on this session refuses the whole request** with
+  `422` and `details.offSessionReferralIds`. A stale tab or the wrong session is
+  a bug in your view of it, and writing everyone else's parcels around it would
+  hide that. A referral that _is_ on the session but is not owed a parcel —
+  cancelled, rejected, or already picked — is fine to send and comes back in
+  `preferenceReferralsIgnored`.
 
 ### `quantity: -1` means _needs attention_
 
@@ -1375,9 +1470,16 @@ cancelled and rejected included, because a referral that was turned away still
 happened.
 
 The named fields are the fixed columns: `referralId`, `status`, `referredAt`,
-the four `referrer*` fields, the six `referee*` fields, `adults`, `children`,
-`isDelivery`, `needsFuelHelp`, `reason` (the label, not the id) and
-`reviewComment`.
+`referrerOrganisation`, `refereeDateOfBirth`, `refereePostcode`, `adults`,
+`children`, `isDelivery`, `needsFuelHelp`, `reason` (the label, not the id)
+and `reviewComment`. No client or referrer name, address, email address or
+telephone number reaches the extract.
+
+**The four age bands are not among them**, and that is an open question rather
+than a settled answer — see Q30 in `OPEN-QUESTIONS.md`. The row still carries the
+two derived counts only. If the charity says the bands belong in the sheet, four
+fixed columns arrive and you will be told; do not add them speculatively, and do
+not derive them from anything, because they are not in the payload.
 
 The claim itself carries the two session columns every row on it shares:
 **`sessionDate` and `sessionLocation`**. Write those. **`claim.sessionId` is not
@@ -1414,11 +1516,13 @@ because an admin may deliberately overfill a session when moving someone. Do not
 render that as an error. The public list omits both fields and simply excludes
 anything full.
 
-**A referral needs at least one adult.** The household grid starts at one adult,
-so `adults: 0` is rejected.
+**A referral needs somebody aged twelve or over.** The rule is on the submitted
+age bands — `teenagers12To17 + adults18Plus >= 1` — and a household that fails it
+gets a `400` saying so in those words. A household of nobody but infants and
+young children has no one to collect a parcel.
 
 **Households larger than 5 adults or 5 children clamp** into the corner of the
-grid. A household of nine gets the same parcel as five.
+grid, on the **derived** counts. A household of nine gets the same parcel as five.
 
 **Stock levels can be negative** after a correction. Do not assume non-negative.
 

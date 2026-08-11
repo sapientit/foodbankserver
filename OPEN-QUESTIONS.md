@@ -68,8 +68,6 @@ durable than a client that may have moved on several form versions by then.
 
 **A:**
 
----
-
 ## Q20 — What are the actual choices on six of the referral form's questions?
 
 `Status: open` · `Raised by: client` · `Blocks: nothing — the form works, but six questions offer a guess`
@@ -162,99 +160,6 @@ at the cost of a second table and the work to maintain it.
 
 ---
 
-## Q28 — Should selected preference answers automatically add matching stock items during pick-list review?
-
-`Status: open` · `Raised by: client` · `Blocks: nothing today — the server is built on an assumed answer and can be unbuilt`
-
-> **Built on an assumption, 2026-08-11.** Pete asked for the server side to be built ahead of the
-> charity's answer, assuming **Option 2 with item-level attention**: the client evaluates its own
-> preference rules and sends resolved stock items with `POST /sessions/:id/pick-list`, and an item
-> needing a decision travels as a parcel line with `quantity: -1`. That is now shipped behind
-> `x-assumed` markers in `openapi.yaml`, and `INITIAL_SPEC1.txt` deliberately says nothing about it
-> — it is a guess, and it must not read as a requirement until the charity answers.
->
-> **The question below is unchanged and still open.** If the charity chooses Option 1, the request
-> body and the merge come out. If it chooses answer-level attention, `-1` comes out, the quantity
-> CHECK on `parcel_lines` narrows back to `> 0` in a further rebuild, and the attention data needs
-> a representation this design does not have.
->
-> One thing the build surfaced that the question does not cover: **a preference asks for _at least_
-> its quantity** — where the model parcel already contains the item, the higher of the two wins. It
-> cannot express "the model parcel _plus_ one more", and switching to addition later would silently
-> change what every household receives. Worth asking the charity in the same breath.
-
-The referral form has preference questions whose answers tell a team leader what a household asks
-for. Today the model parcel is the starting point and a team leader reads those answers, finds the
-stock item and adds it manually. For a session of 25 households this repeats the same work many
-times, especially for multi-select questions such as toiletries and household goods.
-
-Two client-owned options are proposed. **Option 1** is deliberately small: a choice preference may
-say `autoPicking: true` in the existing referral-form configuration. Each selected answer must
-exactly match the name of one active stock item; on first review the client adds each matching item
-at quantity 1 to the editable draft and labels it as applied from preferences.
-
-**Option 2** is for repeatable rules that need a small amount of household context. A rule still
-starts with one preference key, but has an ordered `cases` array and a compulsory `otherwise`
-result. Cases are read in written order and the first match wins. `otherwise` supplies the result
-when no case matches; it is present even when `cases` is empty, so there is no second shorthand
-syntax to remember. For a multi-select question, `$selectedAnswer` stands for each chosen answer
-and can be used as the exact stock-item name. Thus one rule can say that every selected toiletry is
-quantity 2 for four or more people and quantity 1 otherwise, without repeating every toiletry.
-
-Option 2 is deliberately bounded, not a general programming language. Each case has only one
-possible secondary condition: `familySize`, with `people` set to `adults`, `children` or `total`,
-and a whole-number `atLeast` threshold. `total` means adults plus children. Cases remain ordered
-and first-match-wins, with fixed quantities. This permits, for example, two of every selected
-toiletry for four or more people and one otherwise, without a generic comparison language. It does
-not permit nesting, arbitrary expressions, substitutions, family facts that the referral has not
-collected, or rules referring to other rules.
-
-Under either option, preferences without a rule, free-text preferences, and anything whose
-configured name does not match exactly one active stock item would stay clearly visible as **Needs
-attention** for the team leader. An admin-only rule-health check would validate the shipped
-configuration against live stock items in each environment, and reject unknown keys, invalid
-`familySize.people` values, non-integer `atLeast` values, unavailable choice values, a missing
-`otherwise`, and conflicting writes to one stock item. A missing or duplicate stock name would be
-an obvious configuration error, never a silent substitution.
-
-The server would continue to generate only model parcels and would never read the client JSON.
-The client would evaluate the rules against the referral facts and the stock-item list it already
-has, resolve exact names to stock-item IDs, and send those resulting lines with pick-list
-generation. The server still chooses the referral and model parcel, then merges the supplied lines
-atomically only while creating a new parcel. Existing parcels are never changed on reconciliation,
-so there is no second apply step or `autoPreferencesAppliedAt` flag.
-
-The existing model parcel remains responsible for household size generally. Option 2 only adds
-limited, explicit preference rules where the charity says they are needed. A preference that needs
-facts the referral does not collect — for example a quantity based on girls above a particular age
-— remains **Needs attention**, rather than inventing a value.
-
-One interface detail is deliberately still **TBD**: whether **Needs attention** belongs to the
-preference answer or to a particular stock item. Answer-level attention would show “Sanitary
-products: Yes”, leaving the team leader to choose both item and quantity. Item-level attention
-would say, for example, “Tampons requested — decide quantity”, which is more direct but encodes a
-stock choice where the referral may not provide enough information. No `needsAttention` rule shape
-should be settled until this is answered.
-
-If item-level attention is chosen, the proposed representation is a parcel line with quantity
-`-1`: it means the named item needs a team-leader decision, not that the household receives a
-negative quantity. The editor would render it as **Needs attention**, and the team leader would
-replace it with a positive quantity or remove it with zero. A parcel containing `-1` could not be
-reviewed, printed or issued. This avoids a separate task list and does not need a `source` field.
-
-**Question for the charity:** Is Option 1 sufficient, or are there recurring preference rules where
-Option 2's limited household-context cases would remove real repeated work? Please give concrete
-examples, including the desired quantities for different household sizes. In either case, is the
-proposed workflow right: place the automatic items into the team leader's editable draft on first
-review, while leaving every other preference explicitly needing attention? When attention is
-needed, should it identify the original preference answer, or name a particular stock item whose
-quantity/suitability the team leader must decide? If the latter, does the `-1` unresolved-line
-approach match how the team wants to work?
-
-**A:**
-
----
-
 ## Q29 — Does changing a parcel's contents after it was reviewed take the review back?
 
 `Status: open` · `Raised by: server` · `Blocks: nothing today — a review survives any later edit`
@@ -281,3 +186,73 @@ needs reviewing again before the list is printed? If so, does the same apply to 
 printing, before attendance is recorded?
 
 **A:**
+
+---
+
+## Q30 — Should the four age-band counts become columns in the spreadsheet extract?
+
+`Status: open` · `Raised by: server` · `Blocks: nothing today — the extract still carries the two derived numbers`
+
+The referral now collects four age bands — infants 0-3, children 4-11, teenagers 12-17, adults 18+
+— and keeps all four through the twelve-month purge, on the spec's own reasoning that a household's
+shape stops being personal once nobody can be named, and that what survives a purge is what the food
+bank reports on (`INITIAL_SPEC1.txt`, `#Forgetting a referral`).
+
+**The spreadsheet is where the food bank actually reports.** The extract's fixed columns still carry
+only the two derived numbers, `adults` and `children`, so today the four bands are retained in the
+database and reach nobody. Either that retention is doing nothing, or the extract is missing four
+columns.
+
+The server has not added them, because adding a fixed column to the extract changes what the charity
+holds outside its own system — where the purge cannot reach and `requireRole` does not follow — and
+`docs/engineering/personal-data.md` is explicit that this is the charity's decision and not a
+tidying-up. The dynamic answer columns manage themselves; the fixed ones are contract, and the
+client has to be told.
+
+Worth knowing before deciding:
+
+- **An age band is a little more identifying than an adult/child split.** "One infant, one adult" in
+  a small village is closer to a household than "two people" is. It is still a long way from a name,
+  and the row it sits on has had its name, address, postcode, date of birth and phone number removed
+  — but the spreadsheet is the copy that keeps whatever it is given, so it is the copy worth being
+  deliberate about.
+- **Adding them later is cheap; taking them back is not.** A column added to the sheet in six months
+  starts being populated from that day. A column that has been there for six months has six months
+  of data in it that nobody can purge.
+- **The reporting the charity has actually described** — "we fed 340 households, 890 people" — is
+  answerable from the two derived numbers alone. The bands would answer a different question: how
+  many of the people fed were babies, or children, or teenagers. That may be exactly what a funder
+  asks for, or it may be something nobody has ever needed.
+
+**Question for the charity:** Should `infants`, `children4To11`, `teenagers12To17` and `adults18Plus`
+be added to the spreadsheet extract as four more fixed columns, alongside the derived `adults` and
+`children` that are already there? If so, should the derived pair stay, or does the sheet want only
+the four raw bands?
+
+**A:**
+
+---
+
+## Q31 — How should the administrator referral search combine identifiers and present its results?
+
+`Status: answered — implementation pending` · `Raised by: client` · `Blocks: administrator referral-search screen and API`
+
+The charity wants a separate administrator-only screen that searches referrals by postcode,
+phone number and/or date of birth. The identifiers already have settled forms for duplicate
+matching, so search can use the same normalisation without inventing a second definition.
+
+Two choices materially alter what a search returns and what personal information is exposed:
+
+1. If an administrator supplies more than one identifier, must a referral match **all** supplied
+   identifiers (a narrowing search), or **any** supplied identifier (a broader search)?
+2. Before opening a result, which columns should its result list show? The candidate referral's
+   name and session are useful for recognising it, but a postcode-only search can otherwise expose
+   every household sharing a hostel or refuge postcode. A safer alternative is a result count plus
+   a deliberately chosen minimal list.
+
+The API should reject a search with no identifier, use the existing postcode and phone
+normalisation, and remain administrator-only.
+
+**A:** Multiple identifiers are combined as an **OR**: a referral matching any supplied
+postcode, phone number or date of birth is returned. Each result shows the client name and
+address, session date and location, status, and which supplied identifier matched.

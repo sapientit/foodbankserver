@@ -1132,9 +1132,14 @@ paths:
         '409':
           description: >-
             Target session is full and not acknowledged, the referral is
-            cancelled or rejected, or its current session has been confirmed
+            cancelled or rejected, its current session has been confirmed, or
+            **the household's age bands were changed by somebody else while this
+            amendment was in flight** — re-read the referral and reapply the
+            change. Nothing was written.
         '422':
-          description: The chosen reason for referral is no longer offered
+          description: >-
+            The chosen reason for referral is no longer offered, or the
+            amendment would leave the household with nobody aged 12 or over
 
   /api/v1/referrals/{id}/repeat-referrals:
     parameters: [{ $ref: '#/components/parameters/Id' }]
@@ -1912,6 +1917,11 @@ paths:
         Thirty cells: 1-5 adults by 0-5 children, keyed `adults-children`. Each
         holds the **name** of a model parcel. `cells` lists every key that must
         be filled, so an empty grid can still be rendered.
+
+        Both words mean the **derived operational counts**, not the referral's
+        age bands: `adults` is `teenagers12To17 + adults18Plus`, `children` is
+        `children4To11`, and infants never move a household between cells.
+        Label the axes accordingly — "adults" here includes twelve-year-olds.
       responses:
         '200':
           description: The grid and what is missing from it
@@ -2825,6 +2835,19 @@ components:
 
     ReferralSubmission:
       type: object
+      description: >
+        The household arrives as **four age bands**, all four required, each
+        `0`-`30`. Send `0` rather than omitting a band nobody falls into.
+
+        **`teenagers12To17 + adults18Plus` must be at least 1.** A household with
+        nobody aged twelve or over is refused with a `400` whose issue message is
+        `a household must include at least one person aged 12 or over` and whose
+        `path` is empty — the rule is about the combination, not one field. There
+        is nobody to collect a parcel otherwise.
+
+        The server derives the operational counts it returns and picks against:
+        `children` is `children4To11`, `adults` is `teenagers12To17 +
+        adults18Plus`, and infants are ignored. You never send those.
       required:
         [
           sessionId,
@@ -2837,7 +2860,10 @@ components:
           refereeDateOfBirth,
           refereeAddress,
           refereePostcode,
-          adults,
+          infants,
+          children4To11,
+          teenagers12To17,
+          adults18Plus,
         ]
       properties:
         sessionId: { type: string, format: uuid }
@@ -2886,12 +2912,32 @@ components:
             A column rather than an answer, because the charity reports on it.
             The two questions that follow from it — pre-payment meter,
             permission to ring — are ordinary answers and belong in `answers`.
-        adults:
+        infants:
           type: integer
-          minimum: 1
+          minimum: 0
           maximum: 30
-          description: At least one, so every referral maps to a real grid cell.
-        children: { type: integer, minimum: 0, maximum: 30 }
+          description: >-
+            Aged 0-3. Collected and reported on, but **ignored operationally** —
+            an infant does not change which model parcel the household gets.
+            What a baby needs is nappies and milk, and those reach the parcel
+            through the household's preferences.
+        children4To11:
+          type: integer
+          minimum: 0
+          maximum: 30
+          description: 'Aged 4-11. This alone is the operational `children` count.'
+        teenagers12To17:
+          type: integer
+          minimum: 0
+          maximum: 30
+          description: >-
+            Aged 12-17. Counts towards the operational `adults` count, not
+            `children` — a teenager eats like an adult.
+        adults18Plus:
+          type: integer
+          minimum: 0
+          maximum: 30
+          description: Aged 18 and over.
         isDelivery:
           type: boolean
           default: false
@@ -2938,6 +2984,22 @@ components:
         records what a field used to say, so there is nothing to show a user as
         "previously" and no undo.
 
+        **Age bands are patched one at a time, but the twelve-or-over rule is
+        checked against the whole household.** Send only `teenagers12To17` and it
+        is merged with the three bands already stored; if the result has nobody
+        aged twelve or over the amendment is refused with a `422`, `A household
+        must include at least one person aged 12 or over`, and nothing is
+        written. The derived `adults` and `children` are recomputed from the
+        merged bands whenever any band is sent, and they do not appear in the
+        audit trail's changed-field list — they are derived, not corrected.
+
+        Because that rule spans two bands while a patch may carry one, an
+        amendment containing **any** band is written only while all four are
+        still what they were when it was read. If somebody else changed the
+        household in between, the amendment is refused with a `409` and nothing
+        is written — re-read the referral and reapply. An amendment carrying no
+        band is unaffected, so correcting an address never contends with this.
+
         Corrections are still worth writing into the form's "other information"
         answer as well, and often should be: a corrected address reaches the
         driver, while a note saying why reaches the person handing the bag over
@@ -2954,8 +3016,10 @@ components:
           minLength: 5
           maxLength: 30
           description: Explicitly `null` to remove a number the household no longer has.
-        adults: { type: integer, minimum: 1, maximum: 30 }
-        children: { type: integer, minimum: 0, maximum: 30 }
+        infants: { type: integer, minimum: 0, maximum: 30 }
+        children4To11: { type: integer, minimum: 0, maximum: 30 }
+        teenagers12To17: { type: integer, minimum: 0, maximum: 30 }
+        adults18Plus: { type: integer, minimum: 0, maximum: 30 }
         isDelivery: { type: boolean }
         needsFuelHelp: { type: boolean }
         reasonId:
@@ -3061,6 +3125,10 @@ components:
           id,
           sessionId,
           status,
+          infants,
+          children4To11,
+          teenagers12To17,
+          adults18Plus,
           adults,
           children,
           isDelivery,
@@ -3075,8 +3143,16 @@ components:
         id: { type: string, format: uuid }
         sessionId: { type: string, format: uuid }
         status: { type: string, enum: [pending_review, active] }
-        adults: { type: integer }
-        children: { type: integer }
+        infants: { type: integer }
+        children4To11: { type: integer }
+        teenagers12To17: { type: integer }
+        adults18Plus: { type: integer }
+        adults:
+          type: integer
+          description: >-
+            Derived: `teenagers12To17 + adults18Plus`. Echoed back beside the
+            four bands so the referrer can see what the food bank made of them.
+        children: { type: integer, description: 'Derived: `children4To11`.' }
         isDelivery: { type: boolean }
         needsFuelHelp: { type: boolean }
         refereeFirstName: { type: [string, 'null'] }
@@ -3125,6 +3201,13 @@ components:
 
     ExtractRow:
       type: object
+      x-assumed: >-
+        That the row carries the two derived counts and **not** the four age
+        bands rests on Q30, which is open. The bands are collected and kept
+        through the purge for reporting, and the spreadsheet is where the
+        charity reports — so either they belong here as four more fixed columns
+        or the retention is doing nothing. Not added, because a fixed column is
+        contract and reaches a copy the purge cannot follow.
       description: >
         One referral, as one spreadsheet row.
 
@@ -3141,15 +3224,8 @@ components:
           status,
           referredAt,
           referrerOrganisation,
-          referrerName,
-          referrerEmail,
-          referrerPhone,
-          refereeFirstName,
-          refereeSurname,
           refereeDateOfBirth,
-          refereeAddress,
           refereePostcode,
-          refereePhone,
           adults,
           children,
           isDelivery,
@@ -3171,15 +3247,8 @@ components:
           enum: [pending_review, active, reviewed, rejected, cancelled]
         referredAt: { type: string, format: date-time }
         referrerOrganisation: { type: string }
-        referrerName: { type: [string, 'null'] }
-        referrerEmail: { type: [string, 'null'] }
-        referrerPhone: { type: [string, 'null'] }
-        refereeFirstName: { type: [string, 'null'] }
-        refereeSurname: { type: [string, 'null'] }
         refereeDateOfBirth: { type: [string, 'null'], format: date }
-        refereeAddress: { type: [string, 'null'] }
         refereePostcode: { type: [string, 'null'] }
-        refereePhone: { type: [string, 'null'] }
         adults: { type: integer }
         children: { type: integer }
         isDelivery: { type: boolean }
@@ -3386,6 +3455,10 @@ components:
           sessionId,
           status,
           referredAt,
+          infants,
+          children4To11,
+          teenagers12To17,
+          adults18Plus,
           adults,
           children,
           householdSize,
@@ -3436,9 +3509,32 @@ components:
           format: date-time
           description: >-
             When the referrer submitted. There is no separate review timestamp.
-        adults: { type: integer }
-        children: { type: integer }
-        householdSize: { type: integer }
+        infants:
+          type: integer
+          description: >-
+            Aged 0-3, as submitted. **Not in `householdSize`** and not part of
+            the grid lookup — an infant does not make the parcel bigger.
+        children4To11: { type: integer, description: Aged 4-11, as submitted. }
+        teenagers12To17: { type: integer, description: Aged 12-17, as submitted. }
+        adults18Plus: { type: integer, description: Aged 18 and over, as submitted. }
+        adults:
+          type: integer
+          description: >-
+            **Derived operational count: `teenagers12To17 + adults18Plus`.** This
+            is what the household grid, the model parcel and your preference
+            rules' `familySize.adults` are all in terms of. It is not the number
+            of people aged 18 or over.
+        children:
+          type: integer
+          description: >-
+            **Derived operational count: `children4To11`.** Infants are not in
+            it. This is `familySize.children`.
+        householdSize:
+          type: integer
+          description: >-
+            `adults + children`, so `familySize.total`. **Infants are excluded**
+            — a household of one adult and two babies has a `householdSize` of 1
+            and gets the same parcel as an adult living alone.
         isDelivery: { type: boolean }
         needsFuelHelp: { type: boolean }
         referrerOrganisation:
@@ -3651,10 +3747,6 @@ components:
 
     GeneratePickListRequest:
       type: object
-      x-assumed: >-
-        The whole shape rests on Q28 being answered Option 2 — the client
-        evaluates preference rules and sends resolved stock items. Nothing here
-        is settled with the charity yet.
       properties:
         preferenceLines:
           type: array
@@ -3673,8 +3765,18 @@ components:
           format: uuid
           description: >-
             The referral, not the parcel — the parcel does not exist yet. Get it
-            from `GET /referrals?sessionId=`, which also carries the `adults`,
-            `children` and `answers` your rules evaluate against.
+            from `GET /referrals?sessionId=`, which also carries the derived
+            operational `adults`, `children` and `answers` your rules evaluate
+            against. `adults` is teenagers plus 18+ adults; `children` is ages
+            4-11; infants are ignored.
+
+            **It must be a referral on this session.** One that is not refuses
+            the whole request with a `422` and
+            `details.offSessionReferralIds` — a stale tab or the wrong session
+            is a bug in your view of it, not something to write parcels around.
+            A referral that *is* on the session but is not owed a parcel —
+            cancelled, rejected, or already picked — is fine to send and is
+            counted in `preferenceReferralsIgnored`.
         lines:
           type: array
           minItems: 1
@@ -3717,11 +3819,6 @@ components:
         shelfNumber: { type: string }
         quantity:
           type: integer
-          x-assumed: >-
-            That an item needing a decision is a line rather than a flag on the
-            answer is the assumed reading of Q28. If the charity chooses
-            answer-level attention, `-1` goes and this is a positive integer
-            again.
           description: >-
             A positive count, or **`-1`** for an item a team leader must still
             settle: the household asked for it and the rules could not put a
@@ -3763,9 +3860,17 @@ components:
         isDelivery:
           type: boolean
           description: Chooses delivery attendance labels. Address and phone stay out of this response.
-        adults: { type: integer }
-        children: { type: integer }
-        householdSize: { type: integer }
+        adults:
+          type: integer
+          description: >-
+            The **derived** count (`teenagers12To17 + adults18Plus`), snapshot
+            at generation. The referral's four age bands are not on a parcel:
+            what a picker needs is the household size the parcel was chosen for.
+        children:
+          { type: integer, description: 'Derived (`children4To11`), snapshot at generation.' }
+        householdSize:
+          type: integer
+          description: '`adults + children`. Infants are not counted in it.'
         reviewedAt: { type: [string, 'null'], format: date-time }
         attendance: { type: string, enum: [pending, attended, no_show, cancelled] }
         notes: { type: [string, 'null'] }
@@ -3813,7 +3918,14 @@ components:
         ]
       properties:
         pickNumber: { type: integer }
-        householdSize: { type: integer }
+        householdSize:
+          type: integer
+          description: >-
+            `adults + children`, the derived operational counts snapshot at
+            generation. **The referral's four age bands are deliberately not on
+            the sheet**, and neither is the infant count: the sheet is carried
+            round a hall and left on tables, and the person picking needs the
+            size the parcel was chosen for, not the shape of the household.
         adults: { type: integer }
         children: { type: integer }
         refereeFirstName: { type: [string, 'null'] }

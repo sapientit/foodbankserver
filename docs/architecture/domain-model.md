@@ -130,8 +130,8 @@ cannot be reviewed — and since printing waits for every parcel to be reviewed 
 for this one, that single check is what keeps it off a sheet and out of the ledger. It matters more
 than it looks: `buildParcelIssue` negates the quantity, so a `-1` reaching attendance would _add_
 one to stock. `-1` can only be created at generation, on a parcel that is by definition new and
-unreviewed; `PUT /parcels/:id/lines` accepts `0` and above. **This rests on an assumed answer to
-Q28.**
+unreviewed; `PUT /parcels/:id/lines` accepts `0` and above. **The charity settled this on
+2026-08-11** — see `INITIAL_SPEC1.txt`, "Picking list".
 
 **A parcel reaches neither paper nor a household until it has been reviewed.** Attendance on an
 unreviewed parcel is a `ConflictError`, and so is a print request — both `GET /pick-lists/:id/print`
@@ -195,6 +195,13 @@ what they are shown rather than what they may open.
 Contents are a lookup, not a calculation: named **model parcels** and a **30-cell grid** of every
 household size (1–5 adults × 0–5 children), each cell holding the _name_ of a model parcel. Bigger
 households clamp into the corner.
+
+**"Adults" and "children" here are derived, not submitted.** The referral collects four age bands;
+`children` is the 4–11 count and `adults` is the 12–17 count plus the 18+ count. **Infants (0–3) are
+not in either**, so a household of one adult and two babies is fed from the same cell as an adult
+living alone — what a baby needs reaches the parcel through the household's preferences, not through
+a larger box. The derivation lives in one place, `modules/referrals/age-bands.ts`, and is applied on
+write; nothing downstream of `referrals.adults` / `.children` knows the bands exist.
 
 **Model parcels and the grid are not versioned, and must not become so.** When a pick list is
 generated the contents are **copied** into `parcel_lines`. That copy is the entire immutability

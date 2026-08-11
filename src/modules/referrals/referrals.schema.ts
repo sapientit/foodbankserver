@@ -37,50 +37,59 @@ const answers = z
     'the answers are too large to store',
   );
 
-export const referralSubmissionSchema = z.object({
-  sessionId: z.uuid(),
-  reasonId: z.uuid(),
+export const referralSubmissionSchema = z
+  .object({
+    sessionId: z.uuid(),
+    reasonId: z.uuid(),
 
-  referrerName: fullName,
-  referrerEmail: z.email().max(254),
-  /**
-   * Supplied rather than derived.
-   *
-   * An unrecognised referrer has no authorised-referrer row to derive an
-   * organisation from, which is why the form asks — the dropdown for one on the
-   * list, the free-text box for one that is not. The server still writes
-   * `authorisedReferrerId` from its own match, so this string never decides
-   * which organisation a referral is credited to.
-   */
-  referrerOrganisation: organisation,
-  referrerPhone: phone.optional(),
+    referrerName: fullName,
+    referrerEmail: z.email().max(254),
+    /**
+     * Supplied rather than derived.
+     *
+     * An unrecognised referrer has no authorised-referrer row to derive an
+     * organisation from, which is why the form asks — the dropdown for one on the
+     * list, the free-text box for one that is not. The server still writes
+     * `authorisedReferrerId` from its own match, so this string never decides
+     * which organisation a referral is credited to.
+     */
+    referrerOrganisation: organisation,
+    referrerPhone: phone.optional(),
 
-  refereeFirstName: personName,
-  refereeSurname: personName,
-  /** A date, not an age: an age is wrong a year after it is recorded. */
-  refereeDateOfBirth: dateOfBirth,
-  refereeAddress: address,
-  refereePostcode: postcode,
-  refereePhone: phone.optional(),
+    refereeFirstName: personName,
+    refereeSurname: personName,
+    /** A date, not an age: an age is wrong a year after it is recorded. */
+    refereeDateOfBirth: dateOfBirth,
+    refereeAddress: address,
+    refereePostcode: postcode,
+    refereePhone: phone.optional(),
 
-  /**
-   * At least one adult: the household grid starts at one adult, so a
-   * childless-of-adults referral would have no model parcel to map to.
-   */
-  adults: z.number().int().min(1).max(30),
-  children: z.number().int().min(0).max(30),
+    /**
+     * The household as four age bands, not the two operational counts they
+     * derive into — see `deriveHousehold` in `age-bands.ts`. All four are
+     * required: there is no band a form can leave unanswered, only one that is
+     * zero.
+     */
+    infants: z.number().int().min(0).max(30),
+    children4To11: z.number().int().min(0).max(30),
+    teenagers12To17: z.number().int().min(0).max(30),
+    adults18Plus: z.number().int().min(0).max(30),
 
-  /** A delivery goes to `refereeAddress`; there is no second address. */
-  isDelivery: z.boolean().default(false),
+    /** A delivery goes to `refereeAddress`; there is no second address. */
+    isDelivery: z.boolean().default(false),
 
-  /**
-   * A column rather than an answer because the charity reports on it. The two
-   * questions that follow from it stay in `answers`.
-   */
-  needsFuelHelp: z.boolean().default(false),
+    /**
+     * A column rather than an answer because the charity reports on it. The two
+     * questions that follow from it stay in `answers`.
+     */
+    needsFuelHelp: z.boolean().default(false),
 
-  answers: answers.default({}),
-});
+    answers: answers.default({}),
+  })
+  .refine(
+    (value) => value.teenagers12To17 + value.adults18Plus >= 1,
+    'a household must include at least one person aged 12 or over',
+  );
 
 export type ReferralSubmission = z.infer<typeof referralSubmissionSchema>;
 
@@ -115,8 +124,18 @@ export const referralAmendSchema = z.object({
   refereePostcode: postcode.optional(),
   /** Nullable: a household may lose a number as well as gain one. */
   refereePhone: phone.nullable().optional(),
-  adults: z.number().int().min(1).max(30).optional(),
-  children: z.number().int().min(0).max(30).optional(),
+  /**
+   * The same four bands as submission, all optional: an amendment is a
+   * partial patch and only what is sent is written. "At least one adult" is
+   * now a rule about age — at least one person aged 12 or over — and cannot
+   * be checked here: a patch that only lowers `adults18Plus` cannot see the
+   * stored `teenagers12To17` it would leave the household with. The service
+   * checks the *merged* result before writing; see `applyAmendment`.
+   */
+  infants: z.number().int().min(0).max(30).optional(),
+  children4To11: z.number().int().min(0).max(30).optional(),
+  teenagers12To17: z.number().int().min(0).max(30).optional(),
+  adults18Plus: z.number().int().min(0).max(30).optional(),
   isDelivery: z.boolean().optional(),
   needsFuelHelp: z.boolean().optional(),
   reasonId: z.uuid().optional(),

@@ -26,8 +26,13 @@ export interface ReferralResponse {
   readonly sessionId: string;
   readonly status: string;
   readonly referredAt: string;
+  readonly infants: number;
+  readonly children4To11: number;
+  readonly teenagers12To17: number;
+  readonly adults18Plus: number;
   readonly adults: number;
   readonly children: number;
+  /** `adults + children`. Deliberately excludes `infants` — see `db/schema/referrals.ts`. */
   readonly householdSize: number;
   readonly isDelivery: boolean;
   readonly needsFuelHelp: boolean;
@@ -66,6 +71,10 @@ export function toReferralResponse(
     sessionId: referral.sessionId,
     status: referral.status,
     referredAt: referral.referredAt,
+    infants: referral.infants,
+    children4To11: referral.children4To11,
+    teenagers12To17: referral.teenagers12To17,
+    adults18Plus: referral.adults18Plus,
     adults: referral.adults,
     children: referral.children,
     householdSize: referral.adults + referral.children,
@@ -112,6 +121,10 @@ export interface ReferralReceiptResponse {
   readonly id: string;
   readonly sessionId: string;
   readonly status: string;
+  readonly infants: number;
+  readonly children4To11: number;
+  readonly teenagers12To17: number;
+  readonly adults18Plus: number;
   readonly adults: number;
   readonly children: number;
   readonly isDelivery: boolean;
@@ -128,6 +141,10 @@ export function toReceiptResponse(referral: Referral): ReferralReceiptResponse {
     id: referral.id,
     sessionId: referral.sessionId,
     status: referral.status,
+    infants: referral.infants,
+    children4To11: referral.children4To11,
+    teenagers12To17: referral.teenagers12To17,
+    adults18Plus: referral.adults18Plus,
     adults: referral.adults,
     children: referral.children,
     isDelivery: referral.isDelivery === 1,

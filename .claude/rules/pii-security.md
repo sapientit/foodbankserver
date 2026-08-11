@@ -54,9 +54,15 @@ allowlist, so a column added to `referrals` cannot widen what an administrator i
 ## The purge
 
 `purgeReferralPii` nulls the identifying columns and drops the dynamic answers **whole**. It keeps
-`adults`, `children`, `isDelivery` and `reasonId`, which are outside the PII block — once the
-identifying columns are null those become statistics, which is how reporting survives a purge. That
-only works because the reason is chosen from a list rather than typed.
+the four age bands, `adults`, `children`, `isDelivery` and `reasonId`, which are outside the PII
+block — once the identifying columns are null those become statistics, which is how reporting
+survives a purge. That only works because the reason is chosen from a list rather than typed.
+
+The bands are kept on the charity's own reasoning that a household's shape is not its identity once
+nobody can be named (`INITIAL_SPEC1.txt`, `#Forgetting a referral`). Whether they should also reach
+the **spreadsheet extract** — a copy the purge cannot follow and `requireRole` does not reach into —
+is **Q30, open**. `toExtractRow` does not carry them. Do not add them to it to make the retention
+look useful; that is the charity's decision, and the question exists to get it asked.
 
 It is wired into the nightly cron and **does nothing until `PII_RETENTION_DAYS` is set**. The
 charity has settled the period at **twelve months** (`INITIAL_SPEC1.txt`, `#Forgetting a referral`),
@@ -84,10 +90,14 @@ What stops this being general licence, and what must stay true:
   gets. The client cannot conjure a parcel or choose a household's model.
 - Every supplied `stockItemId` is checked against the server's own catalogue **before a statement is
   composed**. An unknown id refuses the whole request; an inactive one is dropped.
+- Every supplied `referralId` must be a referral **on that session**, checked in the same pass. One
+  that is not refuses the whole request. A referral that is on the session but is not owed a parcel
+  — cancelled, rejected, already picked — is ignored rather than refused: that one is an ordinary
+  race, and failing a session's generation over it would be the wrong trade on a session morning.
 - A supplied quantity can only ever **raise** the model's, never lower it — except `-1`, which is
   not a quantity but a refusal to guess, and which blocks review until a person settles it.
 - It reaches **only parcels being created**. No client payload can alter a parcel that exists.
 
-**This rests on an assumed answer to Q28** and comes out again if the charity answers otherwise. Do
-not extend it to another route by analogy: the reasoning is about who owns the form definition, and
-nothing else in this system is owned that way.
+**The charity settled this as Option 2 on 2026-08-11** and it is now in `INITIAL_SPEC1.txt`, under
+"Picking list". Do not extend it to another route by analogy: the reasoning is about who owns the
+form definition, and nothing else in this system is owned that way.

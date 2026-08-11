@@ -186,6 +186,7 @@ export async function readPickList(testApp: TestApp, token: string, pickListId: 
     pickList: { status: string };
     parcels: {
       id: string;
+      referralId: string;
       pickNumber: number;
       adults: number;
       children: number;

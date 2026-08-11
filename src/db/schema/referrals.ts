@@ -58,11 +58,12 @@ export const REFERRAL_STATUSES_HOLDING_A_PLACE = ['pending_review', 'active', 'r
  *
  * ## What survives a purge, and why
  *
- * `adults`, `children`, `isDelivery`, `needsFuelHelp` and `reasonId` sit
- * **outside** the purged set on purpose. Once the referee's own columns are
- * nulled they are no longer identifiable, so these become statistics rather
- * than personal data — and they are exactly what the charity needs to answer
- * "we fed 340 households, 890 people, 22% for benefit delay, in Q3".
+ * The four age bands, `adults`, `children`, `isDelivery`, `needsFuelHelp` and
+ * `reasonId` sit **outside** the purged set on purpose. Once the referee's own
+ * columns are nulled they are no longer identifiable, so these become
+ * statistics rather than personal data — and they are exactly what the charity
+ * needs to answer "we fed 340 households, 890 people, 22% for benefit delay,
+ * in Q3".
  *
  * That is only safe because the reason is a **dropdown**, not free text.
  * Someone always eventually types a name into a free-text field.
@@ -111,6 +112,52 @@ export const referrals = sqliteTable(
     authorisedReferrerId: text('authorised_referrer_id').references(() => authorisedReferrers.id),
 
     // --- Retained after a purge: statistics, once nobody is identifiable. ---
+    /**
+     * The household as the referral form asks for it: four age bands.
+     *
+     * These are what the referrer submitted. `adults` and `children` below are
+     * **derived from these on every write** — see `deriveHousehold` in
+     * `modules/referrals/age-bands.ts`. Both sets are stored because the grid
+     * lookup, the parcel snapshot and the divergence check all read the derived
+     * pair, and deriving it in SQL on every read would put one rule in two
+     * places.
+     *
+     * **Infants are collected and change nothing operational.** What a baby
+     * needs is nappies and milk, which reach the parcel through the household's
+     * preferences rather than through a larger model parcel. See
+     * `INITIAL_SPEC1.txt`, the referral form section.
+     *
+     * Kept through a purge for the same reason `adults` and `children` are: a
+     * household's shape is not a household's identity once nobody can be named.
+     * Whether they should also reach the spreadsheet extract is **Q30**, still
+     * open — `toExtractRow` does not carry them.
+     *
+     * The lower bound is a **column-level** `CHECK(... >= 0)` written by
+     * migration `0023`'s `ALTER TABLE ADD COLUMN`; the 0-30 range is enforced
+     * in Zod, exactly as it is for `adults` and `children`. It is deliberately
+     * not repeated as a table-level `check()` below: adding one of those to a
+     * live table means a full rebuild, and drizzle-kit would generate exactly
+     * that — on the foreign-key parent of `parcels`.
+     *
+     * **The trap that leaves:** those four CHECKs are in the database and not
+     * in the drizzle snapshot, so if a later change makes drizzle-kit rebuild
+     * this table it will rebuild it without them, silently. If you ever accept
+     * a generated rebuild of `referrals`, restate them by hand in the new
+     * table definition.
+     */
+    infants: integer('infants').notNull().default(0),
+    children4To11: integer('children_4_to_11').notNull().default(0),
+    teenagers12To17: integer('teenagers_12_to_17').notNull().default(0),
+    adults18Plus: integer('adults_18_plus').notNull().default(0),
+    /**
+     * Derived, never submitted: `children` is the 4-11 count, and `adults` is
+     * the 12-17 count plus the 18+ count.
+     *
+     * They keep their names because everything operational already speaks them
+     * — the 5x6 grid, `parcels`, the preference rules' `familySize` — and
+     * renaming them would have made "adults" mean two different things
+     * depending on which end of the request you were standing at.
+     */
     adults: integer('adults').notNull(),
     children: integer('children').notNull(),
     /**
