@@ -125,6 +125,26 @@ export async function generatePickList(
   };
 }
 
+/**
+ * Reviews every parcel on a list, which is what printing now requires.
+ *
+ * Most print tests are about the sheet's contents rather than the review rule,
+ * so they get their prerequisite from here; the rule itself has its own tests.
+ */
+export async function reviewEveryParcel(
+  testApp: TestApp,
+  token: string,
+  pickListId: string,
+): Promise<void> {
+  const { parcels } = await readPickList(testApp, token, pickListId);
+  for (const parcel of parcels) {
+    await testApp.request(`/api/v1/parcels/${parcel.id}/review`, {
+      method: 'POST',
+      headers: authHeaders(token),
+    });
+  }
+}
+
 export async function readPickList(testApp: TestApp, token: string, pickListId: string) {
   const response = await testApp.request(`/api/v1/pick-lists/${pickListId}`, {
     headers: authHeaders(token),

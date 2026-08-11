@@ -27,7 +27,8 @@ Referral:  pending_review → active → reviewed  (an unrecognised referrer sta
            pending_review → rejected           (the decision the address forced)
            active, reviewed → moved(session) | amended(answers) | cancelled
            rejected, cancelled                 (both terminal)
-Pick list: draft → printed → confirmed        (confirmed = picking finished, list locked)
+Pick list: draft → printed → confirmed        (draft → printed needs every parcel reviewed;
+                                               confirmed = picking finished, list locked)
 Message:   reminder | staff_reply           (outbound, read on arrival)
            household_reply                  (inbound, the only kind ever unread)
            failure                           (nothing was sent; read on arrival)
@@ -122,6 +123,12 @@ the session ends it: after that the outcome is a `ConflictError`.
 no wastage and no hand correction — the count on the shelf next week is what the stock is. A third
 value costs a rebuild of the whole ledger, and that column has already been rebuilt three times by
 guessing, so it is a question for Pete rather than a line to add.
+
+**A parcel reaches neither paper nor a household until it has been reviewed.** Attendance on an
+unreviewed parcel is a `ConflictError`, and so is a print request — both `GET /pick-lists/:id/print`
+and the `POST` that stamps it — while any parcel on the list is unreviewed. The `POST` is checked
+even on a reprint, because reconciliation adds a late referral's parcel unreviewed and a second run
+of sheets would otherwise carry it.
 
 **A session cannot be closed while anybody is unmarked.** `POST /sessions/:id/confirm` refuses with
 the outstanding pick numbers. No override, and no defaulting to no-show.

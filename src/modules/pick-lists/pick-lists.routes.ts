@@ -93,12 +93,13 @@ export function pickListRoutes(): Hono<AppEnv> {
   /**
    * The printable payload: one sheet per parcel, lines ordered by shelf.
    *
-   * JSON, not HTML — the frontend owns layout. See CLAUDE.md.
+   * JSON, not HTML — the frontend owns layout. See CLAUDE.md. A `409` while any
+   * parcel is still unreviewed.
    */
   routes.get('/pick-lists/:id/print', ...staff, async (c) => {
     const service = serviceFor(c);
     const pickList = await service.getPickList(c.req.param('id'));
-    const parcels = await service.listParcelsWithLines(pickList.id);
+    const parcels = await service.listParcelsForPrint(pickList.id);
 
     const byId = await referralsBySession(c, pickList.sessionId);
 

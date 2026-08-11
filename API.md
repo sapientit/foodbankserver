@@ -632,17 +632,21 @@ beside the parcel on the picking screen and on the listener sheet.
 ```
 POST /api/v1/sessions/{sessionId}/pick-list     generate or reconcile
 GET  /api/v1/sessions/{sessionId}/pick-list     read the existing list
+POST /api/v1/parcels/{id}/review                per household, BEFORE printing
 GET  /api/v1/pick-lists/{id}/print              one sheet per parcel
 POST /api/v1/pick-lists/{id}/print              mark printed
      …pick, adjusting lines as stock runs out…
 POST /api/v1/pick-lists/{id}/confirm            lock the list
      …the session happens…
-POST /api/v1/parcels/{id}/review                per household, BEFORE attendance
 POST /api/v1/parcels/{id}/attendance            per household
 POST /api/v1/sessions/{sessionId}/confirm       close the session
 ```
 
-The review step is not optional: attendance on an unreviewed parcel is a `409`.
+The review step is not optional, and it now comes before printing rather than before attendance: a
+pick list is not printable until every one of its parcels has been reviewed, because printing an
+unfinished parcel turns an unresolved decision into a bag on a table. Attendance on an unreviewed
+parcel is still a `409` too. Reviewing does not freeze anything — lines stay editable afterwards,
+right up to confirm.
 
 ### Generating
 
@@ -781,9 +785,14 @@ Two things worth knowing when you build a report:
 
 ## 5. Printing
 
-`GET /pick-lists/{id}/print` returns one object per parcel, **lines already
+`GET /pick-lists/{id}/print` is a `409` until every parcel has been reviewed. Once available, it
+returns one object per parcel, **lines already
 ordered by shelf** so a picker walks the aisle once (`A1, A2, A10` — not
 alphabetically). Render in the order given.
+
+`POST /pick-lists/{id}/print` is a `409` on the same rule, and it stays one on a **reprint**:
+reconciling a late referral adds its parcel unreviewed, so a list already stamped `printed` refuses
+both print calls until that newcomer has been reviewed too.
 
 Each line now carries the stock item's `description` (`null` where the item has
 none) — print it under the item name. It is where a caveat that does not belong

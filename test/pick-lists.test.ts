@@ -15,6 +15,7 @@ import {
   generatePickList,
   gridOf,
   readPickList,
+  reviewEveryParcel,
   saveGrid,
   setUpPickingWorld,
   submitReferral,
@@ -499,6 +500,7 @@ describe('editing the pick list', () => {
     await submitReferral(testApp, w, { adults: 1, children: 0 });
     const { id } = await generatePickList(testApp, token, w.sessionId);
     const { parcels: rows } = await readPickList(testApp, token, id);
+    await reviewEveryParcel(testApp, token, id);
 
     const printed = await testApp.request(`/api/v1/pick-lists/${id}/print`, {
       method: 'POST',
@@ -598,6 +600,7 @@ describe('parcel line descriptions', () => {
     // grouping by category belongs to the stock item list, not here.
     expect(beansLine).not.toHaveProperty('category');
 
+    await reviewEveryParcel(testApp, token, id);
     const printed = await testApp.request(`/api/v1/pick-lists/${id}/print`, {
       headers: authHeaders(token),
     });
@@ -612,11 +615,86 @@ describe('parcel line descriptions', () => {
   });
 });
 
+describe('printing an unreviewed list', () => {
+  it('refuses the print payload until every parcel has been reviewed', async () => {
+    const { testApp, token, world: w } = await world();
+    await submitReferral(testApp, w, { adults: 1, children: 0 });
+    await submitReferral(testApp, w, { adults: 2, children: 3 });
+    const { id } = await generatePickList(testApp, token, w.sessionId);
+    const { parcels: rows } = await readPickList(testApp, token, id);
+
+    // One reviewed household is not enough: the other's parcel would go on the
+    // same run of sheets with its decision still open.
+    await testApp.request(`/api/v1/parcels/${rows[0]?.id ?? ''}/review`, {
+      method: 'POST',
+      headers: authHeaders(token),
+    });
+
+    const refused = await testApp.request(`/api/v1/pick-lists/${id}/print`, {
+      headers: authHeaders(token),
+    });
+    expect(refused.status).toBe(409);
+
+    await reviewEveryParcel(testApp, token, id);
+    const allowed = await testApp.request(`/api/v1/pick-lists/${id}/print`, {
+      headers: authHeaders(token),
+    });
+    expect(allowed.status).toBe(200);
+  });
+
+  it('refuses to stamp the list as printed until every parcel has been reviewed', async () => {
+    const { testApp, token, world: w } = await world();
+    await submitReferral(testApp, w, { adults: 1, children: 0 });
+    const { id } = await generatePickList(testApp, token, w.sessionId);
+
+    const refused = await testApp.request(`/api/v1/pick-lists/${id}/print`, {
+      method: 'POST',
+      headers: authHeaders(token),
+    });
+    expect(refused.status).toBe(409);
+    expect((await readPickList(testApp, token, id)).pickList.status).toBe('draft');
+
+    await reviewEveryParcel(testApp, token, id);
+    const allowed = await testApp.request(`/api/v1/pick-lists/${id}/print`, {
+      method: 'POST',
+      headers: authHeaders(token),
+    });
+    expect(allowed.status).toBe(200);
+  });
+
+  it('refuses a reprint once a late referral has added an unreviewed parcel', async () => {
+    const { testApp, token, world: w } = await world();
+    await submitReferral(testApp, w, { adults: 1, children: 0 });
+    const { id } = await generatePickList(testApp, token, w.sessionId);
+    await reviewEveryParcel(testApp, token, id);
+
+    const printed = await testApp.request(`/api/v1/pick-lists/${id}/print`, {
+      method: 'POST',
+      headers: authHeaders(token),
+    });
+    expect(printed.status).toBe(200);
+
+    // Reconciliation adds the newcomer's parcel unreviewed, so the second run
+    // of sheets is refused even though the list is already stamped.
+    await submitReferral(testApp, w, { adults: 2, children: 3 });
+    await generatePickList(testApp, token, w.sessionId);
+
+    for (const method of ['GET', 'POST']) {
+      const response = await testApp.request(`/api/v1/pick-lists/${id}/print`, {
+        method,
+        headers: authHeaders(token),
+      });
+      expect(response.status).toBe(409);
+    }
+  });
+});
+
 describe('the printed sheet', () => {
   it('orders lines by shelf so a picker walks the aisle once', async () => {
     const { testApp, token, world: w } = await world();
     await submitReferral(testApp, w, { adults: 2, children: 3 });
     const { id } = await generatePickList(testApp, token, w.sessionId);
+    await reviewEveryParcel(testApp, token, id);
 
     const response = await testApp.request(`/api/v1/pick-lists/${id}/print`, {
       headers: authHeaders(token),
@@ -645,6 +723,7 @@ describe('the printed sheet', () => {
     const { testApp, token, world: w } = await world();
     await submitReferral(testApp, w, { adults: 2, children: 3 });
     const { id } = await generatePickList(testApp, token, w.sessionId);
+    await reviewEveryParcel(testApp, token, id);
 
     const response = await testApp.request(`/api/v1/pick-lists/${id}/print`, {
       headers: authHeaders(token),
@@ -660,6 +739,7 @@ describe('the printed sheet', () => {
     const { testApp, token, world: w } = await world();
     await submitReferral(testApp, w, { adults: 1, children: 0 });
     const { id } = await generatePickList(testApp, token, w.sessionId);
+    await reviewEveryParcel(testApp, token, id);
 
     const response = await testApp.request(`/api/v1/pick-lists/${id}/print`, {
       headers: authHeaders(token),
@@ -692,6 +772,7 @@ describe('the printed sheet', () => {
     const { testApp, token, world: w } = await world();
     await submitReferral(testApp, w, { adults: 1, children: 0, isDelivery: true });
     const { id } = await generatePickList(testApp, token, w.sessionId);
+    await reviewEveryParcel(testApp, token, id);
 
     const response = await testApp.request(`/api/v1/pick-lists/${id}/print`, {
       headers: authHeaders(token),
@@ -726,6 +807,7 @@ describe('the printed sheet', () => {
       deliveryAddress: '4 Riverside Flats',
     });
     const { id } = await generatePickList(testApp, token, w.sessionId);
+    await reviewEveryParcel(testApp, token, id);
 
     const response = await testApp.request(`/api/v1/pick-lists/${id}/print`, {
       headers: authHeaders(token),
@@ -745,6 +827,7 @@ describe('the printed sheet', () => {
       answers: { Dietary: 'no pork', Pets: 'two cats' },
     });
     const { id } = await generatePickList(testApp, token, w.sessionId);
+    await reviewEveryParcel(testApp, token, id);
 
     const response = await testApp.request(`/api/v1/pick-lists/${id}/print`, {
       headers: authHeaders(token),
@@ -807,6 +890,7 @@ describe('pick list authorisation', () => {
 
     const generated = await generatePickList(lead, accessToken, w.sessionId);
     expect(generated.status).toBe(200);
+    await reviewEveryParcel(lead, accessToken, generated.id);
 
     for (const path of [
       `/api/v1/pick-lists/${generated.id}/print`,

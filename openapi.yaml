@@ -2079,6 +2079,9 @@ paths:
         unless it is a delivery. A sheet gets carried round a hall and left on
         tables. Dietary notes *are* included: the picker is the only person who
         can act on them.
+
+        Refused with `409` until every parcel on the pick list has been
+        reviewed.
       responses:
         '200':
           description: Sheets
@@ -2092,11 +2095,14 @@ paths:
                   parcels:
                     type: array
                     items: { $ref: '#/components/schemas/PrintParcel' }
+        '409': { description: One or more parcels have not been reviewed }
     post:
       tags: [Pick lists]
       summary: Mark as printed
       description: >
-        Only the first print is stamped. **Lines can still be edited after
+        Only the first print is stamped. Refused with `409` until every parcel
+        has been reviewed — on a reprint too, because reconciling a late
+        referral adds its parcel unreviewed. **Lines can still be edited after
         printing** — the list locks on confirm, not on print.
       responses:
         '200':
@@ -2104,7 +2110,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PickList' }
-        '409': { description: Already confirmed }
+        '409': { description: The pick list is confirmed or has an unreviewed parcel }
 
   /api/v1/pick-lists/{id}/confirm:
     parameters: [{ $ref: '#/components/parameters/Id' }]
@@ -2234,6 +2240,11 @@ paths:
     post:
       tags: [Pick lists]
       summary: Mark a parcel's pick list reviewed
+      description: >
+        The team leader's decision that this parcel is right. Required **before
+        the list is printed** and before this parcel's attendance outcome; both
+        refuse with a `409` until it is done. Idempotent, and it freezes
+        nothing — lines stay editable until the list is confirmed.
       responses:
         '200':
           description: Reviewed

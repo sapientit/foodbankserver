@@ -38,6 +38,12 @@ export interface PickListDivergence {
   readonly cancelledReferrals: string[];
 }
 
+/**
+ * Printing is refused while any parcel still needs a team leader's decision:
+ * an unreviewed parcel on a sheet becomes a bag on a table.
+ */
+const UNREVIEWED_PARCEL = 'Review every parcel on this pick list before printing it';
+
 export function createPickListsService(deps: PickListsServiceDeps) {
   const { repository, referrals, sessions, clock, logger } = deps;
 
@@ -155,13 +161,35 @@ export function createPickListsService(deps: PickListsServiceDeps) {
   }
 
   /**
+   * The parcels a print request may put on paper.
+   *
+   * Reads the same rows the payload is built from rather than counting
+   * separately, because the print route has no query to spare.
+   */
+  async function listParcelsForPrint(pickListId: string): Promise<ParcelWithLines[]> {
+    const entries = await repository.listParcelsWithLines(pickListId);
+    if (entries.some((entry) => entry.parcel.reviewedAt === null)) {
+      throw new ConflictError(UNREVIEWED_PARCEL);
+    }
+    return entries;
+  }
+
+  /**
    * Records that the list has been printed.
    *
    * Only the *first* print is stamped — reprinting a smudged sheet is not a
-   * state change, and the spec explicitly allows edits after printing.
+   * state change, and the spec explicitly allows edits after printing. The
+   * review check still runs on a reprint: a late referral reconciled in since
+   * the first print arrives unreviewed, and it must not reach paper either.
    */
   async function markPrinted(pickListId: string): Promise<PickList> {
     const pickList = await requireEditable(pickListId);
+
+    const parcelRows = await repository.listParcels(pickListId);
+    if (parcelRows.some((parcel) => parcel.reviewedAt === null)) {
+      throw new ConflictError(UNREVIEWED_PARCEL);
+    }
+
     if (pickList.status === 'printed') return pickList;
 
     const now = clock.nowIso();
@@ -247,6 +275,7 @@ export function createPickListsService(deps: PickListsServiceDeps) {
     listParcelsWithLines: (pickListId: string): Promise<ParcelWithLines[]> =>
       repository.listParcelsWithLines(pickListId),
     getParcel,
+    listParcelsForPrint,
     setLine,
     removeLine,
     setParcelNotes,
