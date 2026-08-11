@@ -159,3 +159,108 @@ referral at all, and delete the referral. That preserves reporting and holds not
 at the cost of a second table and the work to maintain it.
 
 **A:**
+
+---
+
+## Q28 — Should selected preference answers automatically add matching stock items during pick-list review?
+
+`Status: open` · `Raised by: client` · `Blocks: automatic preference picking; existing manual preference display does not block`
+
+The referral form has preference questions whose answers tell a team leader what a household asks
+for. Today the model parcel is the starting point and a team leader reads those answers, finds the
+stock item and adds it manually. For a session of 25 households this repeats the same work many
+times, especially for multi-select questions such as toiletries and household goods.
+
+Two client-owned options are proposed. **Option 1** is deliberately small: a choice preference may
+say `autoPicking: true` in the existing referral-form configuration. Each selected answer must
+exactly match the name of one active stock item; on first review the client adds each matching item
+at quantity 1 to the editable draft and labels it as applied from preferences.
+
+**Option 2** is for repeatable rules that need a small amount of household context. A rule still
+starts with one preference key, but has an ordered `cases` array and a compulsory `otherwise`
+result. Cases are read in written order and the first match wins. `otherwise` supplies the result
+when no case matches; it is present even when `cases` is empty, so there is no second shorthand
+syntax to remember. For a multi-select question, `$selectedAnswer` stands for each chosen answer
+and can be used as the exact stock-item name. Thus one rule can say that every selected toiletry is
+quantity 2 for four or more people and quantity 1 otherwise, without repeating every toiletry.
+
+Option 2 is deliberately bounded, not a general programming language. Each case has only one
+possible secondary condition: `familySize`, with `people` set to `adults`, `children` or `total`,
+and a whole-number `atLeast` threshold. `total` means adults plus children. Cases remain ordered
+and first-match-wins, with fixed quantities. This permits, for example, two of every selected
+toiletry for four or more people and one otherwise, without a generic comparison language. It does
+not permit nesting, arbitrary expressions, substitutions, family facts that the referral has not
+collected, or rules referring to other rules.
+
+Under either option, preferences without a rule, free-text preferences, and anything whose
+configured name does not match exactly one active stock item would stay clearly visible as **Needs
+attention** for the team leader. An admin-only rule-health check would validate the shipped
+configuration against live stock items in each environment, and reject unknown keys, invalid
+`familySize.people` values, non-integer `atLeast` values, unavailable choice values, a missing
+`otherwise`, and conflicting writes to one stock item. A missing or duplicate stock name would be
+an obvious configuration error, never a silent substitution.
+
+The server would continue to generate only model parcels and would never read the client JSON.
+The client would evaluate the rules against the referral facts and the stock-item list it already
+has, resolve exact names to stock-item IDs, and send those resulting lines with pick-list
+generation. The server still chooses the referral and model parcel, then merges the supplied lines
+atomically only while creating a new parcel. Existing parcels are never changed on reconciliation,
+so there is no second apply step or `autoPreferencesAppliedAt` flag.
+
+The existing model parcel remains responsible for household size generally. Option 2 only adds
+limited, explicit preference rules where the charity says they are needed. A preference that needs
+facts the referral does not collect — for example a quantity based on girls above a particular age
+— remains **Needs attention**, rather than inventing a value.
+
+One interface detail is deliberately still **TBD**: whether **Needs attention** belongs to the
+preference answer or to a particular stock item. Answer-level attention would show “Sanitary
+products: Yes”, leaving the team leader to choose both item and quantity. Item-level attention
+would say, for example, “Tampons requested — decide quantity”, which is more direct but encodes a
+stock choice where the referral may not provide enough information. No `needsAttention` rule shape
+should be settled until this is answered.
+
+If item-level attention is chosen, the proposed representation is a parcel line with quantity
+`-1`: it means the named item needs a team-leader decision, not that the household receives a
+negative quantity. The editor would render it as **Needs attention**, and the team leader would
+replace it with a positive quantity or remove it with zero. A parcel containing `-1` could not be
+reviewed, printed or issued. This avoids a separate task list and does not need a `source` field.
+
+**Question for the charity:** Is Option 1 sufficient, or are there recurring preference rules where
+Option 2's limited household-context cases would remove real repeated work? Please give concrete
+examples, including the desired quantities for different household sizes. In either case, is the
+proposed workflow right: place the automatic items into the team leader's editable draft on first
+review, while leaving every other preference explicitly needing attention? When attention is
+needed, should it identify the original preference answer, or name a particular stock item whose
+quantity/suitability the team leader must decide? If the latter, does the `-1` unresolved-line
+approach match how the team wants to work?
+
+**A:**
+
+---
+
+## Q29 — Does changing a parcel's contents after it was reviewed take the review back?
+
+`Status: open` · `Raised by: server` · `Blocks: nothing today — a review survives any later edit`
+
+Printing now waits for review (`INITIAL_SPEC1.txt`, first section), which gives an existing
+behaviour a consequence it did not have before. A parcel's lines and notes stay editable after it
+has been reviewed, and editing them leaves `reviewedAt` where it is. So a team leader can review a
+parcel, change what is in it, and print — with the sheet showing contents nobody signed off.
+
+Nothing was changed to make this so; it is what the code has always done, and the same is true of
+the review that attendance waits for. The question is whether the charity means a review to be a
+decision about _this parcel as it now stands_, in which case an edit should take the review back
+and the parcel should need reviewing again before the list can be printed, or a decision about
+_this household_, in which case a later tweak — a picker swapping one tin for another as stock runs
+out — should not send the whole list back round the team leader.
+
+The second reading is what the system does today. It also matches the spec's insistence that
+changes can still be made after printing, which would be hard to work with if every change undid a
+review. But that is an argument, not an answer, and the two readings differ on the sheet in a
+volunteer's hand.
+
+**Question for the charity:** After a parcel has been reviewed, does changing its contents mean it
+needs reviewing again before the list is printed? If so, does the same apply to changes made after
+printing, before attendance is recorded?
+
+**A:**
