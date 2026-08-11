@@ -119,6 +119,23 @@ is the worked example of a safe rebuild on D1 and it records two traps found the
 A rebuild also fires `ON DELETE CASCADE` on children. `0008` accepted losing in-flight 15-minute
 referral edit keys for that reason; know what yours will take with it.
 
+**A leaf table needs neither dance.** `parcel_lines` is nobody's parent, so nothing counts against
+the drop and a plain create-copy-drop-rename is correct — `0015` for `stock_ledger` and `0022` for
+`parcel_lines` are both that simpler case, and both say so in their headers. Check whether anything
+references your table before reaching for `0008`.
+
+**Write the rebuilt table's `CHECK` with an unqualified column name.** drizzle-kit emits
+`CHECK("__new_x"."col" ...)`, and `0008`, `0015` and `0018` all carry that form: D1's SQLite rewrites
+the reference on `ALTER TABLE ... RENAME TO` and they apply cleanly, in production and under test.
+**SQLite 3.51 does not rewrite it** — the rename fails with
+`error in table x after rename: no such column: __new_x.col`. Run any of those three through the
+`sqlite3` CLI on a current machine and watch it happen.
+
+Nothing is wrong with the migrations already applied; a database never applies one twice. But
+production is still at `0006` and will run every one of them forward, on whatever SQLite D1 is
+running by then. `CHECK("col" ...)` means the same thing to every version and does not depend on the
+rewrite. `0022` uses it.
+
 **Emptying the children first is the other way to settle the counter**, and it is only available
 when the rows are expendable. `0012` rebuilt `referrals` that way — `DELETE FROM parcel_lines`, then
 `DELETE FROM parcels`, then `DROP TABLE referrals` — because Pete confirmed no table held data worth

@@ -11,8 +11,14 @@ export type PickListStatus = (typeof PICK_LIST_STATUSES)[number];
 export const ATTENDANCE_STATUSES = ['pending', 'attended', 'no_show', 'cancelled'] as const;
 export type AttendanceStatus = (typeof ATTENDANCE_STATUSES)[number];
 
-export const PARCEL_LINE_SOURCES = ['model', 'manual'] as const;
-export type ParcelLineSource = (typeof PARCEL_LINE_SOURCES)[number];
+/**
+ * A line the team leader must settle before the parcel can be reviewed.
+ *
+ * Not a quantity: it is the absence of one. The household asked for something
+ * the rules could not turn into a number, so a person decides. Nothing may be
+ * picked, printed or issued against it — see `parcel_lines_quantity_valid`.
+ */
+export const NEEDS_ATTENTION_QUANTITY = -1;
 
 /**
  * One pick list per session, generated on first view.
@@ -99,9 +105,9 @@ export const parcels = sqliteTable(
  * time: the contents are then fixed regardless of what happens to the rules
  * afterwards, and a picker's sheet cannot change under them mid-session.
  *
- * `source` distinguishes what came from the model parcel from what a human
- * added or adjusted — the difference matters when a coordinator asks why a
- * parcel is not what the grid says it should be.
+ * A quantity is a positive integer, or `NEEDS_ATTENTION_QUANTITY` for an item
+ * a team leader still has to decide. Zero is not a line — removing an item
+ * deletes the row.
  */
 export const parcelLines = sqliteTable(
   'parcel_lines',
@@ -114,15 +120,17 @@ export const parcelLines = sqliteTable(
       .notNull()
       .references(() => stockItems.id),
     quantity: integer('quantity').notNull(),
-    source: text('source').$type<ParcelLineSource>().notNull().default('model'),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
   },
   (table) => [
     /** Adding an item already present bumps its quantity rather than duplicating. */
     unique('idx_parcel_lines_item').on(table.parcelId, table.stockItemId),
-    check('parcel_lines_quantity_positive', sql`${table.quantity} > 0`),
-    check('parcel_lines_source_valid', sql`${table.source} IN ('model', 'manual')`),
+    // The literal is spelled out rather than interpolated from
+    // `NEEDS_ATTENTION_QUANTITY`: a number interpolated into a Drizzle `sql`
+    // template becomes a bound parameter, and a `?` inside a CHECK constraint
+    // is not something a migration can run.
+    check('parcel_lines_quantity_valid', sql`${table.quantity} > 0 OR ${table.quantity} = -1`),
   ],
 );
 

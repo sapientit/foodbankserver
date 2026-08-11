@@ -68,4 +68,26 @@ review screen depends on, and shortening it silently makes that count under-repo
 
 - Validate at the edge, once, with Zod, then trust the parsed type inwards.
 - Never trust a client-supplied id, role, quantity or status. **Re-derive parcel contents from
-  household size on the server** — never accept contents the client sends.
+  household size on the server** — with one bounded exception, below.
+
+### The one exception: preference lines at generation
+
+`POST /sessions/:id/pick-list` accepts stock-item lines from the client. It has to: the client owns
+the referral form definition, the server holds none, and a preference rule cannot be evaluated
+without one. Refusing the data would not make the server the authority on parcel contents — it would
+only move the same lines to a series of `PUT /parcels/:id/lines` calls after the fact, unvalidated
+against the catalogue and outside the atomic write.
+
+What stops this being general licence, and what must stay true:
+
+- The server still decides **which referrals get a parcel** and **which model parcel** each one
+  gets. The client cannot conjure a parcel or choose a household's model.
+- Every supplied `stockItemId` is checked against the server's own catalogue **before a statement is
+  composed**. An unknown id refuses the whole request; an inactive one is dropped.
+- A supplied quantity can only ever **raise** the model's, never lower it — except `-1`, which is
+  not a quantity but a refusal to guess, and which blocks review until a person settles it.
+- It reaches **only parcels being created**. No client payload can alter a parcel that exists.
+
+**This rests on an assumed answer to Q28** and comes out again if the charity answers otherwise. Do
+not extend it to another route by analogy: the reasoning is about who owns the form definition, and
+nothing else in this system is owned that way.

@@ -106,22 +106,55 @@ export function gridOf(smallName: string, largeName: string): ParcelGrid {
   return grid;
 }
 
+/** One household's preference lines, as the client's own rules resolved them. */
+export interface PreferenceLineInput {
+  readonly referralId: string;
+  readonly lines: { stockItemId: string; quantity: number }[];
+}
+
+/**
+ * Generates or reconciles, with or without preference lines.
+ *
+ * With none supplied it POSTs **no body at all**, which is what the picking
+ * screen does and what keeps the optional-body path covered by every existing
+ * caller.
+ */
 export async function generatePickList(
   testApp: TestApp,
   token: string,
   sessionId: string,
-): Promise<{ status: number; id: string; parcelsCreated: number; skipped: unknown[] }> {
+  preferenceLines?: PreferenceLineInput[],
+): Promise<{
+  status: number;
+  id: string;
+  parcelsCreated: number;
+  skipped: unknown[];
+  preferenceLinesApplied: number;
+  preferenceLinesDropped: number;
+  preferenceReferralsIgnored: number;
+}> {
   const response = await testApp.request(`/api/v1/sessions/${sessionId}/pick-list`, {
     method: 'POST',
-    headers: authHeaders(token),
+    headers: preferenceLines === undefined ? authHeaders(token) : json(token),
+    ...(preferenceLines === undefined ? {} : { body: JSON.stringify({ preferenceLines }) }),
   });
-  const body: { id?: string; parcelsCreated?: number; skipped?: unknown[] } = await response.json();
+  const body: {
+    id?: string;
+    parcelsCreated?: number;
+    skipped?: unknown[];
+    preferenceLinesApplied?: number;
+    preferenceLinesDropped?: number;
+    preferenceReferralsIgnored?: number;
+  } = await response.json();
 
   return {
     status: response.status,
     id: body.id ?? '',
     parcelsCreated: body.parcelsCreated ?? 0,
     skipped: body.skipped ?? [],
+    preferenceLinesApplied: body.preferenceLinesApplied ?? 0,
+    preferenceLinesDropped: body.preferenceLinesDropped ?? 0,
+    preferenceReferralsIgnored: body.preferenceReferralsIgnored ?? 0,
   };
 }
 
@@ -161,7 +194,6 @@ export async function readPickList(testApp: TestApp, token: string, pickListId: 
         name: string;
         description: string | null;
         quantity: number;
-        source: string;
       }[];
     }[];
   } = await response.json();

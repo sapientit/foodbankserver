@@ -654,7 +654,7 @@ Generated on first view. `POST` is idempotent — calling it again reconciles an
 household holding a place (`pending_review`, `active` or `reviewed`) which does
 not yet have a parcel, and reports how many it added in `parcelsCreated`. It
 never alters an existing parcel, so
-manual changes and the household snapshot stay intact. Once the list is
+your line changes and the household snapshot stay intact. Once the list is
 confirmed it creates nothing. Just call it when the picking screen opens and
 tell staff when `parcelsCreated` is non-zero: a previously printed list now
 needs printing again to include those households.
@@ -670,6 +670,8 @@ attendance accurately. It never carries the referral reason, address or phone.
 **Contents are copied at generation.** Editing a model parcel afterwards cannot
 change a list that already exists. That is deliberate — a picker's sheet must
 not change while they are holding it.
+
+**The request body is optional and carries your preference lines** — see **5g**.
 
 ### Editing
 
@@ -1176,6 +1178,81 @@ list** (see **5**).
 On `PATCH /stock/items/{id}`, `null` clears it — and so does `""`. The two mean
 the same thing and both read back as `null`, so a cleared field never comes
 back as an empty string to special-case.
+
+---
+
+## 5g. Preference lines, and `source` is gone
+
+**Both halves of this rest on an assumed answer to Q28 and are not settled with
+the charity.** They are built so you can work against them; if the charity
+answers differently, `-1` goes and this section changes. `grep x-assumed
+openapi.yaml` is the standing list.
+
+### `ParcelLine.source` has been removed — a breaking change
+
+It held `model` or `manual` and nothing ever read it: no rule branched on it,
+nothing reported it, and `INITIAL_SPEC1.txt` never asked for the distinction. It
+is gone from the maintenance view and the print payload, which share one line
+shape. If your generated types have it, they will stop compiling — that is the
+point. Nothing replaces it: after this, nothing in the data explains why a
+parcel differs from what the grid says. That is a real loss, accepted because
+nobody asked for the answer.
+
+### Sending preference lines
+
+`POST /sessions/{sessionId}/pick-list` now takes an optional body:
+
+```json
+{
+  "preferenceLines": [{ "referralId": "…", "lines": [{ "stockItemId": "…", "quantity": 2 }] }]
+}
+```
+
+**You own the rules; the server never reads them.** It holds no form
+definition, so it cannot know which answers are preferences or what they mean.
+Evaluate your own configuration and send the stock items you resolved — **ids,
+never names**. `GET /referrals?sessionId=` gives you everything to evaluate
+against (`id`, `adults`, `children` and the whole `answers` map) before any
+pick list exists; there is no separate inputs endpoint and none is needed.
+
+What the server does with them:
+
+- Merges them into the parcels **that call creates**, inside the same atomic
+  write. There is no second "apply" step and no applied flag.
+- **A preference asks for _at least_ its quantity.** Where the model parcel
+  already has the item, the higher of the two wins — so a preference can never
+  cut a larger household's share, and an item that later joins a model parcel
+  cannot silently double.
+- **Never touches an existing parcel.** Send the whole session's lines every
+  time you generate or reconcile; entries for households already picked come
+  back in `preferenceReferralsIgnored` rather than as an error. You do not have
+  to track which households you have already covered.
+- An unknown `stockItemId` refuses **the whole request** with `422` and
+  `details.unknownStockItemIds`, creating nothing. An item that exists but has
+  been deactivated since you loaded the catalogue has its line dropped and
+  counted in `preferenceLinesDropped` — a retired item must not stop a session
+  generating on a Tuesday morning.
+- The same referral twice, or the same stock item twice for one referral, is a
+  `400`. Two quantities for one item is ambiguous and the server will not pick
+  one.
+
+### `quantity: -1` means _needs attention_
+
+An item your rules could not put a number on — the household asked for it, and
+a team leader must decide how much. It is **not a quantity**; never render it
+as one, and never add it to a total.
+
+- It **beats any model quantity** in the merge, in both directions. If the
+  larger number won, the request would vanish behind a quantity chosen for
+  household size that knows nothing about what was asked for, and nobody would
+  ever be told.
+- **`POST /parcels/{id}/review` is a `409` while one stands.** That single rule
+  is what keeps it off a sheet and out of the ledger: printing waits for every
+  parcel to be reviewed, and attendance waits for this one. You cannot lose an
+  unsettled item by forgetting it — the session cannot proceed past it.
+- Settle it with `PUT /parcels/{id}/lines`: the decided quantity, or `0` to drop
+  the item. That route takes `0` and above only; `-1` is created at generation
+  and cannot be set by hand.
 
 ---
 

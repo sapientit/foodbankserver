@@ -56,6 +56,9 @@ persistent error is consistent with this and is not evidence that the error was 
 - Validate at the edge, once, with Zod, then trust the parsed type inwards.
 - `unknown` at the boundary, a precise type after validation.
 - Never trust a client-supplied id, role, quantity or status. **Re-derive parcel contents from
-  household size on the server.**
+  household size on the server** — except the preference lines the client sends at pick-list
+  generation, which are a deliberate, bounded exception because the client owns the referral form
+  definition and the server holds none. The limits on it are in
+  [`../../.claude/rules/pii-security.md`](../../.claude/rules/pii-security.md); do not widen them.
 - Every response goes through an explicit mapper — see
   [`../../.claude/rules/api-contract.md`](../../.claude/rules/api-contract.md).

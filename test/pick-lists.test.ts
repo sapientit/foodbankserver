@@ -1,9 +1,14 @@
 import { env } from 'cloudflare:workers';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { fixedClock } from '../src/core/clock.ts';
 import { createDatabase } from '../src/db/client.ts';
-import { parcelLines, parcels, pickLists } from '../src/db/schema/pick-lists.ts';
+import {
+  NEEDS_ATTENTION_QUANTITY,
+  parcelLines,
+  parcels,
+  pickLists,
+} from '../src/db/schema/pick-lists.ts';
 import { auditEvents, referrals } from '../src/db/schema/referrals.ts';
 import { authorisedReferrers, referralReasons } from '../src/db/schema/referrers.ts';
 import { modelParcels, parcelGrid } from '../src/db/schema/rules.ts';
@@ -443,7 +448,7 @@ describe('copying the contents', () => {
 });
 
 describe('editing the pick list', () => {
-  it('adds an item, marked as a manual change', async () => {
+  it('adds an item to a parcel', async () => {
     const { testApp, token, world: w } = await world();
     await submitReferral(testApp, w, { adults: 1, children: 0 });
     const { id } = await generatePickList(testApp, token, w.sessionId);
@@ -458,7 +463,25 @@ describe('editing the pick list', () => {
     const after = await readPickList(testApp, token, id);
     const added = after.parcels[0]?.lines.find((l) => l.name === 'Cereal');
     expect(added?.quantity).toBe(3);
-    expect(added?.source).toBe('manual');
+  });
+
+  it('puts no source on a parcel line, on the screen or on the sheet', async () => {
+    // `source` held 'model' or 'manual' and nothing ever read it. Both payloads
+    // are asserted because they share one line shape: a field returning to the
+    // maintenance view would silently reappear on the printed sheet too.
+    const { testApp, token, world: w } = await world();
+    await submitReferral(testApp, w, { adults: 1, children: 0 });
+    const { id } = await generatePickList(testApp, token, w.sessionId);
+
+    const { parcels: rows } = await readPickList(testApp, token, id);
+    expect(rows[0]?.lines[0]).not.toHaveProperty('source');
+
+    await reviewEveryParcel(testApp, token, id);
+    const printed = await testApp.request(`/api/v1/pick-lists/${id}/print`, {
+      headers: authHeaders(token),
+    });
+    const body: { parcels: { lines: Record<string, unknown>[] }[] } = await printed.json();
+    expect(body.parcels[0]?.lines[0]).not.toHaveProperty('source');
   });
 
   it('changing an existing quantity bumps it rather than duplicating the line', async () => {
@@ -916,6 +939,270 @@ describe('pick list authorisation', () => {
   });
 });
 
+describe('preference lines at generation', () => {
+  it('raises a line to the preference quantity when it asks for more than the model', async () => {
+    const { testApp, token, world: w } = await world();
+    const referral = await submitReferral(testApp, w, { adults: 1, children: 0 });
+
+    const result = await generatePickList(testApp, token, w.sessionId, [
+      { referralId: referral.id, lines: [{ stockItemId: w.stockItems.Beans, quantity: 5 }] },
+    ]);
+    expect(result.status).toBe(200);
+    expect(result.preferenceLinesApplied).toBe(1);
+    expect(result.preferenceLinesDropped).toBe(0);
+    expect(result.preferenceReferralsIgnored).toBe(0);
+
+    const { parcels: rows } = await readPickList(testApp, token, result.id);
+    expect(rows[0]?.lines).toEqual([
+      expect.objectContaining({ stockItemId: w.stockItems.Beans, quantity: 5 }),
+    ]);
+  });
+
+  it('never lowers a line below what the model already gives the household', async () => {
+    const { testApp, token, world: w } = await world();
+    const referral = await submitReferral(testApp, w, { adults: 1, children: 0 });
+
+    // The Single parcel model already gives two tins of Beans; the preference
+    // asks for fewer, which must not cut a household's share.
+    const result = await generatePickList(testApp, token, w.sessionId, [
+      { referralId: referral.id, lines: [{ stockItemId: w.stockItems.Beans, quantity: 1 }] },
+    ]);
+    expect(result.status).toBe(200);
+
+    const { parcels: rows } = await readPickList(testApp, token, result.id);
+    expect(rows[0]?.lines).toEqual([
+      expect.objectContaining({ stockItemId: w.stockItems.Beans, quantity: 2 }),
+    ]);
+  });
+
+  it('adds an item to the parcel that the model does not contain', async () => {
+    const { testApp, token, world: w } = await world();
+    const referral = await submitReferral(testApp, w, { adults: 1, children: 0 });
+
+    // The Single parcel model contains only Beans.
+    const result = await generatePickList(testApp, token, w.sessionId, [
+      { referralId: referral.id, lines: [{ stockItemId: w.stockItems.Cereal, quantity: 1 }] },
+    ]);
+    expect(result.status).toBe(200);
+    expect(result.preferenceLinesApplied).toBe(1);
+
+    const { parcels: rows } = await readPickList(testApp, token, result.id);
+    expect(rows[0]?.lines.map((l) => l.stockItemId).sort()).toEqual(
+      [w.stockItems.Beans, w.stockItems.Cereal].sort(),
+    );
+  });
+
+  it('collapses a preference that repeats a model item into exactly one row', async () => {
+    // A database-level assertion, not a response-shape one: `parcel_lines` is
+    // uniquely indexed on (parcel_id, stock_item_id) and the bulk insert has no
+    // ON CONFLICT, so a duplicate here would fail the whole atomic batch rather
+    // than merely look wrong in the response.
+    const { testApp, token, world: w } = await world();
+    const referral = await submitReferral(testApp, w, { adults: 1, children: 0 });
+
+    const result = await generatePickList(testApp, token, w.sessionId, [
+      { referralId: referral.id, lines: [{ stockItemId: w.stockItems.Beans, quantity: 9 }] },
+    ]);
+    expect(result.status).toBe(200);
+
+    const [parcel] = await db.select().from(parcels).where(eq(parcels.referralId, referral.id));
+    const beansRows = await db
+      .select()
+      .from(parcelLines)
+      .where(
+        and(
+          eq(parcelLines.parcelId, parcel?.id ?? ''),
+          eq(parcelLines.stockItemId, w.stockItems.Beans),
+        ),
+      );
+
+    expect(beansRows).toHaveLength(1);
+    expect(beansRows[0]?.quantity).toBe(9);
+  });
+
+  it('refuses the whole request and writes nothing when a stock item id is unknown', async () => {
+    const { testApp, token, world: w } = await world();
+    const referral = await submitReferral(testApp, w, { adults: 1, children: 0 });
+    const unknownId = crypto.randomUUID();
+
+    const response = await testApp.request(`/api/v1/sessions/${w.sessionId}/pick-list`, {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({
+        preferenceLines: [
+          { referralId: referral.id, lines: [{ stockItemId: unknownId, quantity: 1 }] },
+        ],
+      }),
+    });
+
+    expect(response.status).toBe(422);
+    const body: { error: { details?: { unknownStockItemIds?: string[] } } } = await response.json();
+    expect(body.error.details?.unknownStockItemIds).toEqual([unknownId]);
+
+    // Nothing was written: not the pick list, not a parcel.
+    expect(await db.select().from(pickLists)).toHaveLength(0);
+    const check = await testApp.request(`/api/v1/sessions/${w.sessionId}/pick-list`, {
+      headers: authHeaders(token),
+    });
+    expect(check.status).toBe(404);
+  });
+
+  it('drops a preference line for a deactivated stock item and still generates', async () => {
+    const { testApp, token, world: w } = await world();
+    const referral = await submitReferral(testApp, w, { adults: 1, children: 0 });
+
+    await testApp.request(`/api/v1/stock/items/${w.stockItems.Cereal}`, {
+      method: 'PATCH',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({ isActive: false }),
+    });
+
+    const result = await generatePickList(testApp, token, w.sessionId, [
+      { referralId: referral.id, lines: [{ stockItemId: w.stockItems.Cereal, quantity: 3 }] },
+    ]);
+
+    expect(result.status).toBe(200);
+    expect(result.preferenceLinesApplied).toBe(0);
+    expect(result.preferenceLinesDropped).toBe(1);
+
+    const { parcels: rows } = await readPickList(testApp, token, result.id);
+    expect(rows[0]?.lines.map((l) => l.stockItemId)).toEqual([w.stockItems.Beans]);
+  });
+
+  it('ignores preference lines for a referral that already has a parcel', async () => {
+    const { testApp, token, world: w } = await world();
+    const referral = await submitReferral(testApp, w, { adults: 1, children: 0 });
+    const first = await generatePickList(testApp, token, w.sessionId);
+    expect(first.parcelsCreated).toBe(1);
+
+    // Sent as part of the whole session's lines on a later reconciliation, for
+    // a household that was already picked. Never an error: that is what makes
+    // sending the whole set every time safe for the client.
+    const reconciled = await generatePickList(testApp, token, w.sessionId, [
+      { referralId: referral.id, lines: [{ stockItemId: w.stockItems.Beans, quantity: 99 }] },
+    ]);
+
+    expect(reconciled.status).toBe(200);
+    expect(reconciled.parcelsCreated).toBe(0);
+    expect(reconciled.preferenceLinesApplied).toBe(0);
+    expect(reconciled.preferenceReferralsIgnored).toBe(1);
+
+    // The existing parcel is untouched, not bumped to 99.
+    const { parcels: rows } = await readPickList(testApp, token, first.id);
+    expect(rows[0]?.lines).toEqual([
+      expect.objectContaining({ stockItemId: w.stockItems.Beans, quantity: 2 }),
+    ]);
+  });
+
+  it('ignores preference lines for a referral that is not on the session', async () => {
+    const { testApp, token, world: w } = await world();
+    await submitReferral(testApp, w, { adults: 1, children: 0 });
+
+    // A referral submitted to a different session entirely.
+    const otherSession = await testApp.request('/api/v1/sessions', {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sessionDate: '2026-08-18',
+        startTime: '10:00',
+        durationMinutes: 120,
+        location: 'Hall',
+      }),
+    });
+    const { id: otherSessionId }: { id: string } = await otherSession.json();
+    const elsewhere = await submitReferral(testApp, w, {
+      adults: 1,
+      children: 0,
+      sessionId: otherSessionId,
+    });
+
+    const result = await generatePickList(testApp, token, w.sessionId, [
+      { referralId: elsewhere.id, lines: [{ stockItemId: w.stockItems.Beans, quantity: 5 }] },
+    ]);
+
+    expect(result.status).toBe(200);
+    expect(result.parcelsCreated).toBe(1);
+    expect(result.preferenceLinesApplied).toBe(0);
+    expect(result.preferenceReferralsIgnored).toBe(1);
+  });
+
+  it('refuses a request naming the same stock item twice for one referral', async () => {
+    const { testApp, token, world: w } = await world();
+    const referral = await submitReferral(testApp, w, { adults: 1, children: 0 });
+
+    const response = await testApp.request(`/api/v1/sessions/${w.sessionId}/pick-list`, {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({
+        preferenceLines: [
+          {
+            referralId: referral.id,
+            lines: [
+              { stockItemId: w.stockItems.Beans, quantity: 1 },
+              { stockItemId: w.stockItems.Beans, quantity: 2 },
+            ],
+          },
+        ],
+      }),
+    });
+
+    expect(response.status).toBe(400);
+    expect(await db.select().from(pickLists)).toHaveLength(0);
+  });
+
+  it('refuses a request naming the same referral twice', async () => {
+    const { testApp, token, world: w } = await world();
+    const referral = await submitReferral(testApp, w, { adults: 1, children: 0 });
+
+    const response = await testApp.request(`/api/v1/sessions/${w.sessionId}/pick-list`, {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({
+        preferenceLines: [
+          { referralId: referral.id, lines: [{ stockItemId: w.stockItems.Beans, quantity: 1 }] },
+          { referralId: referral.id, lines: [{ stockItemId: w.stockItems.Cereal, quantity: 1 }] },
+        ],
+      }),
+    });
+
+    expect(response.status).toBe(400);
+    expect(await db.select().from(pickLists)).toHaveLength(0);
+  });
+
+  it('a needs-attention line survives generation and cannot be reviewed', async () => {
+    const { testApp, token, world: w } = await world();
+    const referral = await submitReferral(testApp, w, { adults: 1, children: 0 });
+
+    const result = await generatePickList(testApp, token, w.sessionId, [
+      {
+        referralId: referral.id,
+        lines: [{ stockItemId: w.stockItems.Beans, quantity: NEEDS_ATTENTION_QUANTITY }],
+      },
+    ]);
+    expect(result.status).toBe(200);
+    expect(result.preferenceLinesApplied).toBe(1);
+
+    const { parcels: rows } = await readPickList(testApp, token, result.id);
+    expect(rows[0]?.lines).toEqual([
+      expect.objectContaining({
+        stockItemId: w.stockItems.Beans,
+        quantity: NEEDS_ATTENTION_QUANTITY,
+      }),
+    ]);
+
+    // The whole point: a picker cannot be sent to fetch "-1" of anything, and
+    // the review gate is what keeps it off a printed sheet and off the ledger.
+    const review = await testApp.request(`/api/v1/parcels/${rows[0]?.id ?? ''}/review`, {
+      method: 'POST',
+      headers: authHeaders(token),
+    });
+    expect(review.status).toBe(409);
+    expect(await review.json()).toMatchObject({
+      error: { message: 'Settle every item needing attention before reviewing this parcel' },
+    });
+  });
+});
+
 describe('the D1 query budget', () => {
   it('generates for twenty-five referrals within the free-tier query budget', async () => {
     // The free plan allows 50 queries per Worker invocation. Generation must
@@ -951,5 +1238,51 @@ describe('the D1 query budget', () => {
     expect(rows.map((parcel) => parcel.pickNumber)).toEqual(
       Array.from({ length: 25 }, (_, index) => index + 1),
     );
+  });
+
+  it('carries preference lines for twenty-five referrals within budget, one catalogue query however many items are named', async () => {
+    // The stock catalogue is fetched whole, once, rather than once per named
+    // item — `inArray` would bind one parameter per id against a limit of 100,
+    // and a per-referral lookup would burn the same 50-query budget the plain
+    // generation test above exists to prove is flat.
+    const { testApp, token, world: w } = await world({ capacity: 30 });
+
+    const referralIds: string[] = [];
+    for (let i = 0; i < 25; i++) {
+      const submitted = await submitReferral(
+        testApp,
+        w,
+        { adults: 2, children: 3 },
+        { clientIp: `198.51.100.${String(i + 1)}` },
+      );
+      expect(submitted.status).toBe(201);
+      referralIds.push(submitted.id);
+    }
+
+    const preferenceLines = referralIds.map((referralId) => ({
+      referralId,
+      // Higher than the Family parcel model's Beans quantity of 4, so every
+      // parcel's line is provably the merged value rather than the model's.
+      lines: [{ stockItemId: w.stockItems.Beans, quantity: 5 }],
+    }));
+
+    const result = await generatePickList(testApp, token, w.sessionId, preferenceLines);
+    expect(result.status).toBe(200);
+    expect(result.parcelsCreated).toBe(25);
+    expect(result.preferenceLinesApplied).toBe(25);
+    expect(result.preferenceLinesDropped).toBe(0);
+    expect(result.preferenceReferralsIgnored).toBe(0);
+
+    // Still one row per stock item per parcel — no duplicate Beans line from
+    // merging the model's with the preference's.
+    expect(await db.select().from(parcels)).toHaveLength(25);
+    const lines = await db.select().from(parcelLines);
+    expect(lines).toHaveLength(75);
+    expect(lines.filter((line) => line.stockItemId === w.stockItems.Beans)).toHaveLength(25);
+    expect(
+      lines
+        .filter((line) => line.stockItemId === w.stockItems.Beans)
+        .every((line) => line.quantity === 5),
+    ).toBe(true);
   });
 });

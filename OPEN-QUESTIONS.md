@@ -164,7 +164,24 @@ at the cost of a second table and the work to maintain it.
 
 ## Q28 — Should selected preference answers automatically add matching stock items during pick-list review?
 
-`Status: open` · `Raised by: client` · `Blocks: automatic preference picking; existing manual preference display does not block`
+`Status: open` · `Raised by: client` · `Blocks: nothing today — the server is built on an assumed answer and can be unbuilt`
+
+> **Built on an assumption, 2026-08-11.** Pete asked for the server side to be built ahead of the
+> charity's answer, assuming **Option 2 with item-level attention**: the client evaluates its own
+> preference rules and sends resolved stock items with `POST /sessions/:id/pick-list`, and an item
+> needing a decision travels as a parcel line with `quantity: -1`. That is now shipped behind
+> `x-assumed` markers in `openapi.yaml`, and `INITIAL_SPEC1.txt` deliberately says nothing about it
+> — it is a guess, and it must not read as a requirement until the charity answers.
+>
+> **The question below is unchanged and still open.** If the charity chooses Option 1, the request
+> body and the merge come out. If it chooses answer-level attention, `-1` comes out, the quantity
+> CHECK on `parcel_lines` narrows back to `> 0` in a further rebuild, and the attention data needs
+> a representation this design does not have.
+>
+> One thing the build surfaced that the question does not cover: **a preference asks for _at least_
+> its quantity** — where the model parcel already contains the item, the higher of the two wins. It
+> cannot express "the model parcel _plus_ one more", and switching to addition later would silently
+> change what every household receives. Worth asking the charity in the same breath.
 
 The referral form has preference questions whose answers tell a team leader what a household asks
 for. Today the model parcel is the starting point and a team leader reads those answers, finds the

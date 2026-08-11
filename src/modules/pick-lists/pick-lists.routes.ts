@@ -3,12 +3,14 @@ import { z } from 'zod';
 import type { Actor } from '../../core/actor.ts';
 import { UnauthorizedError } from '../../core/errors.ts';
 import { requireAuth, requireRole } from '../../http/middleware/require-auth.ts';
-import { parseJsonBody } from '../../http/validate.ts';
+import { parseJsonBody, parseOptionalJsonBody } from '../../http/validate.ts';
 import type { AppEnv } from '../../http/types.ts';
 import { createReferralsRepository } from '../referrals/referrals.repository.ts';
 import { createRulesRepository } from '../rules/rules.repository.ts';
 import { createSessionsRepository } from '../sessions/sessions.repository.ts';
+import { createStockRepository } from '../stock/stock.repository.ts';
 import { createPickListsRepository } from './pick-lists.repository.ts';
+import { generatePickListSchema } from './pick-lists.schema.ts';
 import { createPickListsService } from './pick-lists.service.ts';
 import { createAttendanceService } from './attendance.service.ts';
 import {
@@ -47,14 +49,26 @@ export function pickListRoutes(): Hono<AppEnv> {
    *
    * A POST rather than a GET because it creates. The frontend calls this when
    * the picking screen is opened; calling it again is harmless.
+   *
+   * The body is optional and carries the preference lines the client's own
+   * rules resolved — it POSTs bare when there are none, which is why this
+   * parses optionally rather than requiring a body.
    */
   routes.post('/sessions/:sessionId/pick-list', ...staff, async (c) => {
-    const result = await serviceFor(c).getOrGenerate(c.req.param('sessionId'), actorOf(c));
+    const { preferenceLines } = await parseOptionalJsonBody(c, generatePickListSchema);
+    const result = await serviceFor(c).getOrGenerate(
+      c.req.param('sessionId'),
+      actorOf(c),
+      preferenceLines,
+    );
 
     return c.json({
       ...toPickListResponse(result.pickList),
       parcelsCreated: result.parcelsCreated,
       linesCreated: result.linesCreated,
+      preferenceLinesApplied: result.preferenceLinesApplied,
+      preferenceLinesDropped: result.preferenceLinesDropped,
+      preferenceReferralsIgnored: result.preferenceReferralsIgnored,
     });
   });
 
@@ -223,6 +237,7 @@ function serviceFor(c: Context<AppEnv>) {
     sessions: createSessionsRepository(db),
     referrals: createReferralsRepository(db),
     rules: createRulesRepository(db),
+    stock: createStockRepository(db),
     clock: c.get('clock'),
     logger: c.get('logger'),
   });

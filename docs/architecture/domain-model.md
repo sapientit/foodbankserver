@@ -124,6 +124,15 @@ no wastage and no hand correction — the count on the shelf next week is what t
 value costs a rebuild of the whole ledger, and that column has already been rebuilt three times by
 guessing, so it is a question for Pete rather than a line to add.
 
+**A line quantity of `-1` is not a quantity.** It means the household asked for an item the client's
+preference rules could not put a number on, and a team leader must decide. A parcel holding one
+cannot be reviewed — and since printing waits for every parcel to be reviewed and attendance waits
+for this one, that single check is what keeps it off a sheet and out of the ledger. It matters more
+than it looks: `buildParcelIssue` negates the quantity, so a `-1` reaching attendance would _add_
+one to stock. `-1` can only be created at generation, on a parcel that is by definition new and
+unreviewed; `PUT /parcels/:id/lines` accepts `0` and above. **This rests on an assumed answer to
+Q28.**
+
 **A parcel reaches neither paper nor a household until it has been reviewed.** Attendance on an
 unreviewed parcel is a `ConflictError`, and so is a print request — both `GET /pick-lists/:id/print`
 and the `POST` that stamps it — while any parcel on the list is unreviewed. The `POST` is checked

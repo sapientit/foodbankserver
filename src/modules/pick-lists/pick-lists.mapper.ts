@@ -39,8 +39,13 @@ export interface ParcelLineResponse {
    */
   readonly description: string | null;
   readonly shelfNumber: string;
+  /**
+   * A positive count, or `-1` for a line a team leader still has to settle.
+   *
+   * `-1` is not a quantity and must never be rendered as one: the household
+   * asked for this item and nobody has yet decided how much of it they get.
+   */
   readonly quantity: number;
-  readonly source: string;
 }
 
 export interface ParcelResponse {
@@ -98,7 +103,6 @@ export function toParcelResponse(
       description: line.item.description,
       shelfNumber: line.item.shelfNumber,
       quantity: line.quantity,
-      source: line.source,
     })),
   };
 }

@@ -11,7 +11,10 @@ import { parseContents, parseGrid } from '../rules/rules.service.ts';
 import type { RulesRepository } from '../rules/rules.repository.ts';
 import type { ReferralsRepository } from '../referrals/referrals.repository.ts';
 import type { SessionsRepository } from '../sessions/sessions.repository.ts';
+import type { StockRepository } from '../stock/stock.repository.ts';
 import type { PickListsRepository } from './pick-lists.repository.ts';
+import { mergePreferenceLines, type ParcelContentLine } from './preference-lines.ts';
+import type { PreferenceLineSet } from './pick-lists.schema.ts';
 
 export interface GenerationDeps {
   readonly db: Database;
@@ -19,6 +22,7 @@ export interface GenerationDeps {
   readonly sessions: SessionsRepository;
   readonly referrals: ReferralsRepository;
   readonly rules: RulesRepository;
+  readonly stock: StockRepository;
   readonly clock: Clock;
   readonly logger: Logger;
 }
@@ -27,7 +31,33 @@ export interface GenerationResult {
   readonly pickList: PickList;
   readonly parcelsCreated: number;
   readonly linesCreated: number;
+  /** Preference lines merged into parcels this call actually created. */
+  readonly preferenceLinesApplied: number;
+  /** Preference lines whose stock item has since been deactivated. */
+  readonly preferenceLinesDropped: number;
+  /** Supplied referrals that already had a parcel, or are not owed one. */
+  readonly preferenceReferralsIgnored: number;
 }
+
+export interface GenerateOptions {
+  /**
+   * Lines the client's preference rules resolved, by referral.
+   *
+   * Applied only to parcels this call creates. An existing parcel is never
+   * touched, however many times the same lines are sent.
+   */
+  readonly preferenceLines?: PreferenceLineSet;
+  readonly existingPickList?: PickList;
+  readonly attempts?: number;
+}
+
+const NOTHING_GENERATED = {
+  parcelsCreated: 0,
+  linesCreated: 0,
+  preferenceLinesApplied: 0,
+  preferenceLinesDropped: 0,
+  preferenceReferralsIgnored: 0,
+} as const;
 
 /**
  * Builds the pick list for a session.
@@ -35,10 +65,13 @@ export interface GenerationResult {
  * ## Query budget
  *
  * Five reads and one batched write, **regardless of how many referrals there
- * are**: existing pick list, session, referrals, model parcels, grid.
+ * are**: existing pick list, session, referrals, model parcels, grid — plus a
+ * sixth, the stock catalogue, only when the request carries preference lines.
  * Everything else happens in memory. A per-referral lookup would be 25+
  * queries on a plan that allows 50 per invocation, and this is the endpoint a
- * team lead opens first thing on a session morning.
+ * team lead opens first thing on a session morning. The catalogue is fetched
+ * whole for the same reason: one query however many items are named, where
+ * `inArray` would bind one parameter per id against a limit of 100.
  *
  * ## Why the contents are copied
  *
@@ -52,10 +85,10 @@ export async function generatePickList(
   deps: GenerationDeps,
   sessionId: string,
   actor: Actor,
-  existingPickList?: PickList,
-  attempts = 0,
+  options: GenerateOptions = {},
 ): Promise<GenerationResult> {
-  const { db, repository, sessions, referrals, rules, clock, logger } = deps;
+  const { db, repository, sessions, referrals, rules, stock, clock, logger } = deps;
+  const { preferenceLines = [], existingPickList, attempts = 0 } = options;
 
   const session = await sessions.findById(sessionId);
   if (session === undefined) {
@@ -66,7 +99,7 @@ export async function generatePickList(
   }
   if (session.status === 'confirmed') {
     if (existingPickList !== undefined) {
-      return { pickList: existingPickList, parcelsCreated: 0, linesCreated: 0 };
+      return { pickList: existingPickList, ...NOTHING_GENERATED };
     }
     throw new ConflictError('This session has been confirmed and can no longer be changed');
   }
@@ -74,10 +107,11 @@ export async function generatePickList(
   // Pick-list eligibility deliberately matches SMS reminders: a household
   // holding a place may turn up, so it needs a parcel and a named row for the
   // team running the session. Cancelled and rejected referrals hold no place.
-  const [pickableReferrals, modelParcels, gridRow] = await Promise.all([
+  const [pickableReferrals, modelParcels, gridRow, stockItems] = await Promise.all([
     referrals.list({ sessionId, statuses: REFERRAL_STATUSES_HOLDING_A_PLACE }),
     rules.listModelParcels(),
     rules.findGrid(),
+    preferenceLines.length === 0 ? Promise.resolve([]) : stock.listItems(false, 'shelf'),
   ]);
 
   const existingParcels =
@@ -95,6 +129,40 @@ export async function generatePickList(
     modelParcels.map((parcel) => [parcel.name, parseContents(parcel.contentsJson)]),
   );
 
+  // Every supplied id is checked against the catalogue before a single
+  // statement is composed. An id the catalogue does not know would otherwise
+  // reach `parcel_lines.stock_item_id` inside the atomic batch, and a
+  // foreign-key failure there is not a shape the retry below recognises: it
+  // would surface as an opaque 500, having written nothing and explained
+  // nothing.
+  const itemsById = new Map(stockItems.map((item) => [item.id, item]));
+  const unknownStockItemIds = [
+    ...new Set(
+      preferenceLines.flatMap((entry) =>
+        entry.lines.map((line) => line.stockItemId).filter((id) => !itemsById.has(id)),
+      ),
+    ),
+  ].sort();
+  if (unknownStockItemIds.length > 0) {
+    throw new UnprocessableError('Preference lines name stock items that do not exist', {
+      details: { unknownStockItemIds },
+    });
+  }
+
+  // A deactivated item is dropped rather than refused. It is a race — the item
+  // was on the list the client evaluated against and has been retired since —
+  // and failing a session's generation over a nice-to-have would be the wrong
+  // trade on a Tuesday morning. Reported in the response rather than silently
+  // swallowed. Items are deactivated and never deleted, which is what makes
+  // unknown and inactive different answers to different questions.
+  const preferencesByReferral = new Map<string, ParcelContentLine[]>();
+  let preferenceLinesDropped = 0;
+  for (const entry of preferenceLines) {
+    const usable = entry.lines.filter((line) => itemsById.get(line.stockItemId)?.isActive === 1);
+    preferenceLinesDropped += entry.lines.length - usable.length;
+    preferencesByReferral.set(entry.referralId, usable);
+  }
+
   const now = clock.nowIso();
   const pickListId = existingPickList?.id ?? crypto.randomUUID();
 
@@ -107,6 +175,13 @@ export async function generatePickList(
     0,
   );
 
+  // Preference lines reach a parcel only as it is created. A referral that
+  // already has one is skipped here as it always was, which is what makes
+  // sending the whole session's lines on every reconciliation safe: the client
+  // does not have to track which households it has already covered.
+  const preferencesApplied = new Set<string>();
+  let preferenceLinesApplied = 0;
+
   for (const referral of pickableReferrals) {
     if (coveredReferrals.has(referral.id)) continue;
 
@@ -116,8 +191,16 @@ export async function generatePickList(
       continue;
     }
 
-    resolvedParcels.push({ referral, lines: resolved.lines });
+    const preferences = preferencesByReferral.get(referral.id) ?? [];
+    preferencesApplied.add(referral.id);
+    preferenceLinesApplied += preferences.length;
+
+    resolvedParcels.push({ referral, lines: mergePreferenceLines(resolved.lines, preferences) });
   }
+
+  const preferenceReferralsIgnored = preferenceLines.filter(
+    (entry) => !preferencesApplied.has(entry.referralId),
+  ).length;
 
   // A session must never leave staff with a partly-generated list. Resolve
   // every missing household first, then make the single atomic write.
@@ -150,7 +233,6 @@ export async function generatePickList(
         parcelId,
         stockItemId: line.stockItemId,
         quantity: line.quantity,
-        source: 'model',
         createdAt: now,
         updatedAt: now,
       });
@@ -160,7 +242,17 @@ export async function generatePickList(
   // One native D1 batch: atomic, and json_each keeps it to three statements
   // however many parcels there are.
   if (existingPickList !== undefined && parcelRows.length === 0) {
-    return { pickList: existingPickList, parcelsCreated: 0, linesCreated: 0 };
+    // The ordinary reconciliation: everybody already has a parcel. Preference
+    // lines arrived for households that are already picked, so they are
+    // reported as ignored rather than applied.
+    return {
+      pickList: existingPickList,
+      parcelsCreated: 0,
+      linesCreated: 0,
+      preferenceLinesApplied: 0,
+      preferenceLinesDropped,
+      preferenceReferralsIgnored,
+    };
   }
 
   const statements: D1PreparedStatement[] = [
@@ -194,7 +286,14 @@ export async function generatePickList(
       const existing = await repository.findBySession(sessionId);
       if (existing !== undefined) {
         logger.info('pick list already generated by a concurrent request', { sessionId });
-        return generatePickList(deps, sessionId, actor, existing, attempts + 1);
+        // The preference lines go round with it. A retry that dropped them
+        // would create parcels without the household's preferences and report
+        // success, which is the worst failure available here.
+        return generatePickList(deps, sessionId, actor, {
+          preferenceLines,
+          existingPickList: existing,
+          attempts: attempts + 1,
+        });
       }
     }
 
@@ -206,7 +305,11 @@ export async function generatePickList(
     ) {
       const current = await repository.findBySession(sessionId);
       if (current !== undefined && current.status !== 'confirmed') {
-        return generatePickList(deps, sessionId, actor, current, attempts + 1);
+        return generatePickList(deps, sessionId, actor, {
+          preferenceLines,
+          existingPickList: current,
+          attempts: attempts + 1,
+        });
       }
     }
     throw error;
@@ -228,6 +331,9 @@ export async function generatePickList(
     pickList: created,
     parcelsCreated: parcelRows.length,
     linesCreated: lineRows.length,
+    preferenceLinesApplied,
+    preferenceLinesDropped,
+    preferenceReferralsIgnored,
   };
 }
 

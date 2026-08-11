@@ -2033,6 +2033,21 @@ paths:
         Generation is all-or-nothing. If any household due a parcel has no
         configured model parcel, no new parcels are created and the administrator must
         complete the household grid first.
+
+        **Preference lines are optional and belong to the client.** The body may
+        carry the stock items your own preference rules resolved, per referral —
+        the server holds no form definition and never reads your rule
+        configuration. They are merged into the parcels **this call creates**,
+        and a preference asks for *at least* its quantity: where the model
+        parcel already contains the item, the higher of the two wins, so a
+        preference can never cut a larger household's share. Send the whole
+        session's lines every time; entries for households that already have a
+        parcel are ignored and counted, not refused.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GeneratePickListRequest' }
       responses:
         '200':
           description: Generated, reconciled, or already complete
@@ -2045,7 +2060,26 @@ paths:
                     properties:
                       parcelsCreated: { type: integer }
                       linesCreated: { type: integer }
-        '422': { description: A model parcel is not configured for every booked household size }
+                      preferenceLinesApplied:
+                        type: integer
+                        description: Lines merged into parcels this call created.
+                      preferenceLinesDropped:
+                        type: integer
+                        description: >-
+                          Lines whose stock item has been deactivated since you
+                          loaded the catalogue. Dropped rather than refused, so
+                          a retired item cannot stop a session generating.
+                      preferenceReferralsIgnored:
+                        type: integer
+                        description: >-
+                          Supplied referrals that already had a parcel, or are
+                          not owed one. Expected on every reconciliation.
+        '400': { description: Malformed body, or the same referral or stock item named twice }
+        '422':
+          description: >-
+            A model parcel is not configured for every booked household size, or
+            a preference line names a stock item that does not exist
+            (`details.unknownStockItemIds`). Nothing is created either way.
 
   /api/v1/pick-lists/{id}:
     parameters: [{ $ref: '#/components/parameters/Id' }]
@@ -2218,9 +2252,11 @@ paths:
       tags: [Pick lists]
       summary: Add an item or change its quantity
       description: |
-        Marked as a manual change so it is distinguishable from what the model
-        parcel decided. **A quantity of 0 removes the line**, which is how a
-        picker records "we had none".
+        **A quantity of 0 removes the line**, which is how a picker records "we
+        had none". This is also how a needs-attention line is settled: send the
+        quantity the team leader decided, or `0` to drop the item. The body
+        accepts `0` and above only — `-1` is created by the preference rules at
+        generation and cannot be set by hand.
       requestBody:
         required: true
         content:
@@ -2245,6 +2281,10 @@ paths:
         the list is printed** and before this parcel's attendance outcome; both
         refuse with a `409` until it is done. Idempotent, and it freezes
         nothing — lines stay editable until the list is confirmed.
+
+        Refused with a `409` while any line is still `-1`. That single rule is
+        what keeps an unsettled item off a printed sheet and out of the stock
+        ledger, since both wait on review.
       responses:
         '200':
           description: Reviewed
@@ -2256,7 +2296,8 @@ paths:
                 properties:
                   id: { type: string, format: uuid }
                   reviewedAt: { type: string, format: date-time }
-        '409': { description: The pick list has been confirmed }
+        '409':
+          description: The pick list has been confirmed, or a line still needs attention
 
   /api/v1/parcels/{id}/lines/{stockItemId}:
     parameters:
@@ -3608,9 +3649,62 @@ components:
         firstPrintedAt: { type: [string, 'null'], format: date-time }
         confirmedAt: { type: [string, 'null'], format: date-time }
 
+    GeneratePickListRequest:
+      type: object
+      x-assumed: >-
+        The whole shape rests on Q28 being answered Option 2 — the client
+        evaluates preference rules and sends resolved stock items. Nothing here
+        is settled with the charity yet.
+      properties:
+        preferenceLines:
+          type: array
+          maxItems: 100
+          description: >-
+            One entry per household, each naming a referral and the stock items
+            your rules resolved for it. A referral must not appear twice.
+          items: { $ref: '#/components/schemas/PreferenceLineEntry' }
+
+    PreferenceLineEntry:
+      type: object
+      required: [referralId, lines]
+      properties:
+        referralId:
+          type: string
+          format: uuid
+          description: >-
+            The referral, not the parcel — the parcel does not exist yet. Get it
+            from `GET /referrals?sessionId=`, which also carries the `adults`,
+            `children` and `answers` your rules evaluate against.
+        lines:
+          type: array
+          minItems: 1
+          maxItems: 100
+          description: A stock item must not appear twice for one referral.
+          items: { $ref: '#/components/schemas/PreferenceLine' }
+
+    PreferenceLine:
+      type: object
+      required: [stockItemId, quantity]
+      properties:
+        stockItemId:
+          type: string
+          format: uuid
+          description: >-
+            Resolved by you from the item name your rule configuration holds.
+            **Ids, never names** — the server does not match on text. An id it
+            does not know refuses the whole request; an item deactivated since
+            you loaded the catalogue is dropped and counted.
+        quantity:
+          type: integer
+          maximum: 1000
+          description: >-
+            A positive quantity, or `-1` for an item your rules could not put a
+            number on and a team leader must decide. `-1` beats any model
+            quantity, so the request cannot be lost behind one.
+
     ParcelLine:
       type: object
-      required: [stockItemId, name, description, shelfNumber, quantity, source]
+      required: [stockItemId, name, description, shelfNumber, quantity]
       properties:
         stockItemId: { type: string, format: uuid }
         name: { type: string }
@@ -3621,11 +3715,21 @@ components:
             `category` here: the sheet is walked in shelf order, and the
             amendment screen takes its grouping from `GET /stock/items`.
         shelfNumber: { type: string }
-        quantity: { type: integer }
-        source:
-          type: string
-          enum: [model, manual]
-          description: '`manual` means a human changed it after generation.'
+        quantity:
+          type: integer
+          x-assumed: >-
+            That an item needing a decision is a line rather than a flag on the
+            answer is the assumed reading of Q28. If the charity chooses
+            answer-level attention, `-1` goes and this is a positive integer
+            again.
+          description: >-
+            A positive count, or **`-1`** for an item a team leader must still
+            settle: the household asked for it and the rules could not put a
+            number on it. Render `-1` as *needs attention*, never as a quantity
+            — it is the absence of one. Replace it with a positive quantity, or
+            send `0` to remove the line. A parcel holding one cannot be
+            reviewed, so it can reach neither a printed sheet nor the stock
+            ledger.
 
     Parcel:
       type: object

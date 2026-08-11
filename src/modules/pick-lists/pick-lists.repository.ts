@@ -105,7 +105,7 @@ export function createPickListsRepository(db: Database) {
         .values(value)
         .onConflictDoUpdate({
           target: [parcelLines.parcelId, parcelLines.stockItemId],
-          set: { quantity: value.quantity, source: 'manual', updatedAt: value.updatedAt },
+          set: { quantity: value.quantity, updatedAt: value.updatedAt },
         });
     },
 
@@ -284,13 +284,12 @@ export function createPickListsRepository(db: Database) {
       return db.$client
         .prepare(
           `INSERT INTO parcel_lines
-             (id, parcel_id, stock_item_id, quantity, source, created_at, updated_at)
+             (id, parcel_id, stock_item_id, quantity, created_at, updated_at)
            SELECT
              json_extract(value, '$.id'),
              json_extract(value, '$.parcelId'),
              json_extract(value, '$.stockItemId'),
              json_extract(value, '$.quantity'),
-             json_extract(value, '$.source'),
              json_extract(value, '$.createdAt'),
              json_extract(value, '$.updatedAt')
            FROM json_each(?)`,

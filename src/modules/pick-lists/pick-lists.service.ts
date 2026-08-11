@@ -2,7 +2,11 @@ import type { Actor } from '../../core/actor.ts';
 import type { Clock } from '../../core/clock.ts';
 import { ConflictError, NotFoundError } from '../../core/errors.ts';
 import type { Logger } from '../../core/log.ts';
-import type { Parcel, PickList } from '../../db/schema/pick-lists.ts';
+import {
+  NEEDS_ATTENTION_QUANTITY,
+  type Parcel,
+  type PickList,
+} from '../../db/schema/pick-lists.ts';
 import { REFERRAL_STATUSES_HOLDING_A_PLACE, type Referral } from '../../db/schema/referrals.ts';
 import {
   generatePickList,
@@ -10,6 +14,7 @@ import {
   type GenerationResult,
 } from './generation.service.ts';
 import type { ParcelWithLines, PickListsRepository } from './pick-lists.repository.ts';
+import type { PreferenceLineSet } from './pick-lists.schema.ts';
 
 export interface PickListsServiceDeps extends GenerationDeps {
   readonly repository: PickListsRepository;
@@ -67,15 +72,29 @@ export function createPickListsService(deps: PickListsServiceDeps) {
    * The pick list for a session, generating it on first view and reconciling
    * any active referral that arrived before the list is confirmed.
    */
-  async function getOrGenerate(sessionId: string, actor: Actor): Promise<GenerationResult> {
+  async function getOrGenerate(
+    sessionId: string,
+    actor: Actor,
+    preferenceLines: PreferenceLineSet,
+  ): Promise<GenerationResult> {
     const existing = await repository.findBySession(sessionId);
     if (existing !== undefined) {
       if (existing.status === 'confirmed') {
-        return { pickList: existing, parcelsCreated: 0, linesCreated: 0 };
+        return {
+          pickList: existing,
+          parcelsCreated: 0,
+          linesCreated: 0,
+          preferenceLinesApplied: 0,
+          preferenceLinesDropped: 0,
+          preferenceReferralsIgnored: preferenceLines.length,
+        };
       }
-      return generatePickList(deps, sessionId, actor, existing);
+      return generatePickList(deps, sessionId, actor, {
+        preferenceLines,
+        existingPickList: existing,
+      });
     }
-    return generatePickList(deps, sessionId, actor);
+    return generatePickList(deps, sessionId, actor, { preferenceLines });
   }
 
   /** Editing is allowed while draft and after printing — but never once confirmed. */
@@ -102,7 +121,14 @@ export function createPickListsService(deps: PickListsServiceDeps) {
     return parcel;
   }
 
-  /** Adds an item or changes its quantity. Always marked `manual`. */
+  /**
+   * Adds an item or changes its quantity.
+   *
+   * The route admits `0` and above only, so this is also how a team leader
+   * settles a needs-attention line: a positive quantity replaces it, `0`
+   * removes it. There is no way to *create* a `-1` from here — those arrive
+   * from the client's preference rules at generation and nowhere else.
+   */
   async function setLine(parcelId: string, stockItemId: string, quantity: number): Promise<void> {
     const parcel = await getParcel(parcelId);
     await requireEditable(parcel.pickListId);
@@ -116,7 +142,6 @@ export function createPickListsService(deps: PickListsServiceDeps) {
         parcelId,
         stockItemId,
         quantity,
-        source: 'manual',
         createdAt: now,
         updatedAt: now,
       });
@@ -147,10 +172,27 @@ export function createPickListsService(deps: PickListsServiceDeps) {
     return updated;
   }
 
-  /** Marks the checked parcel ready for its attendance outcome. Idempotent. */
+  /**
+   * Marks the checked parcel ready for printing and its attendance outcome.
+   * Idempotent.
+   *
+   * Refused while any line still says `NEEDS_ATTENTION_QUANTITY`. **This single
+   * check is what keeps an unsettled line off a sheet and out of the stock
+   * ledger**: printing waits for every parcel to be reviewed, attendance waits
+   * for this parcel to be reviewed, and `-1` can only be created at generation,
+   * on a parcel that is by definition new and unreviewed. Weaken it and a `-1`
+   * reaches `buildParcelIssue`, which negates the quantity — so a line meaning
+   * "somebody must decide" would silently *add* one to stock.
+   */
   async function markParcelReviewed(parcelId: string): Promise<Parcel> {
     const parcel = await getParcel(parcelId);
     await requireEditable(parcel.pickListId);
+
+    const lines = await repository.listLinesFor(parcelId);
+    if (lines.some((line) => line.quantity === NEEDS_ATTENTION_QUANTITY)) {
+      throw new ConflictError('Settle every item needing attention before reviewing this parcel');
+    }
+
     if (parcel.reviewedAt !== null) return parcel;
     const updated = await repository.updateParcel(parcelId, {
       reviewedAt: clock.nowIso(),
