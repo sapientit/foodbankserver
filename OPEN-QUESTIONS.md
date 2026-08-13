@@ -230,29 +230,3 @@ be added to the spreadsheet extract as four more fixed columns, alongside the de
 the four raw bands?
 
 **A:**
-
----
-
-## Q31 — How should the administrator referral search combine identifiers and present its results?
-
-`Status: answered — implementation pending` · `Raised by: client` · `Blocks: administrator referral-search screen and API`
-
-The charity wants a separate administrator-only screen that searches referrals by postcode,
-phone number and/or date of birth. The identifiers already have settled forms for duplicate
-matching, so search can use the same normalisation without inventing a second definition.
-
-Two choices materially alter what a search returns and what personal information is exposed:
-
-1. If an administrator supplies more than one identifier, must a referral match **all** supplied
-   identifiers (a narrowing search), or **any** supplied identifier (a broader search)?
-2. Before opening a result, which columns should its result list show? The candidate referral's
-   name and session are useful for recognising it, but a postcode-only search can otherwise expose
-   every household sharing a hostel or refuge postcode. A safer alternative is a result count plus
-   a deliberately chosen minimal list.
-
-The API should reject a search with no identifier, use the existing postcode and phone
-normalisation, and remain administrator-only.
-
-**A:** Multiple identifiers are combined as an **OR**: a referral matching any supplied
-postcode, phone number or date of birth is returned. Each result shows the client name and
-address, session date and location, status, and which supplied identifier matched.

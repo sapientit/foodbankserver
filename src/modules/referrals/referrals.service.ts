@@ -14,10 +14,10 @@ import {
   type NewReferral,
   type Referral,
 } from '../../db/schema/referrals.ts';
+import type { Session } from '../../db/schema/sessions.ts';
 import type { ReferrersRepository } from '../referrers/referrers.repository.ts';
 import type { ReferrersService } from '../referrers/referrers.service.ts';
 import type { SessionsRepository } from '../sessions/sessions.repository.ts';
-import { deriveHousehold, hasSomeoneTwelveOrOver, type AgeBands } from './age-bands.ts';
 import {
   hasAnythingToMatchOn,
   matchKinds,
@@ -26,6 +26,7 @@ import {
   type MatchKind,
 } from './matching.ts';
 import type {
+  ReferralSearchCandidate,
   RepeatReferralCandidate,
   ReferralListFilter,
   ReferralsRepository,
@@ -35,7 +36,7 @@ import {
   type ListenerSheetHousehold,
   type RepeatReferralOutcome,
 } from './referrals.mapper.ts';
-import type { ReferralAmend, ReferralSubmission } from './referrals.schema.ts';
+import type { ReferralAmend, ReferralSearch, ReferralSubmission } from './referrals.schema.ts';
 
 export interface ReferralsServiceDeps {
   readonly db: Database;
@@ -71,6 +72,21 @@ export interface RepeatReferralSummary {
 
 export interface RepeatReferralList extends RepeatReferralSummary {
   readonly matches: readonly RepeatReferralMatch[];
+}
+
+/**
+ * The whole of `POST /referrals/search`'s answer.
+ *
+ * **No `matchedOn`, unlike the repeat-referral list.** The charity settled the
+ * result row as who and when — session date, status, name, the two identifiers
+ * the caller is holding, the reasons and the referrer — and dropped which of
+ * the caller's values was the one that hit. It is not the same question as the
+ * duplicate count's, where the whole point is why two referrals look alike, so
+ * there is nothing to keep in step here.
+ */
+export interface ReferralSearchResults {
+  readonly count: number;
+  readonly results: readonly ReferralSearchCandidate[];
 }
 
 export function createReferralsService(deps: ReferralsServiceDeps) {
@@ -189,10 +205,27 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
    * counting the rows returned would quietly report a household matched by a
    * whole hostel as having been referred fifty times. A list shorter than the
    * count is exactly how an administrator is told there are more.
+   *
+   * **`excludePostcode`** is the review screen's `Exclude postcode matches`
+   * checkbox (`INITIAL_SPEC1.txt`, `#Reviewing a referral`), implemented by
+   * nulling `postcodeNormalised` here rather than by branching any of the
+   * three queries below. That one line is enough: `repeatReferralPredicate`
+   * already skips a `null` field, `matchKinds` already cannot report evidence
+   * for a `null` field, and `hasAnythingToMatchOn` already returns false —
+   * correctly returning `{ count: 0, mostRecentSessionDate: null, matches: [] }`
+   * with no query — when date of birth and phone are both absent too.
+   * Branching the SQL instead would be a second place all of that could
+   * drift out of step.
    */
-  async function listRepeatReferralsFor(referralId: string): Promise<RepeatReferralList> {
+  async function listRepeatReferralsFor(
+    referralId: string,
+    excludePostcode: boolean,
+  ): Promise<RepeatReferralList> {
     const referral = await getReferral(referralId);
-    const fields = settledFieldsOf(referral);
+    const settled = settledFieldsOf(referral);
+    const fields: MatchableFields = excludePostcode
+      ? { ...settled, postcodeNormalised: null }
+      : settled;
 
     if (!hasAnythingToMatchOn(fields)) {
       return { count: 0, mostRecentSessionDate: null, matches: [] };
@@ -246,6 +279,93 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
       mostRecentSessionDate: summary.mostRecentSessionDate,
       matches,
     };
+  }
+
+  /**
+   * `POST /referrals/search`: an administrator looking a household up by
+   * postcode, phone number and/or date of birth when somebody rings in.
+   * `INITIAL_SPEC1.txt`, `#Searching for a referral`.
+   *
+   * **Settles the three inputs itself, the same way `submit` does**, rather
+   * than trusting a client to have done it: `normalisePostcode` /
+   * `normalisePhone` are the one place that rule is written, and a value the
+   * rule cannot make sense of settles to `null` and is simply not searched
+   * on — that is not an error, unlike a value that fails the schema's shape
+   * check. Date of birth needs no settling; see `matching.ts`.
+   *
+   * **If every supplied value settles to `null`, this returns
+   * `{ count: 0, results: [] }` without touching the database** — the same
+   * short-circuit `listRepeatReferralsFor` takes, via the same
+   * `hasAnythingToMatchOn`.
+   *
+   * No self-exclusion, no twelve-month cutoff and no status filter — see
+   * `referralSearchPredicate` in the repository for why this is not built by
+   * generalising the repeat-referral one. Two queries issued together, the
+   * same shape as `listRepeatReferralsFor`: an unbounded count and the rows
+   * capped at `REFERRAL_SEARCH_LIMIT`, ordered newest session first.
+   *
+   * **`surnamePrefix` goes to both queries or neither.** A count built from a
+   * different predicate than the rows is how "3 of 40" appears above three
+   * results that are the whole answer, so the two calls below take the same
+   * pair of arguments and the repository builds one predicate from them.
+   * Unlike the three identifiers it is not settled into a matching form: it is
+   * a prefix of what somebody typed, and lowering it is the repository's job
+   * because that is where the comparison happens.
+   */
+  async function searchReferrals(input: ReferralSearch): Promise<ReferralSearchResults> {
+    const fields: MatchableFields = {
+      dateOfBirth: input.dateOfBirth ?? null,
+      postcodeNormalised: input.postcode === undefined ? null : normalisePostcode(input.postcode),
+      phoneNormalised: input.phone === undefined ? null : normalisePhone(input.phone),
+    };
+    const surnamePrefix = input.surnamePrefix ?? null;
+
+    if (!hasAnythingToMatchOn(fields)) {
+      return { count: 0, results: [] };
+    }
+
+    const [total, results] = await Promise.all([
+      repository.countSearchResults(fields, surnamePrefix),
+      repository.searchReferrals(fields, surnamePrefix),
+    ]);
+
+    return { count: total, results };
+  }
+
+  /**
+   * The referral-details list for a session: everybody the team leader
+   * running it needs to be able to ring. `INITIAL_SPEC1.txt`,
+   * `#Reviewing a referral`, the team-leader paragraph.
+   *
+   * Same session-scoped shape as `listenerSheet` below, and the same
+   * `REFERRAL_STATUSES_HOLDING_A_PLACE` filter — rejected and cancelled
+   * referrals are not slipped back into view by this route either. Sorted by
+   * surname then first name, the same comparator, for the same reason: this
+   * is read by scanning for a name.
+   *
+   * **Unlike the listener sheet, a delivery is included.** The listener
+   * sheet drops deliveries because nobody walks in for one; this is a
+   * contact list for the session, and a delivery household is one the team
+   * needs to be able to ring. Do not "fix" this to match the listener
+   * sheet's filter — the two lists exist for different jobs.
+   */
+  async function referralDetails(
+    sessionId: string,
+  ): Promise<{ session: Session; referrals: Referral[] }> {
+    const session = await sessions.findById(sessionId);
+    if (session === undefined) {
+      throw new NotFoundError('Session not found');
+    }
+
+    const households = await repository.list({ sessionId });
+
+    const holdingAPlace = households
+      .filter((referral) =>
+        REFERRAL_STATUSES_HOLDING_A_PLACE.some((status) => status === referral.status),
+      )
+      .sort(bySurnameThenFirstName);
+
+    return { session, referrals: holdingAPlace };
   }
 
   /**
@@ -398,9 +518,6 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     const now = clock.nowIso();
     const referralId = crypto.randomUUID();
     const refereePhone = input.refereePhone ?? null;
-    // `adults` and `children` are derived here, once, rather than left for a
-    // reader downstream to recompute — see `deriveHousehold`.
-    const household = deriveHousehold(input);
 
     const referral: NewReferral = {
       id: referralId,
@@ -416,12 +533,8 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
       // submitted string never decides which organisation gets the credit.
       referrerOrganisation: input.referrerOrganisation,
       authorisedReferrerId: authorisation.matchedId,
-      infants: input.infants,
-      children4To11: input.children4To11,
-      teenagers12To17: input.teenagers12To17,
-      adults18Plus: input.adults18Plus,
-      adults: household.adults,
-      children: household.children,
+      adults: input.adults,
+      children: input.children,
       isDelivery: input.isDelivery ? 1 : 0,
       reasonId: input.reasonId,
       needsFuelHelp: input.needsFuelHelp ? 1 : 0,
@@ -663,6 +776,10 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
    * the authorisation decision was made on, and the rest is the record of who
    * sent the referral rather than a field to tidy up.
    *
+   * `adminInfo` — the administrators' own note about the household — is
+   * amended here too, and is the one field on this route that no referrer ever
+   * wrote. Sending a string sets it, `null` clears it, omitting it leaves it.
+   *
    * Only fields actually supplied are written, so a one-field correction stays
    * a one-field correction. `answers` is the exception and replaces the set
    * outright: the client holds the form, so a key it omits has been removed.
@@ -692,27 +809,6 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
       if (reason === undefined) {
         throw new UnprocessableError('That reason for referral is no longer offered');
       }
-    }
-
-    // Same pre-check pattern as `reasonId` above, and for the same reason: no
-    // partial write. A patch is partial, so whichever of the four bands were
-    // not supplied are filled in from the stored referral before the rule is
-    // checked against the household the write would actually leave behind.
-    const bandsSupplied =
-      input.infants !== undefined ||
-      input.children4To11 !== undefined ||
-      input.teenagers12To17 !== undefined ||
-      input.adults18Plus !== undefined;
-    const mergedBands: AgeBands | undefined = bandsSupplied
-      ? {
-          infants: input.infants ?? referral.infants,
-          children4To11: input.children4To11 ?? referral.children4To11,
-          teenagers12To17: input.teenagers12To17 ?? referral.teenagers12To17,
-          adults18Plus: input.adults18Plus ?? referral.adults18Plus,
-        }
-      : undefined;
-    if (mergedBands !== undefined && !hasSomeoneTwelveOrOver(mergedBands)) {
-      throw new UnprocessableError('A household must include at least one person aged 12 or over');
     }
 
     const patch: Patch<NewReferral> = { updatedAt: clock.nowIso() };
@@ -755,22 +851,9 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
         input.refereePhone === null ? null : normalisePhone(input.refereePhone);
     }
 
-    assign('infants', input.infants, 'infants');
-    assign('children4To11', input.children4To11, 'children4To11');
-    assign('teenagers12To17', input.teenagers12To17, 'teenagers12To17');
-    assign('adults18Plus', input.adults18Plus, 'adults18Plus');
+    assign('adults', input.adults, 'adults');
+    assign('children', input.children, 'children');
     assign('reasonId', input.reasonId, 'reasonId');
-
-    // `adults` and `children` are derived, not amended: set directly on the
-    // patch — never through `assign` — so they never appear in `changed`.
-    // Follows the same precedent as `refereePostcodeNormalised` above. The
-    // rule that forbids an under-12-only household is already checked, above,
-    // against this same `mergedBands`.
-    if (mergedBands !== undefined) {
-      const household = deriveHousehold(mergedBands);
-      patch.adults = household.adults;
-      patch.children = household.children;
-    }
 
     // Booleans are integers in SQLite, so they cannot go through `assign`.
     if (input.isDelivery !== undefined) {
@@ -789,29 +872,15 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
       changed.push('answers');
     }
 
-    // When a band was touched, the write is conditional on the bands still
-    // being the ones the rule above was checked against. D1 cannot hold the
-    // read, and the check spans two columns while a patch may carry one — so
-    // without the condition two administrators clearing different bands would
-    // each validate against the other's value and both write, leaving a
-    // household with nobody aged twelve or over. See `updateIfBandsUnchanged`.
-    const updated =
-      mergedBands === undefined
-        ? await repository.update(referral.id, patch)
-        : await repository.updateIfBandsUnchanged(referral.id, patch, {
-            infants: referral.infants,
-            children4To11: referral.children4To11,
-            teenagers12To17: referral.teenagers12To17,
-            adults18Plus: referral.adults18Plus,
-          });
+    // Through `assign`, so an omitted key leaves the note alone and an
+    // explicit `null` clears it — the same shape as `refereePhone`. It is not
+    // folded into `answers`: the answers are the referrer's and are replaced
+    // wholesale, and a note the office wrote must not be lost because the
+    // client re-sent a form page without it.
+    assign('adminInfo', input.adminInfo, 'adminInfo');
+
+    const updated = await repository.update(referral.id, patch);
     if (updated === undefined) {
-      // A referral is never deleted, so with a band in the patch the only way
-      // to match nothing is that somebody else changed the household first.
-      if (mergedBands !== undefined) {
-        throw new ConflictError(
-          'This household was changed while you were amending it. Read the referral again and reapply the change.',
-        );
-      }
       throw new NotFoundError('Referral not found');
     }
 
@@ -913,6 +982,7 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
   return {
     submit,
     listenerSheet,
+    referralDetails,
     getReferral,
     viewReferral,
     listReferrals,
@@ -923,6 +993,7 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     move,
     repeatReferralSummary,
     listRepeatReferralsFor,
+    searchReferrals,
   };
 }
 

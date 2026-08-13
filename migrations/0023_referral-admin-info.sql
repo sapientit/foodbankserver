@@ -1,0 +1,26 @@
+-- A referral gains the administrators' own note.
+--
+-- `admin_info` is free text an administrator writes about the household —
+-- separate from `answers_json`, which is what the referrer submitted, and
+-- separate from `review_comment`, which is why a referral was accepted or
+-- turned away.
+--
+-- ## Why this is a plain ADD COLUMN and must stay one
+--
+-- Nothing else about `referrals` changes, so SQLite adds the column in place
+-- and **every existing row keeps its data**. A rebuild here would be the
+-- dangerous kind: `referrals` is a foreign-key parent (`parcels`, `sms_messages`),
+-- which is the case `migrations/0008` had to park rows in a temporary table
+-- for. If drizzle-kit ever offers a rebuild for a change this small, read
+-- `docs/engineering/d1-constraints.md` before accepting it — "the table is
+-- empty" is true of a fresh database and of the test run, and of nothing else.
+--
+-- ## Nullable, like every personal-data column on this table
+--
+-- It is inside the PII block in `src/db/schema/referrals.ts` and is nulled by
+-- `purgeReferralPii` alongside the household's own fields and the dynamic
+-- answers: free text written *about* a household is that household's personal
+-- data whoever typed it. A `NOT NULL` here could never be purged, because
+-- SQLite has no `ALTER COLUMN`. Requiredness — there is none; the note is
+-- optional — lives in Zod.
+ALTER TABLE `referrals` ADD `admin_info` text;

@@ -16,6 +16,10 @@ import type { MatchKind } from './matching.ts';
  * administrator's note on why a referral was let through or turned away, and it
  * can name a referrer or record a suspicion.
  *
+ * **`adminInfo` is admin-only and narrower still** — it is only emitted when a
+ * caller asks for it, which is what keeps it off the referral list. See
+ * `ReferralResponseOptions`.
+ *
  * That rule is enforced here rather than by hoping each query forgets to
  * select the column, because adding a column to a table must never widen an
  * API response by accident.
@@ -26,13 +30,8 @@ export interface ReferralResponse {
   readonly sessionId: string;
   readonly status: string;
   readonly referredAt: string;
-  readonly infants: number;
-  readonly children4To11: number;
-  readonly teenagers12To17: number;
-  readonly adults18Plus: number;
   readonly adults: number;
   readonly children: number;
-  /** `adults + children`. Deliberately excludes `infants` — see `db/schema/referrals.ts`. */
   readonly householdSize: number;
   readonly isDelivery: boolean;
   readonly needsFuelHelp: boolean;
@@ -52,6 +51,15 @@ export interface ReferralResponse {
   readonly referrerPhone?: string | null | undefined;
   readonly reviewComment?: string | null | undefined;
   /**
+   * The administrators' own note about this household — free text, written by
+   * the office rather than by the referrer.
+   *
+   * **Admin-only, and only on a response carrying one referral.** It is absent
+   * rather than null for a team lead, and absent from the list for everybody:
+   * see `ReferralResponseOptions.includeAdminInfo`.
+   */
+  readonly adminInfo?: string | null | undefined;
+  /**
    * How many times this household has been referred in the last twelve
    * months, and the session date of the most recent of those. Admin-only,
    * like the four fields above, and only present when the caller supplies
@@ -61,20 +69,40 @@ export interface ReferralResponse {
   readonly repeatReferrals?: RepeatReferralSummaryResponse | undefined;
 }
 
+/**
+ * What a caller has to ask for on top of the fields every referral response
+ * carries. Both are admin-only whatever is passed here — this decides whether
+ * the field is offered at all, and `actor.role` decides whether it is given.
+ */
+export interface ReferralResponseOptions {
+  /**
+   * The repeat-referral count, when the caller has paid for the query.
+   * `GET /referrals/:id` fetches it for an administrator; nothing else does.
+   */
+  readonly repeatReferrals?: RepeatReferralSummaryResponse | undefined;
+  /**
+   * Emit `adminInfo`.
+   *
+   * **Opt-in, so that the referral list cannot acquire it by accident.** The
+   * charity asked for the note on the referral an administrator has open, not
+   * on every row of a list they are scanning — and a list is the response most
+   * likely to be widened later by somebody adding a column. Defaulting this on
+   * would put a note about every household on a screen nobody asked to see it
+   * on. `INITIAL_SPEC1.txt`, "Referral maintenance".
+   */
+  readonly includeAdminInfo?: boolean | undefined;
+}
+
 export function toReferralResponse(
   referral: Referral,
   actor: Actor,
-  repeatReferrals?: RepeatReferralSummaryResponse,
+  options: ReferralResponseOptions = {},
 ): ReferralResponse {
   const base: ReferralResponse = {
     id: referral.id,
     sessionId: referral.sessionId,
     status: referral.status,
     referredAt: referral.referredAt,
-    infants: referral.infants,
-    children4To11: referral.children4To11,
-    teenagers12To17: referral.teenagers12To17,
-    adults18Plus: referral.adults18Plus,
     adults: referral.adults,
     children: referral.children,
     householdSize: referral.adults + referral.children,
@@ -94,12 +122,18 @@ export function toReferralResponse(
 
   if (actor.role !== 'admin') return base;
 
+  const { repeatReferrals, includeAdminInfo } = options;
+
   return {
     ...base,
     reasonId: referral.reasonId,
     referrerEmail: referral.referrerEmail,
     referrerPhone: referral.referrerPhone,
     reviewComment: referral.reviewComment,
+    // Spread rather than assigned, so an unasked-for field is absent rather
+    // than null — a client cannot tell "you may not see this" from "there is
+    // no note" if both arrive as null.
+    ...(includeAdminInfo === true ? { adminInfo: referral.adminInfo } : {}),
     ...(repeatReferrals === undefined ? {} : { repeatReferrals }),
   };
 }
@@ -121,10 +155,6 @@ export interface ReferralReceiptResponse {
   readonly id: string;
   readonly sessionId: string;
   readonly status: string;
-  readonly infants: number;
-  readonly children4To11: number;
-  readonly teenagers12To17: number;
-  readonly adults18Plus: number;
   readonly adults: number;
   readonly children: number;
   readonly isDelivery: boolean;
@@ -141,10 +171,6 @@ export function toReceiptResponse(referral: Referral): ReferralReceiptResponse {
     id: referral.id,
     sessionId: referral.sessionId,
     status: referral.status,
-    infants: referral.infants,
-    children4To11: referral.children4To11,
-    teenagers12To17: referral.teenagers12To17,
-    adults18Plus: referral.adults18Plus,
     adults: referral.adults,
     children: referral.children,
     isDelivery: referral.isDelivery === 1,
@@ -321,5 +347,160 @@ export function toRepeatReferralListResponse(list: {
     count: list.count,
     mostRecentSessionDate: list.mostRecentSessionDate,
     matches: list.matches.map(toRepeatReferralMatch),
+  };
+}
+
+/**
+ * One `POST /referrals/search` result — `INITIAL_SPEC1.txt`,
+ * `#Searching for a referral`: the administrator's working row, so that the
+ * person on the phone can be answered without opening anything.
+ *
+ * **The postcode and the phone number are returned; the date of birth and the
+ * address are not.** That is not an inconsistency. The first two are what the
+ * caller is reading out to identify themselves and what the administrator has
+ * to read back to be sure they have the right household. The address is the
+ * one that turns a postcode search in a hostel or a refuge into a screen of
+ * other people's front doors, and the date of birth is never needed to
+ * recognise a row — it is only ever an input here.
+ *
+ * **`answers` is handed over whole, exactly as the listener sheet and a parcel
+ * hand it over.** The secondary cause of crisis and the additional crisis
+ * detail the administrator needs on this screen live in there, under keys the
+ * referral form owns. The server holds no form definition, so it does not know
+ * which keys those are and **must not guess** — extracting two of them by name
+ * here would put the server in the business of knowing the form, which is the
+ * one thing this design has consistently refused. The whole blob belongs to the
+ * client; the client reads what it needs out of it.
+ *
+ * **Still no review comment, referrer email or referrer phone**, and no date of
+ * birth or address. `reasonId` is resolved by the client against the admin
+ * referral-reasons lookup.
+ */
+export interface ReferralSearchResult {
+  readonly referralId: string;
+  /** `YYYY-MM-DD`, London — the referral's own session. */
+  readonly sessionDate: string;
+  readonly status: string;
+  readonly refereeFirstName: string | null;
+  readonly refereeSurname: string | null;
+  readonly refereePostcode: string | null;
+  readonly refereePhone: string | null;
+  readonly reasonId: string;
+  readonly referrerName: string | null;
+  readonly answers: Record<string, unknown>;
+}
+
+/**
+ * The mapper's own input shape, deliberately declared here rather than
+ * imported from the service — the same pattern as `RepeatReferralMatchInput`
+ * above. It is what stops a column added to the repository's candidate row
+ * from reaching a client just because somebody selected it.
+ */
+interface ReferralSearchMatchInput {
+  readonly id: string;
+  readonly refereeFirstName: string | null;
+  readonly refereeSurname: string | null;
+  readonly refereePostcode: string | null;
+  readonly refereePhone: string | null;
+  readonly sessionDate: string;
+  readonly status: string;
+  readonly reasonId: string;
+  readonly referrerName: string | null;
+  readonly answersJson: string | null;
+}
+
+export function toReferralSearchResult(match: ReferralSearchMatchInput): ReferralSearchResult {
+  return {
+    referralId: match.id,
+    sessionDate: match.sessionDate,
+    status: match.status,
+    refereeFirstName: match.refereeFirstName,
+    refereeSurname: match.refereeSurname,
+    refereePostcode: match.refereePostcode,
+    refereePhone: match.refereePhone,
+    reasonId: match.reasonId,
+    referrerName: match.referrerName,
+    answers: parseAnswers(match.answersJson),
+  };
+}
+
+/** The `POST /referrals/search` body in full. */
+export interface ReferralSearchResponse {
+  readonly count: number;
+  readonly results: readonly ReferralSearchResult[];
+}
+
+export function toReferralSearchResponse(result: {
+  readonly count: number;
+  readonly results: readonly ReferralSearchMatchInput[];
+}): ReferralSearchResponse {
+  return {
+    count: result.count,
+    results: result.results.map(toReferralSearchResult),
+  };
+}
+
+/**
+ * One household on `GET /sessions/{sessionId}/referral-details` —
+ * `INITIAL_SPEC1.txt`, `#Reviewing a referral`, the team-leader paragraph:
+ * "the client name, address, postcode and phone number, and the referrer's
+ * name and phone number. It does not carry the reason for referral, date of
+ * birth, answers, review comment or parcel contents."
+ *
+ * This is a wider read than the listener sheet — it hands a team leader a
+ * household's address and phone number, which the listener sheet deliberately
+ * withholds — and it is deliberately narrower than `ReferralResponse`: no
+ * reason, no date of birth, no answers, no review comment, no referrer email
+ * or organisation. It exists so the team can ring a household, not so they
+ * can read the referral.
+ */
+export interface ReferralDetailsHousehold {
+  readonly referralId: string;
+  readonly refereeFirstName: string | null;
+  readonly refereeSurname: string | null;
+  readonly refereeAddress: string | null;
+  readonly refereePostcode: string | null;
+  readonly refereePhone: string | null;
+  readonly referrerName: string | null;
+  readonly referrerPhone: string | null;
+}
+
+export function toReferralDetailsHousehold(referral: Referral): ReferralDetailsHousehold {
+  return {
+    referralId: referral.id,
+    refereeFirstName: referral.refereeFirstName,
+    refereeSurname: referral.refereeSurname,
+    refereeAddress: referral.refereeAddress,
+    refereePostcode: referral.refereePostcode,
+    refereePhone: referral.refereePhone,
+    referrerName: referral.referrerName,
+    referrerPhone: referral.referrerPhone,
+  };
+}
+
+/** The `GET /sessions/{sessionId}/referral-details` body in full. */
+export interface ReferralDetailsResponse {
+  readonly sessionId: string;
+  readonly sessionDate: string;
+  readonly startTime: string;
+  readonly location: string;
+  readonly referrals: readonly ReferralDetailsHousehold[];
+}
+
+export function toReferralDetailsResponse(
+  session: {
+    readonly id: string;
+    readonly sessionDate: string;
+    readonly startTime: string;
+    readonly location: string;
+  },
+  referrals: readonly Referral[],
+): ReferralDetailsResponse {
+  return {
+    sessionId: session.id,
+    sessionDate: session.sessionDate,
+    startTime: session.startTime,
+    location: session.location,
+    referrals: referrals.map(toReferralDetailsHousehold),
   };
 }

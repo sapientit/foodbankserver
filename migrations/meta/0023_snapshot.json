@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "c3ae552b-7d96-4c72-9024-e948ef00f0f5",
+  "id": "6fae2b3c-6126-4f68-bd2e-bdbe54fa405d",
   "prevId": "ae32cb45-482a-4a1d-97cb-b8ed7e8bb5a1",
   "tables": {
     "system_jobs": {
@@ -625,38 +625,6 @@
           "notNull": false,
           "autoincrement": false
         },
-        "infants": {
-          "name": "infants",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": 0
-        },
-        "children_4_to_11": {
-          "name": "children_4_to_11",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": 0
-        },
-        "teenagers_12_to_17": {
-          "name": "teenagers_12_to_17",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": 0
-        },
-        "adults_18_plus": {
-          "name": "adults_18_plus",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": 0
-        },
         "adults": {
           "name": "adults",
           "type": "integer",
@@ -773,6 +741,13 @@
         },
         "answers_json": {
           "name": "answers_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "admin_info": {
+          "name": "admin_info",
           "type": "text",
           "primaryKey": false,
           "notNull": false,

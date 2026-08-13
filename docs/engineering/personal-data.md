@@ -49,6 +49,10 @@ What bounds it on this side: the extract is **admin-only**, it is **started deli
 rather than by a timer, and every row passes through `toExtractRow()` — an allowlist, so a column
 added to `referrals` cannot silently widen what leaves.
 
+`adminInfo` is the worked example of that allowlist doing its job: it is free text about a
+household, it is purged at twelve months, and it is **not** an extract column. A field the purge
+clears must not be written somewhere the purge cannot reach.
+
 ### `sms_messages` is the other table holding personal data
 
 Everything in this document was written about `referrals`. Since text reminders
@@ -105,18 +109,10 @@ is the row itself. See [`d1-constraints.md`](./d1-constraints.md).
 
 ## What survives a purge, and why
 
-`purgeReferralPii` nulls the identifying columns and keeps the four age bands (`infants`,
-`children4To11`, `teenagers12To17`, `adults18Plus`), the derived `adults` and `children`,
-`isDelivery` and `reasonId`, which sit outside the PII block. Once the identifying columns are null
-the referee is no longer identifiable, so those become statistics — which is how "we fed 340
-households, 890 people, 22% for benefit delay" survives a purge.
-
-The charity settled the age bands on the same terms (`INITIAL_SPEC1.txt`, `#Forgetting a referral`):
-a household's shape is not a household's identity once nobody can be named. Note the bands are
-slightly more informative than the pair they sit beside — "one infant, one adult" narrows a
-household further than "two people" does — which is why **whether they should also reach the
-spreadsheet extract is a separate, open question (Q30)** rather than something the extract picked up
-automatically. `toExtractRow` does not carry them.
+`purgeReferralPii` nulls the identifying columns and keeps `adults`, `children`, `isDelivery` and
+`reasonId`, which sit outside the PII block. Once the identifying columns are null the referee is no
+longer identifiable, so those become statistics — which is how "we fed 340 households, 890 people,
+22% for benefit delay" survives a purge.
 
 **That only works because the reason for referral is chosen from a maintained list rather than
 typed.** Free text would have to go with the rest.

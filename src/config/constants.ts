@@ -66,6 +66,20 @@ export const MAX_ANSWER_KEY_LENGTH = 60;
 export const MAX_ANSWERS_BYTES = 16 * 1024;
 
 /**
+ * How long the administrators' own note on a referral may be.
+ *
+ * Two thousand characters — a couple of paragraphs, which is what a note
+ * about a household turns out to be, and far short of a document somebody
+ * would paste in. It is generous next to `reviewComment`'s 200 because that is
+ * one line about one decision, while this accumulates what the office knows.
+ *
+ * **The same number is written into `openapi.yaml` as `maxLength`**, so the
+ * client refuses an over-long note before it is sent rather than showing an
+ * administrator a `400` after they typed it. Change one and change the other.
+ */
+export const MAX_ADMIN_INFO_LENGTH = 2000;
+
+/**
  * How long a text message is kept before the nightly job deletes it.
  *
  * **Policy, not configuration** — unlike `PII_RETENTION_DAYS`, which is unset
@@ -132,6 +146,22 @@ export const REPEAT_REFERRAL_LOOKBACK_DAYS = 365;
  * so the two must not be made to agree by counting the truncated list.
  */
 export const REPEAT_REFERRAL_LIST_LIMIT = 50;
+
+/**
+ * How many rows `POST /referrals/search` returns.
+ *
+ * Fifty, the fifty most recent by session date — the same number as
+ * `REPEAT_REFERRAL_LIST_LIMIT` and a **separate constant on purpose**: the two
+ * answer different questions (one household's duplicates, versus every
+ * referral matching a postcode, phone number or date of birth an
+ * administrator typed in), and there is no reason the two ceilings should
+ * have to move together just because they happen to agree today.
+ *
+ * **The count is deliberately not capped.** A list of fifty against a count
+ * of two hundred is how the administrator is told fifty is not all of them —
+ * `INITIAL_SPEC1.txt`, "Searching for a referral".
+ */
+export const REFERRAL_SEARCH_LIMIT = 50;
 
 /**
  * How long a session stays reserved to one administrator's browser.

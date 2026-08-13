@@ -10,10 +10,10 @@ import {
   ne,
   notInArray,
   or,
+  sql,
   type SQL,
 } from 'drizzle-orm';
-import { REPEAT_REFERRAL_LIST_LIMIT } from '../../config/constants.ts';
-import type { AgeBands } from './age-bands.ts';
+import { REFERRAL_SEARCH_LIMIT, REPEAT_REFERRAL_LIST_LIMIT } from '../../config/constants.ts';
 import type { Database } from '../../db/client.ts';
 import { expectAtMostOne } from '../../db/expect.ts';
 import { parcels, type AttendanceStatus } from '../../db/schema/pick-lists.ts';
@@ -119,6 +119,125 @@ function repeatReferralPredicate(
   );
 }
 
+/**
+ * One candidate row for `POST /referrals/search` — the administrator's
+ * working row, and nothing beyond it.
+ *
+ * **It selects no date of birth, address or normalised column.** Those were
+ * here to compute `matchedOn`, which the charity dropped from the result: a
+ * row now says who and when, not which of the caller's three values happened
+ * to be the one that hit. Not selecting them at all is a stronger guarantee
+ * than mapping them away afterwards, and `referrals.mapper.ts` is still the
+ * allowlist that decides what leaves.
+ */
+export interface ReferralSearchCandidate {
+  readonly id: string;
+  readonly refereeFirstName: string | null;
+  readonly refereeSurname: string | null;
+  readonly refereePostcode: string | null;
+  readonly refereePhone: string | null;
+  readonly sessionDate: string;
+  readonly status: ReferralStatus;
+  /** `NOT NULL` on the table, and outside the PII block, so a purge leaves it. */
+  readonly reasonId: string;
+  readonly referrerName: string | null;
+  /**
+   * The dynamic answers blob, unparsed. The mapper turns it into an object;
+   * the server never looks inside it. See `toReferralSearchResult`.
+   */
+  readonly answersJson: string | null;
+}
+
+/**
+ * The predicate for `POST /referrals/search`.
+ *
+ * **Deliberately not built by generalising `repeatReferralPredicate`.** That
+ * one carries three conditions this search must not: it excludes the
+ * referral under review, it stops at twelve months, and it drops cancelled
+ * and rejected referrals. A search reaches every referral the food bank
+ * still holds details for, whatever became of it —
+ * `INITIAL_SPEC1.txt`, `#Searching for a referral` — because "we turned that
+ * one away in March" is exactly what the person on the phone is ringing
+ * about. Threading a flag through one shared function to turn three
+ * conditions on and off would risk the flag being wrong in the one place —
+ * cancelled and rejected referrals leaking into the twelve-month duplicate
+ * list — that actually matters.
+ *
+ * Purged referrals cannot match: the purge nulls `refereeDateOfBirth`,
+ * `refereePostcodeNormalised` and `refereePhoneNormalised`, and SQL's `eq`
+ * never matches `NULL`. No `piiPurgedAt` filter here for the same reason
+ * there is none on the predicate above — it would only be a second, weaker
+ * statement of a rule the nulled columns already enforce.
+ *
+ * Same "the throw is not decoration" reasoning as `repeatReferralPredicate`:
+ * callers guard `hasAnythingToMatchOn` first, so `matchers` is never empty in
+ * practice, but an empty `or(...)` returns `undefined` and a `WHERE undefined`
+ * would return every referral the food bank has ever held.
+ *
+ * **`surnamePrefix` narrows, and is `AND`ed around the whole `or(...)`.** The
+ * bracketing is the entire point: `A OR B AND C` binds as `A OR (B AND C)` in
+ * SQL, so a filter written flat alongside the identifiers would leave the
+ * date-of-birth arm unfiltered and quietly return the households the
+ * administrator asked to exclude. It is applied to the count and to the capped
+ * rows through this one function, so the two cannot drift apart.
+ */
+function referralSearchPredicate(
+  fields: MatchableFields,
+  surnamePrefix: string | null,
+): SQL | undefined {
+  const matchers: SQL[] = [];
+  if (fields.dateOfBirth !== null) {
+    matchers.push(eq(referrals.refereeDateOfBirth, fields.dateOfBirth));
+  }
+  if (fields.postcodeNormalised !== null) {
+    matchers.push(eq(referrals.refereePostcodeNormalised, fields.postcodeNormalised));
+  }
+  if (fields.phoneNormalised !== null) {
+    matchers.push(eq(referrals.refereePhoneNormalised, fields.phoneNormalised));
+  }
+
+  if (matchers.length === 0) {
+    throw new Error('Referral search predicate built with nothing to match on');
+  }
+
+  const identifiers = or(...matchers);
+  return surnamePrefix === null ? identifiers : and(identifiers, surnameStartsWith(surnamePrefix));
+}
+
+/**
+ * Case-insensitive start-of-surname: the surname cut to the prefix's length,
+ * compared for equality.
+ *
+ * **Deliberately not `LIKE 'prefix%'`, which is what this was first written
+ * as and which was a `500` waiting for production.** SQLite refuses a `LIKE`
+ * pattern over fifty characters with `LIKE or GLOB pattern too complex`, and
+ * the schema allows a hundred — twice that once `%` and `_` are escaped. Worse,
+ * **SQLite only evaluates the pattern once there is a row to evaluate it
+ * against**, so it passed every test against a database that had not been
+ * seeded yet. That is the identical trap migration `0019` fell into; see
+ * `docs/engineering/d1-constraints.md`. Comparing a substring has no pattern
+ * and therefore no ceiling, and it needs no metacharacter escaping at all —
+ * a `%` is just a character that no surname starts with.
+ *
+ * A `NULL` surname still drops out: `substr(NULL, …)` is `NULL` and `NULL = x`
+ * is never true. A prefix longer than the surname cuts to the whole surname,
+ * which cannot equal the longer prefix, so it correctly finds nothing.
+ *
+ * **The case-folding is ASCII-only, and that is a real limit, not an
+ * oversight.** SQLite's `lower()` folds ASCII and leaves everything else
+ * alone, so a household stored as `Ünsal` is not found by `ünsal`. Fixing it
+ * properly means a `referee_surname_normalised` column lowered in TypeScript,
+ * where `toLowerCase()` is Unicode-aware — the same shape as
+ * `refereePostcodeNormalised` — which is a migration and a backfill, not
+ * something to fake here. Until the charity says it matters, an accented
+ * surname is matched case-sensitively and the three identifiers still find the
+ * household.
+ */
+function surnameStartsWith(prefix: string): SQL {
+  const lowered = prefix.toLowerCase();
+  return sql`lower(substr(${referrals.refereeSurname}, 1, length(${lowered}))) = ${lowered}`;
+}
+
 export function createReferralsRepository(db: Database) {
   return {
     async findById(id: string): Promise<Referral | undefined> {
@@ -201,50 +320,6 @@ export function createReferralsRepository(db: Database) {
         .update(referrals)
         .set(patch)
         .where(and(eq(referrals.id, id), eq(referrals.status, from)))
-        .returning();
-      return expectAtMostOne(rows);
-    },
-
-    /**
-     * Amends a referral, but **only** while its four age bands are still the
-     * ones the caller validated against.
-     *
-     * The condition travels with the write for the same reason it does in
-     * `updateIfStatus`, and the failure it prevents is subtler. A patch may
-     * carry one band; the rule that a household must include somebody aged
-     * twelve or over is about two of them; and `adults` is derived from both.
-     * So the service has to merge the patch with the stored row before it can
-     * decide anything — and on D1 that read cannot be held. Two administrators
-     * amending the same household, one clearing `teenagers12To17` and the other
-     * clearing `adults18Plus`, would each merge against a row that still had
-     * the other's value, each see a household with somebody twelve or over,
-     * and both write. The row left behind has neither, and an `adults` count
-     * derived from a household that never existed.
-     *
-     * Comparing the bands rather than a version column keeps the guard on
-     * exactly what the derivation reads: an amendment that touches only an
-     * address never contends with one that touches only a band.
-     *
-     * Returns `undefined` when nothing matched, which the service reads as
-     * "the household changed underneath this amendment".
-     */
-    async updateIfBandsUnchanged(
-      id: string,
-      patch: Patch<NewReferral>,
-      expected: AgeBands,
-    ): Promise<Referral | undefined> {
-      const rows = await db
-        .update(referrals)
-        .set(patch)
-        .where(
-          and(
-            eq(referrals.id, id),
-            eq(referrals.infants, expected.infants),
-            eq(referrals.children4To11, expected.children4To11),
-            eq(referrals.teenagers12To17, expected.teenagers12To17),
-            eq(referrals.adults18Plus, expected.adults18Plus),
-          ),
-        )
         .returning();
       return expectAtMostOne(rows);
     },
@@ -361,6 +436,58 @@ export function createReferralsRepository(db: Database) {
         .from(parcels)
         .innerJoin(referrals, eq(referrals.id, parcels.referralId))
         .where(repeatReferralPredicate(fields, selfId, cutoff));
+    },
+
+    /**
+     * `POST /referrals/search`'s count, unbounded — see `searchReferrals`
+     * below for why it must not be capped.
+     */
+    async countSearchResults(
+      fields: MatchableFields,
+      surnamePrefix: string | null,
+    ): Promise<number> {
+      const rows = await db
+        .select({ total: count() })
+        .from(referrals)
+        .where(referralSearchPredicate(fields, surnamePrefix));
+      return expectAtMostOne(rows)?.total ?? 0;
+    },
+
+    /**
+     * `POST /referrals/search`'s rows, newest session first and **capped at
+     * `REFERRAL_SEARCH_LIMIT`** — the same shape as
+     * `listRepeatReferrals`/`countRepeatReferrals` above: the count comes
+     * from `countSearchResults`, is not capped, and a list shorter than the
+     * count is how an administrator is told a postcode belongs to a hostel.
+     */
+    async searchReferrals(
+      fields: MatchableFields,
+      surnamePrefix: string | null,
+    ): Promise<ReferralSearchCandidate[]> {
+      return (
+        db
+          .select({
+            id: referrals.id,
+            refereeFirstName: referrals.refereeFirstName,
+            refereeSurname: referrals.refereeSurname,
+            refereePostcode: referrals.refereePostcode,
+            refereePhone: referrals.refereePhone,
+            sessionDate: sessions.sessionDate,
+            status: referrals.status,
+            reasonId: referrals.reasonId,
+            referrerName: referrals.referrerName,
+            answersJson: referrals.answersJson,
+          })
+          .from(referrals)
+          .innerJoin(sessions, eq(sessions.id, referrals.sessionId))
+          .where(referralSearchPredicate(fields, surnamePrefix))
+          // `id` breaks the tie so the fifty are the same fifty every time. A
+          // hostel postcode is exactly where the cap bites and exactly where
+          // dozens of referrals share one session date, so without it "50 of
+          // 200" could be a different fifty on each identical request.
+          .orderBy(desc(sessions.sessionDate), asc(referrals.id))
+          .limit(REFERRAL_SEARCH_LIMIT)
+      );
     },
 
     // ---- Statement builders. Compose these, then run ONE db.batch(). ----

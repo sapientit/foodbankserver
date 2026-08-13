@@ -162,6 +162,11 @@ re-timed or cancelled occurrence safe by construction.
 **Only `admin` ever receives the reason for referral**, and only `admin` receives `reviewComment`.
 Enforce both in the response mapper, not by hoping a query forgets to select them.
 
+**`adminInfo` — the administrators' own note about a household — is admin-only and single-referral
+only.** The mapper emits it when the route asks for it, so `GET /referrals` never carries it and
+`GET /referrals/{id}` does. Opt-in rather than opt-out because the list is the response somebody
+widens by accident.
+
 **A team lead sees `pending_review` referrals but never `rejected` ones** — absent from the list, and
 `404` rather than `403` by id, because a team lead has no business learning that one exists.
 
@@ -169,9 +174,10 @@ Enforce both in the response mapper, not by hoping a query forgets to select the
 they sent and phone the food bank. `referral_edit_keys` and the `x-referral-key` header were removed
 in migration `0012`.
 
-**Only the referee's own fields are purged.** The referrer's name, email and phone survive, as does
-`reviewComment` — the retention period is about forgetting the household, not the professional who
-referred them.
+**Only the referee's own fields are purged**, plus `adminInfo`. The referrer's name, email and phone
+survive, as does `reviewComment` — the retention period is about forgetting the household, not the
+professional who referred them. `adminInfo` is the one field an administrator wrote that goes: it is
+free text about the household, and who typed it does not decide whose data it is.
 
 ## Three session windows, and they are not the same number
 
@@ -195,13 +201,6 @@ what they are shown rather than what they may open.
 Contents are a lookup, not a calculation: named **model parcels** and a **30-cell grid** of every
 household size (1–5 adults × 0–5 children), each cell holding the _name_ of a model parcel. Bigger
 households clamp into the corner.
-
-**"Adults" and "children" here are derived, not submitted.** The referral collects four age bands;
-`children` is the 4–11 count and `adults` is the 12–17 count plus the 18+ count. **Infants (0–3) are
-not in either**, so a household of one adult and two babies is fed from the same cell as an adult
-living alone — what a baby needs reaches the parcel through the household's preferences, not through
-a larger box. The derivation lives in one place, `modules/referrals/age-bands.ts`, and is applied on
-write; nothing downstream of `referrals.adults` / `.children` knows the bands exist.
 
 **Model parcels and the grid are not versioned, and must not become so.** When a pick list is
 generated the contents are **copied** into `parcel_lines`. That copy is the entire immutability

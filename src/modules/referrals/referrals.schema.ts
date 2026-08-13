@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { MAX_ANSWERS, MAX_ANSWERS_BYTES, MAX_ANSWER_KEY_LENGTH } from '../../config/constants.ts';
+import {
+  MAX_ADMIN_INFO_LENGTH,
+  MAX_ANSWERS,
+  MAX_ANSWERS_BYTES,
+  MAX_ANSWER_KEY_LENGTH,
+} from '../../config/constants.ts';
 import { REFERRAL_STATUSES } from '../../db/schema/referrals.ts';
 import { isPlainDate } from '../../core/time/plain-date.ts';
 
@@ -37,65 +42,62 @@ const answers = z
     'the answers are too large to store',
   );
 
-export const referralSubmissionSchema = z
-  .object({
-    sessionId: z.uuid(),
-    reasonId: z.uuid(),
+export const referralSubmissionSchema = z.object({
+  sessionId: z.uuid(),
+  reasonId: z.uuid(),
 
-    referrerName: fullName,
-    referrerEmail: z.email().max(254),
-    /**
-     * Supplied rather than derived.
-     *
-     * An unrecognised referrer has no authorised-referrer row to derive an
-     * organisation from, which is why the form asks — the dropdown for one on the
-     * list, the free-text box for one that is not. The server still writes
-     * `authorisedReferrerId` from its own match, so this string never decides
-     * which organisation a referral is credited to.
-     */
-    referrerOrganisation: organisation,
-    referrerPhone: phone.optional(),
+  referrerName: fullName,
+  referrerEmail: z.email().max(254),
+  /**
+   * Supplied rather than derived.
+   *
+   * An unrecognised referrer has no authorised-referrer row to derive an
+   * organisation from, which is why the form asks — the dropdown for one on the
+   * list, the free-text box for one that is not. The server still writes
+   * `authorisedReferrerId` from its own match, so this string never decides
+   * which organisation a referral is credited to.
+   */
+  referrerOrganisation: organisation,
+  referrerPhone: phone.optional(),
 
-    refereeFirstName: personName,
-    refereeSurname: personName,
-    /** A date, not an age: an age is wrong a year after it is recorded. */
-    refereeDateOfBirth: dateOfBirth,
-    refereeAddress: address,
-    refereePostcode: postcode,
-    refereePhone: phone.optional(),
+  refereeFirstName: personName,
+  refereeSurname: personName,
+  /** A date, not an age: an age is wrong a year after it is recorded. */
+  refereeDateOfBirth: dateOfBirth,
+  refereeAddress: address,
+  refereePostcode: postcode,
+  refereePhone: phone.optional(),
 
-    /**
-     * The household as four age bands, not the two operational counts they
-     * derive into — see `deriveHousehold` in `age-bands.ts`. All four are
-     * required: there is no band a form can leave unanswered, only one that is
-     * zero.
-     */
-    infants: z.number().int().min(0).max(30),
-    children4To11: z.number().int().min(0).max(30),
-    teenagers12To17: z.number().int().min(0).max(30),
-    adults18Plus: z.number().int().min(0).max(30),
+  /**
+   * The household as two counts, and the server has no opinion about how the
+   * client arrived at them. Whatever the form asks — age bands or anything
+   * else — is the client's form definition to hold and the client's rules to
+   * apply; what reaches here is the operational pair everything downstream
+   * speaks: the 5x6 grid, the parcel snapshot, `familySize`.
+   *
+   * At least one adult: the household grid starts at one adult, so a
+   * childless-of-adults referral would have no model parcel to map to.
+   */
+  adults: z.number().int().min(1).max(30),
+  children: z.number().int().min(0).max(30),
 
-    /** A delivery goes to `refereeAddress`; there is no second address. */
-    isDelivery: z.boolean().default(false),
+  /** A delivery goes to `refereeAddress`; there is no second address. */
+  isDelivery: z.boolean().default(false),
 
-    /**
-     * A column rather than an answer because the charity reports on it. The two
-     * questions that follow from it stay in `answers`.
-     */
-    needsFuelHelp: z.boolean().default(false),
+  /**
+   * A column rather than an answer because the charity reports on it. The two
+   * questions that follow from it stay in `answers`.
+   */
+  needsFuelHelp: z.boolean().default(false),
 
-    answers: answers.default({}),
-  })
-  .refine(
-    (value) => value.teenagers12To17 + value.adults18Plus >= 1,
-    'a household must include at least one person aged 12 or over',
-  );
+  answers: answers.default({}),
+});
 
 export type ReferralSubmission = z.infer<typeof referralSubmissionSchema>;
 
 /**
  * What an administrator may change after the fact: **the household's own
- * details, and the answers.**
+ * details, the answers, and the administrators' own note.**
  *
  * There is no self-service equivalent: a referrer confirms what they sent and
  * phones the food bank if it needs changing, and an administrator makes the
@@ -124,23 +126,29 @@ export const referralAmendSchema = z.object({
   refereePostcode: postcode.optional(),
   /** Nullable: a household may lose a number as well as gain one. */
   refereePhone: phone.nullable().optional(),
-  /**
-   * The same four bands as submission, all optional: an amendment is a
-   * partial patch and only what is sent is written. "At least one adult" is
-   * now a rule about age — at least one person aged 12 or over — and cannot
-   * be checked here: a patch that only lowers `adults18Plus` cannot see the
-   * stored `teenagers12To17` it would leave the household with. The service
-   * checks the *merged* result before writing; see `applyAmendment`.
-   */
-  infants: z.number().int().min(0).max(30).optional(),
-  children4To11: z.number().int().min(0).max(30).optional(),
-  teenagers12To17: z.number().int().min(0).max(30).optional(),
-  adults18Plus: z.number().int().min(0).max(30).optional(),
+  adults: z.number().int().min(1).max(30).optional(),
+  children: z.number().int().min(0).max(30).optional(),
   isDelivery: z.boolean().optional(),
   needsFuelHelp: z.boolean().optional(),
   reasonId: z.uuid().optional(),
   /** Replaces the stored set outright; it is not merged into it. */
   answers: answers.optional(),
+  /**
+   * The administrators' own note about the household.
+   *
+   * Nullable for the same reason `refereePhone` is: `null` is a real value
+   * meaning "there is no note now", and omitting the key leaves whatever is
+   * there alone. **An empty string is a `400`, not a clearance** — the repo
+   * refuses empty text everywhere (`cancelReferralSchema`,
+   * `rejectReferralSchema`), and quietly turning `''` into `null` would make
+   * one of the two ways of clearing a note invisible in the contract.
+   *
+   * Not part of `answers`. The answers are what the referrer submitted and the
+   * client replaces them wholesale from the form it owns; this is what the
+   * office wrote, and the server holds it as its own field so that a form the
+   * client reshapes cannot take it with it.
+   */
+  adminInfo: z.string().trim().min(1).max(MAX_ADMIN_INFO_LENGTH).nullable().optional(),
 });
 
 export type ReferralAmend = z.infer<typeof referralAmendSchema>;
@@ -204,3 +212,55 @@ export const referralListQuerySchema = z.object({
   sessionId: z.uuid().optional(),
   status: z.enum(REFERRAL_STATUSES).optional(),
 });
+
+/**
+ * `GET /referrals/{id}/repeat-referrals`'s one query parameter.
+ *
+ * **Not `z.coerce.boolean()`.** Coercion turns any non-empty string —
+ * including the string `"false"` — into `true`, which would make
+ * `?excludePostcode=false` do the opposite of what it says. Parsed as one of
+ * two literal strings instead, so anything else is a validation error rather
+ * than a silent `true`.
+ */
+export const repeatReferralsQuerySchema = z.object({
+  excludePostcode: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((value) => value === 'true'),
+});
+
+/**
+ * `POST /referrals/search` — an administrator looking a household up when
+ * somebody rings in. `INITIAL_SPEC1.txt`, `#Searching for a referral`: any
+ * one of the three, or more than one, and at least one is required — a
+ * search matching on nothing would return every referral the food bank has
+ * ever held.
+ *
+ * The three primitives are the same `postcode`, `phone` and `dateOfBirth`
+ * used on submission and amendment: there is no second definition of what a
+ * postcode or a phone number looks like. A value that does not look like one
+ * of those is a `400` here, same as on submission — this is a shape check,
+ * not the settling into matching form, which happens once in the service via
+ * `normalisePostcode` / `normalisePhone` and never here.
+ *
+ * **`surnamePrefix` is a filter, not a fourth identifier.** It narrows what
+ * the three found and cannot be searched on alone, so the refusal below counts
+ * only the three — a body carrying nothing but a surname is a `400`. The spec
+ * is explicit about why: a surname on its own would return every household of
+ * that name the food bank has ever fed, which is the thing this endpoint
+ * exists not to do.
+ */
+export const referralSearchSchema = z
+  .object({
+    postcode: postcode.optional(),
+    phone: phone.optional(),
+    dateOfBirth: dateOfBirth.optional(),
+    surnamePrefix: personName.optional(),
+  })
+  .refine(
+    (value) =>
+      value.postcode !== undefined || value.phone !== undefined || value.dateOfBirth !== undefined,
+    'supply a postcode, a phone number or a date of birth',
+  );
+
+export type ReferralSearch = z.infer<typeof referralSearchSchema>;

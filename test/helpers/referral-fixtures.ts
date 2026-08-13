@@ -55,44 +55,6 @@ export async function setUpReferralWorld(
   return { sessionId, reasonId };
 }
 
-function isNumber(value: unknown): value is number {
-  return typeof value === 'number';
-}
-
-/**
- * Translates the legacy `adults`/`children` overrides most existing tests
- * still pass into the four age bands `POST /referrals` now actually accepts,
- * and drops the legacy keys so they are never sent — the submission schema
- * would silently strip them anyway, but sending fields the caller thinks
- * matter and having them ignored is worse than not sending them.
- *
- * Existing tests are written in terms of the household's *operational*
- * size — "two adults, three children" — and that is still what they are
- * testing; only the wire shape underneath changed. `adults: N` becomes
- * `adults18Plus: N` with `teenagers12To17: 0`, which is the identity for
- * `deriveHousehold`: a household with nobody aged 12-17 derives its whole
- * `adults` count from `adults18Plus` alone. `children: M` becomes
- * `children4To11: M`.
- *
- * **An explicit band passed in the same overrides object always wins** over
- * the value this translates from `adults`/`children` — a test reaching for a
- * band directly is exercising the bands, and this must not second-guess it.
- */
-function translateLegacyHousehold(overrides: Record<string, unknown>): Record<string, unknown> {
-  const { adults, children, ...rest } = overrides;
-  const translated: Record<string, unknown> = { ...rest };
-
-  if (isNumber(adults) && !('adults18Plus' in overrides)) {
-    translated.adults18Plus = adults;
-    if (!('teenagers12To17' in overrides)) translated.teenagers12To17 = 0;
-  }
-  if (isNumber(children) && !('children4To11' in overrides)) {
-    translated.children4To11 = children;
-  }
-
-  return translated;
-}
-
 /** A realistic submission body. Values here are asserted against in PII tests. */
 export function submission(world: ReferralWorld, overrides: Record<string, unknown> = {}) {
   return {
@@ -108,14 +70,10 @@ export function submission(world: ReferralWorld, overrides: Record<string, unkno
     refereeAddress: '12 Bramble Cottages',
     refereePostcode: 'GU1 4AA',
     refereePhone: '07700 900123',
-    // The same operational household as before translation existed:
-    // two adults (both 18+), three children (all 4-11).
-    infants: 0,
-    children4To11: 3,
-    teenagers12To17: 0,
-    adults18Plus: 2,
+    adults: 2,
+    children: 3,
     answers: { Dietary: 'no pork' },
-    ...translateLegacyHousehold(overrides),
+    ...overrides,
   };
 }
 

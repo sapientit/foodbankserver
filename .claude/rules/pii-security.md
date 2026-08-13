@@ -53,16 +53,13 @@ allowlist, so a column added to `referrals` cannot widen what an administrator i
 
 ## The purge
 
-`purgeReferralPii` nulls the identifying columns and drops the dynamic answers **whole**. It keeps
-the four age bands, `adults`, `children`, `isDelivery` and `reasonId`, which are outside the PII
-block — once the identifying columns are null those become statistics, which is how reporting
-survives a purge. That only works because the reason is chosen from a list rather than typed.
-
-The bands are kept on the charity's own reasoning that a household's shape is not its identity once
-nobody can be named (`INITIAL_SPEC1.txt`, `#Forgetting a referral`). Whether they should also reach
-the **spreadsheet extract** — a copy the purge cannot follow and `requireRole` does not reach into —
-is **Q30, open**. `toExtractRow` does not carry them. Do not add them to it to make the retention
-look useful; that is the charity's decision, and the question exists to get it asked.
+`purgeReferralPii` nulls the identifying columns, drops the dynamic answers **whole**, and nulls
+`adminInfo` — the administrators' own note about the household. That last one is written by an
+administrator and goes anyway, while `reviewComment`, also written by an administrator, stays: the
+comment records a decision about a referral, the note describes the people. It keeps
+`adults`, `children`, `isDelivery` and `reasonId`, which are outside the PII block — once the
+identifying columns are null those become statistics, which is how reporting survives a purge. That
+only works because the reason is chosen from a list rather than typed.
 
 It is wired into the nightly cron and **does nothing until `PII_RETENTION_DAYS` is set**. The
 charity has settled the period at **twelve months** (`INITIAL_SPEC1.txt`, `#Forgetting a referral`),

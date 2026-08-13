@@ -235,12 +235,6 @@ describe('purging personal data', () => {
     const world = await setUpReferralWorld(testApp, accessToken);
     const submitted = await submitReferral(testApp, world, {
       answers: { dietary_needs: 'no pork' },
-      // Four distinct, non-zero band values, so a test that accidentally
-      // asserted against the default of 0 could not pass by luck.
-      infants: 1,
-      children4To11: 3,
-      teenagers12To17: 2,
-      adults18Plus: 4,
     });
     expect(submitted.status, JSON.stringify(submitted.body)).toBe(201);
     const { id } = submitted;
@@ -317,22 +311,12 @@ describe('purging personal data', () => {
     const [row] = await db.select().from(referrals).where(eq(referrals.id, id));
 
     // "We fed 340 households, 890 people, 22% for benefit delay" must survive.
-    expect(row?.adults).toBe(6);
+    expect(row?.adults).toBe(2);
     expect(row?.children).toBe(3);
     expect(row?.reasonId).toEqual(expect.any(String));
     expect(row?.needsFuelHelp).toBe(0);
     expect(row?.referrerOrganisation).toBe('Guildford Borough Council');
     expect(row?.sessionId).toEqual(expect.any(String));
-
-    // The four age bands themselves, not only the pair derived from them —
-    // `INITIAL_SPEC1.txt`, `#Forgetting a referral`: "What is kept is the
-    // four age-band counts, and the adult and child numbers derived from
-    // them". A household's shape is not its identity once nobody can be
-    // named.
-    expect(row?.infants).toBe(1);
-    expect(row?.children4To11).toBe(3);
-    expect(row?.teenagers12To17).toBe(2);
-    expect(row?.adults18Plus).toBe(4);
   });
 
   it('drops the dynamic answers whole, because nothing can classify them', async () => {

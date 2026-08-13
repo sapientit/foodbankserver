@@ -225,14 +225,23 @@ every one of them — harmless, but show the right menu anyway.
 
 ### Field-level visibility
 
-A **team lead does not receive** `reasonId`, `referrerEmail`, `referrerPhone` or
-`reviewComment` on a referral. The fields are absent, not null. Treat them as
-optional in your types — `openapi-typescript` already will.
+A **team lead does not receive** `reasonId`, `referrerEmail`, `referrerPhone`,
+`reviewComment` or `adminInfo` on a referral. The fields are absent, not null.
+Treat them as optional in your types — `openapi-typescript` already will.
 
 Why: the reason for referral is the most sensitive thing in the system. It can
 mean financial hardship, domestic abuse, or immigration status. A picker needs
 household size, not that. `reviewComment` is withheld for the same kind of
 reason — it can name a referrer or record a suspicion about one.
+
+**`adminInfo` is narrower than admin-only.** It is the administrators' own
+free-text note about the household, and it is on responses that carry **one**
+referral: `GET /referrals/{id}`, `PATCH /referrals/{id}`, and the accept,
+reject, review and cancel routes. It is **absent from the `GET /referrals` list
+rows for an administrator too**, so do not build a list column from it — open
+the referral. It is on nothing else at all: not search results, not the
+repeat-referral list, not the listener sheet, the referral-details list, the
+pick list, the fuel help list, an SMS payload or the spreadsheet extract.
 
 A team lead also **does not see rejected referrals at all**. They are missing
 from `GET /referrals` whatever you filter by (`status=rejected` returns an empty
@@ -349,9 +358,12 @@ meter, permission to ring — are ordinary answers.
 
 **After a retention purge, `answers` comes back empty** along with the referee's
 own fields — the server cannot tell which answers were personal, so it drops all
-of them. The referrer's name, email and phone survive, as does `reviewComment`:
-the point of the purge is to stop holding the household's details, not to lose
-track of who referred them.
+of them. `adminInfo` goes with them. The referrer's name, email and phone
+survive, as does `reviewComment`: the point of the purge is to stop holding the
+household's details, not to lose track of who referred them or of why a referral
+was accepted. The note about the household is the one administrator-written
+field that does not survive, because it describes the people rather than a
+decision.
 
 ### The postcode has a settled form, and you apply it too
 
@@ -555,6 +567,80 @@ same clock the retention purge runs on, so a household whose details have been
 forgotten cannot be found. That is accepted, not a bug: there is nothing left to
 match on.
 
+#### The `Exclude postcode matches` checkbox
+
+```
+GET /api/v1/referrals/{id}/repeat-referrals?excludePostcode=true
+```
+
+Beside the count, unticked to start with. Ticked, it matches on **date of birth
+and phone number only**. A shared postcode in a hostel or a refuge is useful to
+see by default and useless once you have seen it, and this is how an
+administrator takes it out of the calculation without touching the referral.
+
+**Re-fetch and use all three values it returns** — `count`,
+`mostRecentSessionDate` and `matches` are all recalculated. Do not filter the
+rows you already hold: you would leave the count saying one thing and the list
+showing another, which is the specific confusion this checkbox exists to remove.
+`matchedOn` can then only contain `date_of_birth` and `phone`.
+
+A household with neither a date of birth nor a usable phone number on file comes
+back empty rather than matching everybody. Nothing is remembered — it is a way
+of looking, not a correction, and reloading the referral starts unticked again.
+
+Send the string `true` or `false`; anything else is a `400`.
+
+### Finding a referral when somebody rings (admin only)
+
+```
+POST /api/v1/referrals/search
+{ "postcode": "GU23 4XX", "phone": "01483 123456", "dateOfBirth": "1980-01-31" }
+  → 200 { count, results: [ … at most 50 … ] }
+```
+
+**A `POST` with a body, deliberately.** A `GET` would put a postcode and a phone
+number in the URL, where they reach access logs, browser history and `Referer`
+headers. Nothing in this system puts personal data in a URL. Do not convert this
+to query parameters and do not build a bookmarkable search link.
+
+**At least one of date of birth, postcode and phone number; none is a `400`.**
+They are the same three identifiers the duplicate count matches on, settled by
+the same rule — so you do not need to normalise anything before sending it, and a
+value the rule cannot read is quietly not searched on rather than refused. A
+search whose only value is unrecognisable returns `count: 0`. `surnamePrefix` is
+an optional case-insensitive narrowing filter applied after the identifier match;
+it cannot be supplied alone.
+
+**More than one identifier widens the search.** Any one matching is enough. Say
+so on the screen if you offer more than one box, because people assume the
+opposite — somebody ringing up gives the details they have and often has one of
+them slightly wrong, and a search insisting they all agree would fail exactly
+when it was needed.
+
+**Cancelled and rejected referrals are searchable and returned**, and there is
+no twelve-month window here — unlike the duplicate count. A referral whose
+details have been purged cannot be found, because the purge nulls the columns
+this searches on.
+
+**The results are the administrator's working list**: session date, status,
+first name, surname, postcode, phone number, the main reason id, the referrer's
+name, and `answers` whole. Resolve `reasonId` using the admin-only
+referral-reasons lookup, including retired reasons.
+
+**The secondary cause and the additional crisis detail are yours to extract.**
+They are answers, not columns, and `answers` comes through whole and unfiltered
+— the same arrangement as _Cause Details_ on the listener sheet, and for the
+same reason: the server holds no form definition, so it does not know which keys
+they are and will not guess. The whole blob belongs to you.
+
+The response does not contain the date of birth, the address, the review
+comment, the referrer email or the referrer phone, and the client must not fetch
+each result's full detail to reconstruct those omitted fields.
+
+`count` is uncapped and `results` holds at most 50, newest session first. Show
+both numbers when they differ — there is no paging, and the answer to a count of
+two hundred is a narrower search.
+
 ### The second accept button
 
 `referral details.txt` asked for "approve (once)" and "approve (authorise
@@ -590,24 +676,10 @@ next referral from that address is not held up. Three things to build around:
 ```
 refereeFirstName   refereeSurname     refereeDateOfBirth
 refereeAddress     refereePostcode    refereePhone (nullable)
-infants            children4To11      teenagers12To17 adults18Plus
-isDelivery         needsFuelHelp
-reasonId           answers            sessionId (a move)
+adults             children           isDelivery      needsFuelHelp
+reasonId           answers            adminInfo (nullable)
+sessionId (a move)
 ```
-
-**`adults` and `children` are no longer amendable** — they are derived. Send the
-age band you mean to correct. Each band is patched on its own, but the
-twelve-or-over rule is checked against the merged household, so sending
-`adults18Plus: 0` to a household whose only other member is a nine-year-old is a
-`422` and writes nothing.
-
-**An amendment carrying any age band is written only while all four are still
-what they were when you read them.** Two people correcting different bands at
-once would otherwise each check the rule against the other's stale value and
-between them leave a household with nobody aged twelve or over. If it happens
-you get a `409` and nothing is written: re-read the referral and reapply. An
-amendment with no band in it never contends, so a plain address correction is
-unaffected.
 
 A referrer who mistypes an address, or a household that moves between being
 referred and being fed, has to be correctable — a delivery goes to the address on
@@ -618,6 +690,15 @@ referral edit form is the right shape again.**
 alone, so a one-field correction is a one-field request. `answers` is the
 exception and still **replaces** the stored set outright rather than merging —
 you hold the form, so a key you leave out has been removed.
+
+**`adminInfo` is the administrators' own note, and it is not an answer.** Send a
+string to set it (trimmed, at most 2000 characters), explicit `null` to clear
+it, or omit it to leave it alone. **An empty string is a `400`** — send `null`
+instead. It has its own field precisely because `answers` is replaced
+wholesale: when an administrator saves one page of the form you send the
+complete preserved answers map, and the note must not vanish with a page that
+never held it. Include `adminInfo` in that same `PATCH` when the note changed;
+leave the key out when it did not.
 
 **The referrer's own details are still refused**: `referrerName`,
 `referrerPhone`, `referrerOrganisation` and above all `referrerEmail`, which is
@@ -639,80 +720,6 @@ definition and does not police which answers moved. Corrections are still worth
 putting there as well as in the field: a corrected address reaches the driver, a
 note saying why reaches the person handing the bag over — the answers surface
 beside the parcel on the picking screen and on the listener sheet.
-
----
-
-## 3a. The household is four age bands — breaking
-
-`adults` and `children` are **no longer submitted**. `POST /public/referrals` and
-`PATCH /referrals/{id}` take four counts instead, each a whole number `0`–`30`,
-all four required on submission:
-
-| Field             | Ages  | Operationally           |
-| ----------------- | ----- | ----------------------- |
-| `infants`         | 0–3   | **ignored** — see below |
-| `children4To11`   | 4–11  | the whole of `children` |
-| `teenagers12To17` | 12–17 | counts towards `adults` |
-| `adults18Plus`    | 18+   | counts towards `adults` |
-
-Send `0` for a band nobody falls into; a missing band is a `400`.
-
-### What you get back is unchanged
-
-Every response that carried `adults`, `children` and `householdSize` still
-carries them, meaning exactly what they meant before:
-
-```
-children      = children4To11
-adults        = teenagers12To17 + adults18Plus
-householdSize = adults + children
-```
-
-**Nothing about the grid, the model parcels, `familySize` in your preference
-rules, the parcel snapshot, the print payload or divergence changes.** If you
-consume any of those, you need no change at all — the derivation is the server's
-and it happens on write.
-
-The four raw bands are additionally on `Referral` (the referral list and detail,
-both roles) and on the submission receipt, so staff can see what the referrer
-actually typed. They are deliberately **not** on the parcel, the print payload or
-the listener sheet: a picker needs the size the parcel was chosen for, not the
-shape of the household.
-
-### Infants change nothing about the parcel
-
-A household of one adult and two babies has `householdSize: 1` and gets the same
-model parcel as an adult living alone. That is deliberate, not an oversight —
-what a baby needs is nappies and milk, and those reach the parcel through the
-household's preference answers, not through a bigger box of tins. Do not add
-infants into a size you display beside a parcel; you will be describing a parcel
-that was never picked that way.
-
-If you show a household's size to staff on a _referral_ screen, though, showing
-all four bands is the honest thing — "2 adults, 3 children" for a household with
-a baby in it is true operationally and misleading humanly.
-
-### The rule that replaced "at least one adult"
-
-```
-teenagers12To17 + adults18Plus >= 1
-```
-
-Refused on submission with a `400` whose issue message is `a household must
-include at least one person aged 12 or over` and whose `path` is **empty** — the
-rule is about the combination, so bind it to the fieldset rather than to a field.
-On `PATCH` the same rule is checked against the merged household and comes back
-as a `422` with that message capitalised; nothing is written.
-
-### Existing referrals
-
-Migration `0023` backfilled every referral already in the database as
-`infants: 0`, `teenagers12To17: 0`, `children4To11: <old children>`,
-`adults18Plus: <old adults>`. That reproduces the derived pair exactly, so every
-existing household still resolves to the same grid cell and the same model
-parcel. **It is a compatibility statement and not a claim about anybody's actual
-ages** — nobody asked those referrers how old the household was. Do not present a
-purged or pre-migration referral's bands as though the referrer supplied them.
 
 ---
 
@@ -1299,10 +1306,8 @@ nobody asked for the answer.
 definition, so it cannot know which answers are preferences or what they mean.
 Evaluate your own configuration and send the stock items you resolved — **ids,
 never names**. `GET /referrals?sessionId=` gives you everything to evaluate
-against (`id`, the derived `adults` and `children`, and the whole `answers` map)
-before any pick list exists; there is no separate inputs endpoint and none is
-needed. `familySize.adults`, `.children` and `.total` in your rules are those
-derived counts and `adults + children` — **infants are not in any of them**.
+against (`id`, `adults`, `children` and the whole `answers` map) before any
+pick list exists; there is no separate inputs endpoint and none is needed.
 
 What the server does with them:
 
@@ -1348,6 +1353,41 @@ as one, and never add it to a total.
 - Settle it with `PUT /parcels/{id}/lines`: the decided quantity, or `0` to drop
   the item. That route takes `0` and above only; `-1` is created at generation
   and cannot be set by hand.
+
+---
+
+## 5h. Session referral details — contact list for the day
+
+```
+GET /api/v1/sessions/{sessionId}/referral-details
+  → 200 { sessionId, sessionDate, startTime, location,
+          referrals: [ { referralId, refereeFirstName, refereeSurname,
+                         refereeAddress, refereePostcode, refereePhone,
+                         referrerName, referrerPhone } ] }
+```
+
+Admin **and team lead**, for the _Run a session_ screen. **You own the print
+view**; this is the data behind it.
+
+**This is a contact list, not a listener sheet**, and the two must not be
+merged. It carries the household's address, postcode and phone number, and the
+referrer's name and phone number, so whoever is running the session can find a
+door, ring a household that has not arrived, or ring the professional who sent
+them.
+
+**What it does not carry**, and must not be padded with from other endpoints:
+date of birth, the reason for referral, the form answers, the review comment,
+the parcel contents, and the referrer's email address and organisation. The
+reason stays where it was — a team leader gets it on the listener sheet and
+nowhere else, and putting it on a second sheet quietly undoes that.
+
+**Deliveries are included here**, unlike the listener sheet. That drops them
+because nobody walks in for a delivery; this is the list you ring people from,
+and a delivery household is the one the team most needs to reach.
+
+Cancelled and rejected referrals are left off. Ordered by surname then first
+name. Every field is nullable: a purged household is still on the session and
+still appears, with nothing left to contact them by.
 
 ---
 
@@ -1473,13 +1513,9 @@ The named fields are the fixed columns: `referralId`, `status`, `referredAt`,
 `referrerOrganisation`, `refereeDateOfBirth`, `refereePostcode`, `adults`,
 `children`, `isDelivery`, `needsFuelHelp`, `reason` (the label, not the id)
 and `reviewComment`. No client or referrer name, address, email address or
-telephone number reaches the extract.
-
-**The four age bands are not among them**, and that is an open question rather
-than a settled answer — see Q30 in `OPEN-QUESTIONS.md`. The row still carries the
-two derived counts only. If the charity says the bands belong in the sheet, four
-fixed columns arrive and you will be told; do not add them speculatively, and do
-not derive them from anything, because they are not in the payload.
+telephone number reaches the extract, and **neither does `adminInfo`** — the
+purge cannot reach a spreadsheet, and the administrators' note is one of the
+things the purge removes.
 
 The claim itself carries the two session columns every row on it shares:
 **`sessionDate` and `sessionLocation`**. Write those. **`claim.sessionId` is not
@@ -1516,13 +1552,11 @@ because an admin may deliberately overfill a session when moving someone. Do not
 render that as an error. The public list omits both fields and simply excludes
 anything full.
 
-**A referral needs somebody aged twelve or over.** The rule is on the submitted
-age bands — `teenagers12To17 + adults18Plus >= 1` — and a household that fails it
-gets a `400` saying so in those words. A household of nobody but infants and
-young children has no one to collect a parcel.
+**A referral needs at least one adult.** The household grid starts at one adult,
+so `adults: 0` is rejected.
 
 **Households larger than 5 adults or 5 children clamp** into the corner of the
-grid, on the **derived** counts. A household of nine gets the same parcel as five.
+grid. A household of nine gets the same parcel as five.
 
 **Stock levels can be negative** after a correction. Do not assume non-negative.
 

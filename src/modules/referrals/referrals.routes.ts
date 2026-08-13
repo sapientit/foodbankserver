@@ -10,11 +10,15 @@ import { createSessionsRepository } from '../sessions/sessions.repository.ts';
 import { createReferralsRepository } from './referrals.repository.ts';
 import { createReferralsService } from './referrals.service.ts';
 import {
+  toReferralDetailsResponse,
   toReferralResponse,
+  toReferralSearchResponse,
   toRepeatReferralListResponse,
   toRepeatReferralSummary,
   type ListenerSheetHousehold,
+  type ReferralDetailsResponse,
   type ReferralResponse,
+  type ReferralSearchResponse,
   type RepeatReferralListResponse,
 } from './referrals.mapper.ts';
 import {
@@ -22,7 +26,9 @@ import {
   cancelReferralSchema,
   referralAdminAmendSchema,
   referralListQuerySchema,
+  referralSearchSchema,
   rejectReferralSchema,
+  repeatReferralsQuerySchema,
 } from './referrals.schema.ts';
 
 /**
@@ -44,6 +50,9 @@ export function referralRoutes(): Hono<AppEnv> {
     const actor = actorOf(c);
     const referrals = await serviceFor(c).listReferrals(query, actor);
 
+    // No `includeAdminInfo`: the administrators' note belongs on the referral
+    // an administrator has open, not on every row of a list. See
+    // `ReferralResponseOptions`.
     return c.json<{ referrals: ReferralResponse[] }>({
       referrals: referrals.map((referral) => toReferralResponse(referral, actor)),
     });
@@ -68,6 +77,22 @@ export function referralRoutes(): Hono<AppEnv> {
     });
   });
 
+  /**
+   * The referral-details list: everybody on a session the team needs to be
+   * able to ring, for a team leader to print. `INITIAL_SPEC1.txt`,
+   * `#Reviewing a referral`, the team-leader paragraph.
+   *
+   * Session-scoped and open to `readers` for the same reason the listener
+   * sheet is — see `toReferralDetailsHousehold` for what it carries and
+   * withholds, and why deliveries are included here when the listener sheet
+   * leaves them off.
+   */
+  routes.get('/sessions/:sessionId/referral-details', ...readers, async (c) => {
+    const { session, referrals } = await serviceFor(c).referralDetails(c.req.param('sessionId'));
+
+    return c.json<ReferralDetailsResponse>(toReferralDetailsResponse(session, referrals));
+  });
+
   routes.get('/referrals/:id', ...readers, async (c) => {
     const actor = actorOf(c);
     const service = serviceFor(c);
@@ -79,7 +104,7 @@ export function referralRoutes(): Hono<AppEnv> {
         ? toRepeatReferralSummary(await service.repeatReferralSummary(referral))
         : undefined;
 
-    return c.json(toReferralResponse(referral, actor, repeatReferrals));
+    return c.json(toReferralResponse(referral, actor, { repeatReferrals, includeAdminInfo: true }));
   });
 
   /**
@@ -91,10 +116,38 @@ export function referralRoutes(): Hono<AppEnv> {
    * household's name, address, phone number and date of birth, which is why
    * it is its own route rather than a field on the one above. Nothing fetches
    * it until an administrator presses the button.
+   *
+   * `?excludePostcode=true` is the review screen's `Exclude postcode
+   * matches` checkbox: when set, both `count` and `matches` are recalculated
+   * on date of birth and phone number only. See `listRepeatReferralsFor` for
+   * how.
    */
   routes.get('/referrals/:id/repeat-referrals', ...admins, async (c) => {
-    const result = await serviceFor(c).listRepeatReferralsFor(c.req.param('id'));
+    const { excludePostcode } = parseOrThrow(repeatReferralsQuerySchema, {
+      excludePostcode: c.req.query('excludePostcode'),
+    });
+    const result = await serviceFor(c).listRepeatReferralsFor(c.req.param('id'), excludePostcode);
     return c.json<RepeatReferralListResponse>(toRepeatReferralListResponse(result));
+  });
+
+  /**
+   * The administrators' own lookup: find a referral by postcode, phone
+   * number and/or date of birth when somebody rings in. `INITIAL_SPEC1.txt`,
+   * `#Searching for a referral`.
+   *
+   * **A JSON body, deliberately not query parameters** — a postcode or phone
+   * number belongs in neither a URL, an access log nor a referrer header,
+   * and a query string is all three. See `.claude/rules/pii-security.md`.
+   *
+   * Reaches every referral the food bank still holds details for, cancelled
+   * and rejected included — unlike the repeat-referral list above, which
+   * exists to catch a household still being fed. See `referralSearchSchema`
+   * and `referralSearchPredicate` for the rest of how it differs.
+   */
+  routes.post('/referrals/search', ...admins, async (c) => {
+    const input = await parseJsonBody(c, referralSearchSchema);
+    const result = await serviceFor(c).searchReferrals(input);
+    return c.json<ReferralSearchResponse>(toReferralSearchResponse(result));
   });
 
   routes.patch('/referrals/:id', ...admins, async (c) => {
@@ -117,7 +170,7 @@ export function referralRoutes(): Hono<AppEnv> {
       });
     }
 
-    return c.json(toReferralResponse(referral, actor));
+    return c.json(toReferralResponse(referral, actor, { includeAdminInfo: true }));
   });
 
   /**
@@ -145,7 +198,7 @@ export function referralRoutes(): Hono<AppEnv> {
       authoriseReferrer,
     );
 
-    return c.json(toReferralResponse(accepted, actor));
+    return c.json(toReferralResponse(accepted, actor, { includeAdminInfo: true }));
   });
 
   routes.post('/referrals/:id/reject', ...admins, async (c) => {
@@ -160,7 +213,7 @@ export function referralRoutes(): Hono<AppEnv> {
       actor,
     );
 
-    return c.json(toReferralResponse(rejected, actor));
+    return c.json(toReferralResponse(rejected, actor, { includeAdminInfo: true }));
   });
 
   /**
@@ -174,7 +227,7 @@ export function referralRoutes(): Hono<AppEnv> {
   routes.post('/referrals/:id/review', ...admins, async (c) => {
     const actor = actorOf(c);
     const reviewed = await serviceFor(c).markReviewed(c.req.param('id'), actor);
-    return c.json(toReferralResponse(reviewed, actor));
+    return c.json(toReferralResponse(reviewed, actor, { includeAdminInfo: true }));
   });
 
   routes.post('/referrals/:id/cancel', ...admins, async (c) => {
@@ -188,7 +241,7 @@ export function referralRoutes(): Hono<AppEnv> {
       userId: actor.userId,
     });
 
-    return c.json(toReferralResponse(cancelled, actor));
+    return c.json(toReferralResponse(cancelled, actor, { includeAdminInfo: true }));
   });
 
   return routes;

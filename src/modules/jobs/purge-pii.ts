@@ -32,6 +32,12 @@ export interface PurgePiiResult {
  * has been anonymised. That is the charity's decision — see `INITIAL_SPEC1.txt`
  * — and it is why this list is shorter than the nullable columns on the table.
  *
+ * `adminInfo` is the exception to that, and the pair is worth reading
+ * together: it is written by an administrator, like `reviewComment`, and it
+ * goes, unlike `reviewComment`. The comment says why the charity accepted or
+ * turned away a referral; the note says what the office knows about the
+ * household. Only the second one describes a person.
+ *
  * Dynamic answers are dropped **whole**. The referral form is client
  * configuration, so the server has no definition telling it which questions
  * asked for personal data — and an answer that cannot be classified has to be
@@ -90,6 +96,12 @@ export async function purgeReferralPii(deps: {
         refereePostcodeNormalised: null,
         refereePhoneNormalised: null,
         answersJson: null,
+        // The administrators' own note about the household. It goes even
+        // though an administrator wrote it and `reviewComment` — also written
+        // by an administrator — stays: the comment records a decision about a
+        // referral, while this is free text about the people, and free text
+        // about a person is that person's data whoever typed it.
+        adminInfo: null,
         piiPurgedAt: now,
         updatedAt: now,
       })

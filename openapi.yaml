@@ -803,6 +803,50 @@ paths:
                     items: { $ref: '#/components/schemas/ListenerSheetHousehold' }
         '404': { description: No such session }
 
+  /api/v1/sessions/{sessionId}/referral-details:
+    parameters: [{ $ref: '#/components/parameters/SessionId' }]
+    get:
+      tags: [Referrals]
+      summary: Contact details for every household on a session
+      description: |
+        For the **Run a session** screen, open to a team leader as well as an
+        administrator. The client owns the print view; this is the data behind
+        it.
+
+        **This is a contact list, not a listener sheet.** It carries the
+        household's address, postcode and phone number, and the referrer's name
+        and phone number — so the person running the session can find a door,
+        ring a household that has not arrived, or ring the professional who sent
+        them. It is the one place a team leader is given a household's phone
+        number outside the picking sheet for a delivery.
+
+        **What it deliberately leaves out:** date of birth, the reason for
+        referral, the form answers, the administrator's review comment, the
+        parcel contents, and the referrer's email address and organisation. The
+        reason in particular stays where it was — a team leader gets it on the
+        listener sheet and nowhere else.
+
+        **Who is on it:** every household holding a place — `pending_review`,
+        `active` and `reviewed` alike. Cancelled and rejected households are
+        left off, and nothing here puts a rejected referral back in front of a
+        team leader who is not shown the comment explaining it.
+
+        **Deliveries are included**, unlike the listener sheet. That drops them
+        because nobody walks in for a delivery and a listener will never have
+        that conversation; this is the list you ring people from, and a delivery
+        household is one the team most needs to be able to reach.
+
+        Ordered by surname then first name. A purged household sorts last and
+        comes back with nulls — the referral is still on the session, but there
+        is nothing left to contact them with.
+      responses:
+        '200':
+          description: The session and its households
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionReferralDetails' }
+        '404': { description: No such session }
+
   # ------------------------------------------------------------- fuel help --
   /api/v1/fuel-help-list:
     get:
@@ -1037,6 +1081,10 @@ paths:
         `referrerPhone` or `reviewComment`.** Why someone is hungry is not
         picking information.
 
+        **Nobody receives `adminInfo` here**, an administrator included — the
+        note belongs to the referral you have open, so fetch
+        `GET /referrals/{id}` for it.
+
         **A team lead's list never contains rejected referrals**, whatever they
         filter by; asking for `status=rejected` returns an empty list rather
         than an error, because the status is simply not one of theirs. Pending
@@ -1090,6 +1138,11 @@ paths:
         exception is `answers`, which **replaces** the stored set outright —
         you hold the form, so a key you leave out has been removed.
 
+        `adminInfo` — the administrators' own note about the household — is
+        amended here too, and is **not** part of `answers`: a string sets it,
+        `null` clears it, and omitting it leaves it. Replacing the answers
+        never touches it, which is the point of it being its own field.
+
         **The referrer's own details cannot be amended** — not `referrerEmail`
         above all, which is what the accept-or-hold decision was made on. The
         body is strict: sending a field that is not listed is a `400` naming it,
@@ -1132,14 +1185,9 @@ paths:
         '409':
           description: >-
             Target session is full and not acknowledged, the referral is
-            cancelled or rejected, its current session has been confirmed, or
-            **the household's age bands were changed by somebody else while this
-            amendment was in flight** — re-read the referral and reapply the
-            change. Nothing was written.
+            cancelled or rejected, or its current session has been confirmed
         '422':
-          description: >-
-            The chosen reason for referral is no longer offered, or the
-            amendment would leave the household with nobody aged 12 or over
+          description: The chosen reason for referral is no longer offered
 
   /api/v1/referrals/{id}/repeat-referrals:
     parameters: [{ $ref: '#/components/parameters/Id' }]
@@ -1204,6 +1252,29 @@ paths:
         numbers like that, and the honest answer there is the count with a
         sample of it. **Show both numbers** when they differ; a screen that
         renders only the rows tells an administrator that fifty is all there is.
+
+        **`excludePostcode=true` takes the postcode out of the calculation**,
+        matching on date of birth and phone number only. It is the checkbox
+        beside the count, and it exists because a shared postcode in a hostel or
+        a refuge is useful to see by default and useless once you have seen it.
+        It recalculates everything — `count`, `mostRecentSessionDate` and
+        `matches` alike — so re-fetch this endpoint and use all three; do not
+        filter the rows you already hold, which would leave the count saying
+        something the list no longer shows. `matchedOn` can then only ever
+        contain `date_of_birth` and `phone`. A household with neither on file
+        comes back empty rather than matching everybody.
+
+        It changes nothing about the referral itself, and nothing is remembered:
+        it is a way of looking, not a correction.
+      parameters:
+        - name: excludePostcode
+          in: query
+          required: false
+          schema: { type: string, enum: ['true', 'false'] }
+          description: >-
+            `true` matches on date of birth and phone number only. Omitted or
+            `false` is the default three-way match. Sent as a string because it
+            is a query parameter — any other value is a `400`.
       responses:
         '200':
           description: The matching referrals, in full
@@ -1214,6 +1285,77 @@ paths:
           description: The caller is a team lead
         '404':
           description: No such referral
+
+  /api/v1/referrals/search:
+    post:
+      tags: [Referrals]
+      summary: Find a referral by date of birth, postcode or phone number
+      description: |
+        **Admin only.** The screen an administrator opens when somebody rings
+        up. A team lead gets a `403`.
+
+        **It is a `POST` with a body, and that is not a mistake.** A postcode, a
+        phone number and a date of birth are personal data, and a `GET` would
+        put them in the URL — where they reach access logs, browser history,
+        `Referer` headers and anything sitting in front of this API. Nothing in
+        this system puts personal data in a URL. Do not "fix" this to a `GET`
+        with query parameters, and do not build a bookmarkable search link.
+
+        **At least one of date of birth, postcode and phone number is required**;
+        none is a `400`. Search is
+        on the same three identifiers the duplicate count matches on, settled by
+        the same rule — so a postcode typed with no space and one typed in lower
+        case are the same postcode. A value the rule cannot make sense of is
+        simply not searched on rather than being an error, exactly as it is not
+        matched on; a search whose only value is unrecognisable comes back
+        `count: 0` rather than matching everything.
+
+        **More than one identifier widens the search, it does not narrow it.**
+        Any one of the values matching is enough. Somebody ringing up gives the
+        details they have and often has one of them slightly wrong — a
+        transposed digit, last year's address — and a search that insisted on
+        all of them agreeing would fail at the moment it was most needed. Say
+        so in the UI if you offer more than one box, because the opposite is the
+        natural assumption. `surnamePrefix` is an optional, case-insensitive
+        start-of-surname filter applied as an `AND` narrowing condition after
+        the identifier match, and cannot be used alone.
+
+        **This reaches every referral the food bank still holds details for,
+        cancelled and rejected included** — "we turned that one away in March"
+        is exactly what the caller is ringing about — and there is no
+        twelve-month window here, unlike the duplicate count. It cannot reach a
+        referral whose details have been forgotten: the purge nulls the very
+        columns this searches on, so there is nothing left to match.
+
+        **What comes back is the administrator's working list:** session date,
+        referral status, first name, surname, postcode, phone number, the main
+        reason id, the referrer's name, and the dynamic `answers` whole.
+        Resolve `reasonId` using the admin-only referral-reasons lookup. The
+        secondary cause and the additional crisis detail are answers, so they
+        arrive inside `answers` under the keys your form owns — the server does
+        not know which keys those are and will not guess. It does not return the
+        date of birth, the address, the review comment, the referrer email or
+        the referrer phone, and you should not reconstruct those by fetching
+        every result.
+
+        **At most 50 results, newest session first, and `count` is not capped.**
+        `count > results.length` means there are more; show both numbers when
+        they differ.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReferralSearchRequest' }
+      responses:
+        '200':
+          description: What was found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReferralSearchResponse' }
+        '400':
+          description: No identifier was supplied
+        '403':
+          description: The caller is not an administrator
 
   /api/v1/referrals/{id}/accept:
     parameters: [{ $ref: '#/components/parameters/Id' }]
@@ -1917,11 +2059,6 @@ paths:
         Thirty cells: 1-5 adults by 0-5 children, keyed `adults-children`. Each
         holds the **name** of a model parcel. `cells` lists every key that must
         be filled, so an empty grid can still be rendered.
-
-        Both words mean the **derived operational counts**, not the referral's
-        age bands: `adults` is `teenagers12To17 + adults18Plus`, `children` is
-        `children4To11`, and infants never move a household between cells.
-        Label the axes accordingly — "adults" here includes twelve-year-olds.
       responses:
         '200':
           description: The grid and what is missing from it
@@ -2835,19 +2972,6 @@ components:
 
     ReferralSubmission:
       type: object
-      description: >
-        The household arrives as **four age bands**, all four required, each
-        `0`-`30`. Send `0` rather than omitting a band nobody falls into.
-
-        **`teenagers12To17 + adults18Plus` must be at least 1.** A household with
-        nobody aged twelve or over is refused with a `400` whose issue message is
-        `a household must include at least one person aged 12 or over` and whose
-        `path` is empty — the rule is about the combination, not one field. There
-        is nobody to collect a parcel otherwise.
-
-        The server derives the operational counts it returns and picks against:
-        `children` is `children4To11`, `adults` is `teenagers12To17 +
-        adults18Plus`, and infants are ignored. You never send those.
       required:
         [
           sessionId,
@@ -2860,10 +2984,7 @@ components:
           refereeDateOfBirth,
           refereeAddress,
           refereePostcode,
-          infants,
-          children4To11,
-          teenagers12To17,
-          adults18Plus,
+          adults,
         ]
       properties:
         sessionId: { type: string, format: uuid }
@@ -2912,32 +3033,12 @@ components:
             A column rather than an answer, because the charity reports on it.
             The two questions that follow from it — pre-payment meter,
             permission to ring — are ordinary answers and belong in `answers`.
-        infants:
+        adults:
           type: integer
-          minimum: 0
+          minimum: 1
           maximum: 30
-          description: >-
-            Aged 0-3. Collected and reported on, but **ignored operationally** —
-            an infant does not change which model parcel the household gets.
-            What a baby needs is nappies and milk, and those reach the parcel
-            through the household's preferences.
-        children4To11:
-          type: integer
-          minimum: 0
-          maximum: 30
-          description: 'Aged 4-11. This alone is the operational `children` count.'
-        teenagers12To17:
-          type: integer
-          minimum: 0
-          maximum: 30
-          description: >-
-            Aged 12-17. Counts towards the operational `adults` count, not
-            `children` — a teenager eats like an adult.
-        adults18Plus:
-          type: integer
-          minimum: 0
-          maximum: 30
-          description: Aged 18 and over.
+          description: At least one, so every referral maps to a real grid cell.
+        children: { type: integer, minimum: 0, maximum: 30 }
         isDelivery:
           type: boolean
           default: false
@@ -2963,9 +3064,9 @@ components:
       type: object
       minProperties: 1
       description: >
-        **The household's own details, and the answers.** Admin only — there is
-        no self-service amendment; a referrer who needs a change phones the food
-        bank and an administrator makes it.
+        **The household's own details, the answers, and the administrators'
+        note.** Admin only — there is no self-service amendment; a referrer who
+        needs a change phones the food bank and an administrator makes it.
 
         Every field is optional and **only what you send is written**, so a
         one-field correction stays a one-field request. `answers` is the
@@ -2984,22 +3085,6 @@ components:
         records what a field used to say, so there is nothing to show a user as
         "previously" and no undo.
 
-        **Age bands are patched one at a time, but the twelve-or-over rule is
-        checked against the whole household.** Send only `teenagers12To17` and it
-        is merged with the three bands already stored; if the result has nobody
-        aged twelve or over the amendment is refused with a `422`, `A household
-        must include at least one person aged 12 or over`, and nothing is
-        written. The derived `adults` and `children` are recomputed from the
-        merged bands whenever any band is sent, and they do not appear in the
-        audit trail's changed-field list — they are derived, not corrected.
-
-        Because that rule spans two bands while a patch may carry one, an
-        amendment containing **any** band is written only while all four are
-        still what they were when it was read. If somebody else changed the
-        household in between, the amendment is refused with a `409` and nothing
-        is written — re-read the referral and reapply. An amendment carrying no
-        band is unaffected, so correcting an address never contends with this.
-
         Corrections are still worth writing into the form's "other information"
         answer as well, and often should be: a corrected address reaches the
         driver, while a note saying why reaches the person handing the bag over
@@ -3016,10 +3101,8 @@ components:
           minLength: 5
           maxLength: 30
           description: Explicitly `null` to remove a number the household no longer has.
-        infants: { type: integer, minimum: 0, maximum: 30 }
-        children4To11: { type: integer, minimum: 0, maximum: 30 }
-        teenagers12To17: { type: integer, minimum: 0, maximum: 30 }
-        adults18Plus: { type: integer, minimum: 0, maximum: 30 }
+        adults: { type: integer, minimum: 1, maximum: 30 }
+        children: { type: integer, minimum: 0, maximum: 30 }
         isDelivery: { type: boolean }
         needsFuelHelp: { type: boolean }
         reasonId:
@@ -3029,6 +3112,22 @@ components:
             Must be a reason the charity currently offers; a retired one is a
             `422`. A referral already citing a retired reason keeps it.
         answers: { type: object, additionalProperties: true }
+        adminInfo:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 2000
+          description: >
+            The administrators' own note about the household. A string sets it,
+            replacing whatever was there; explicit `null` clears it; omitting
+            the key leaves it alone.
+
+            **An empty string is a `400`, not a clearance** — send `null`. It
+            is trimmed, so whitespace alone is an empty string.
+
+            It is **not** part of `answers` and is not replaced when they are:
+            saving a form page must send the complete answers map, and if the
+            note is being changed at the same time it travels as this separate
+            field.
 
     ReferralReview:
       type: object
@@ -3125,10 +3224,6 @@ components:
           id,
           sessionId,
           status,
-          infants,
-          children4To11,
-          teenagers12To17,
-          adults18Plus,
           adults,
           children,
           isDelivery,
@@ -3143,16 +3238,8 @@ components:
         id: { type: string, format: uuid }
         sessionId: { type: string, format: uuid }
         status: { type: string, enum: [pending_review, active] }
-        infants: { type: integer }
-        children4To11: { type: integer }
-        teenagers12To17: { type: integer }
-        adults18Plus: { type: integer }
-        adults:
-          type: integer
-          description: >-
-            Derived: `teenagers12To17 + adults18Plus`. Echoed back beside the
-            four bands so the referrer can see what the food bank made of them.
-        children: { type: integer, description: 'Derived: `children4To11`.' }
+        adults: { type: integer }
+        children: { type: integer }
         isDelivery: { type: boolean }
         needsFuelHelp: { type: boolean }
         refereeFirstName: { type: [string, 'null'] }
@@ -3201,13 +3288,6 @@ components:
 
     ExtractRow:
       type: object
-      x-assumed: >-
-        That the row carries the two derived counts and **not** the four age
-        bands rests on Q30, which is open. The bands are collected and kept
-        through the purge for reporting, and the spreadsheet is where the
-        charity reports — so either they belong here as four more fixed columns
-        or the retention is doing nothing. Not added, because a fixed column is
-        contract and reaches a copy the purge cannot follow.
       description: >
         One referral, as one spreadsheet row.
 
@@ -3218,6 +3298,10 @@ components:
         it meets a new key. **That mapping is spreadsheet state and is not
         stored in this database** — the server neither knows nor cares which
         column anything lands in.
+
+        **`adminInfo` is not a column here and must not be written into the
+        sheet.** The purge cannot reach a spreadsheet, and the administrators'
+        note is one of the things the purge removes.
       required:
         [
           referralId,
@@ -3439,8 +3523,12 @@ components:
     Referral:
       type: object
       description: |
-        The staff view. **The last five fields are admin-only** — a team lead
+        The staff view. **The last six fields are admin-only** — a team lead
         receives the object without them, so treat them as optional.
+
+        `adminInfo` is narrower again: admin-only **and** only on a response
+        carrying one referral. It is absent from the rows of `GET /referrals`
+        for everybody, an administrator included.
 
         **A team lead does not see rejected referrals at all.** They are absent
         from the list, and fetching one by id is a `404`. Pending ones they do
@@ -3455,10 +3543,6 @@ components:
           sessionId,
           status,
           referredAt,
-          infants,
-          children4To11,
-          teenagers12To17,
-          adults18Plus,
           adults,
           children,
           householdSize,
@@ -3509,32 +3593,9 @@ components:
           format: date-time
           description: >-
             When the referrer submitted. There is no separate review timestamp.
-        infants:
-          type: integer
-          description: >-
-            Aged 0-3, as submitted. **Not in `householdSize`** and not part of
-            the grid lookup — an infant does not make the parcel bigger.
-        children4To11: { type: integer, description: Aged 4-11, as submitted. }
-        teenagers12To17: { type: integer, description: Aged 12-17, as submitted. }
-        adults18Plus: { type: integer, description: Aged 18 and over, as submitted. }
-        adults:
-          type: integer
-          description: >-
-            **Derived operational count: `teenagers12To17 + adults18Plus`.** This
-            is what the household grid, the model parcel and your preference
-            rules' `familySize.adults` are all in terms of. It is not the number
-            of people aged 18 or over.
-        children:
-          type: integer
-          description: >-
-            **Derived operational count: `children4To11`.** Infants are not in
-            it. This is `familySize.children`.
-        householdSize:
-          type: integer
-          description: >-
-            `adults + children`, so `familySize.total`. **Infants are excluded**
-            — a household of one adult and two babies has a `householdSize` of 1
-            and gets the same parcel as an adult living alone.
+        adults: { type: integer }
+        children: { type: integer }
+        householdSize: { type: integer }
         isDelivery: { type: boolean }
         needsFuelHelp: { type: boolean }
         referrerOrganisation:
@@ -3559,13 +3620,15 @@ components:
           type: [string, 'null']
           format: date-time
           description: >
-            When set, the **referee's** fields above are null by design and
-            `answers` is empty.
+            When set, the **referee's** fields above are null by design,
+            `answers` is empty and `adminInfo` is null.
 
             The referrer's own details are **not** purged — `referrerName`,
             `referrerEmail`, `referrerPhone` and `reviewComment` all survive.
             The retention period exists to forget the household that needed
-            feeding, not the professional who referred them.
+            feeding, not the professional who referred them. `adminInfo` is the
+            one administrator-written field that goes: it describes the
+            household rather than a decision about the referral.
           x-assumed: >-
             Q12 — that a purge drops the dynamic answers whole. The server no
             longer holds a form definition, so it cannot tell a personal answer
@@ -3588,6 +3651,28 @@ components:
             **Admin only.** The reviewing administrator's one line. It can name a
             referrer or record a suspicion, which is not a team lead's business.
             Who reviewed is stored but never returned — no screen asks.
+        adminInfo:
+          type: [string, 'null']
+          maxLength: 2000
+          description: >
+            **Admin only, and only on a response carrying one referral** —
+            `GET /referrals/{id}`, `PATCH /referrals/{id}`, and the accept,
+            reject, review and cancel routes. **Absent from the `GET
+            /referrals` list rows**, absent from search results, and absent
+            from every printed, exported or messaged payload: the listener
+            sheet, the referral-details list, the repeat-referral list, the
+            pick list, the fuel help list, SMS and the spreadsheet extract.
+
+            The administrators' own free-text note about the household — what
+            the office learned from ringing them. It is **not** one of
+            `answers`: the answers are the referrer's and you replace them
+            wholesale from the form you own, and a note the office wrote must
+            not be lost because a form page was saved without it. Amend it
+            through `ReferralAmend.adminInfo`.
+
+            Null when there is no note. Cleared by the twelve-month purge along
+            with the household's own fields and `answers` — unlike
+            `reviewComment`, which survives it.
         repeatReferrals:
           allOf: [{ $ref: '#/components/schemas/RepeatReferralSummary' }]
           description: >
@@ -3666,6 +3751,166 @@ components:
           description: >-
             The dynamic answers, whole. Extract *Cause Details* here; the server
             does not know which key it is. `{}` once purged.
+
+    SessionReferralDetails:
+      type: object
+      description: >-
+        The session, and contact details for every household on it. See the
+        route for what is deliberately absent.
+      required: [sessionId, sessionDate, startTime, location, referrals]
+      properties:
+        sessionId: { type: string, format: uuid }
+        sessionDate: { type: string, format: date }
+        startTime:
+          type: string
+          description: '`HH:MM`, Europe/London wall clock. Print it as it stands.'
+        location: { type: string }
+        referrals:
+          type: array
+          items: { $ref: '#/components/schemas/ReferralDetailsHousehold' }
+
+    ReferralDetailsHousehold:
+      type: object
+      description: >-
+        One household's contact details for the session being run. Every field
+        below is nullable because the referee and referrer columns are nulled by
+        the retention purge — a purged household is still on the session and
+        still has to appear, with nothing left to reach it by.
+      required:
+        [
+          referralId,
+          refereeFirstName,
+          refereeSurname,
+          refereeAddress,
+          refereePostcode,
+          refereePhone,
+          referrerName,
+          referrerPhone,
+        ]
+      properties:
+        referralId: { type: string, format: uuid }
+        refereeFirstName: { type: [string, 'null'] }
+        refereeSurname: { type: [string, 'null'] }
+        refereeAddress: { type: [string, 'null'] }
+        refereePostcode: { type: [string, 'null'] }
+        refereePhone:
+          type: [string, 'null']
+          description: >-
+            Null when the household has no number as well as when it has been
+            purged. A household nobody can ring is one somebody may need to call
+            at, which is why the address is here too.
+        referrerName:
+          type: [string, 'null']
+          description: >-
+            The professional who sent them. **Survives a purge** — the point of
+            forgetting is to stop holding details of the household, not of the
+            referrer.
+        referrerPhone: { type: [string, 'null'] }
+
+    ReferralSearchRequest:
+      type: object
+      description: >-
+        At least one of the three is required; a body with none of them is a
+        `400`. Send what the caller gave you and let the server settle it — do
+        not normalise or pad a partial postcode yourself.
+      properties:
+        postcode:
+          type: string
+          minLength: 2
+          maxLength: 12
+          description: >-
+            Settled the same way the duplicate match settles it: uppercased,
+            whitespace removed, kept only if it looks like a UK postcode. One
+            that does not is not searched on rather than refused.
+        phone:
+          type: string
+          minLength: 5
+          maxLength: 30
+          description: >-
+            Settled to UK E.164, as the duplicate match settles it. One the rule
+            cannot read is not searched on.
+        dateOfBirth:
+          type: string
+          format: date
+          description: '`YYYY-MM-DD`. Compared exactly; there is nothing to settle.'
+        surnamePrefix:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: >-
+            An optional case-insensitive start-of-surname filter. It narrows the
+            date-of-birth, postcode and/or phone-number result set and cannot be
+            used as a search on its own.
+
+    ReferralSearchResponse:
+      type: object
+      required: [count, results]
+      properties:
+        count:
+          type: integer
+          description: >-
+            How many referrals matched, **uncapped**. `results` holds at most
+            50, so `count > results.length` means there are more and there is no
+            paging to fetch them — narrow the search instead.
+        results:
+          type: array
+          items: { $ref: '#/components/schemas/ReferralSearchResult' }
+
+    ReferralSearchResult:
+      type: object
+      description: >-
+        The administrator's referral-search working row: the identifiers, the
+        referral context, and the dynamic answers whole. Not the date of birth,
+        the address, the review comment, the referrer email or the referrer
+        phone.
+      required:
+        [
+          referralId,
+          refereeFirstName,
+          refereeSurname,
+          refereePostcode,
+          refereePhone,
+          sessionDate,
+          status,
+          reasonId,
+          referrerName,
+          answers,
+        ]
+      properties:
+        referralId:
+          type: string
+          format: uuid
+          description: 'Open it with `GET /referrals/{id}` for the full authorised view.'
+        refereeFirstName: { type: [string, 'null'] }
+        refereeSurname: { type: [string, 'null'] }
+        refereePostcode: { type: [string, 'null'] }
+        refereePhone: { type: [string, 'null'] }
+        sessionDate: { type: string, format: date }
+        status:
+          type: string
+          enum: [pending_review, active, reviewed, rejected, cancelled]
+          description: >-
+            Cancelled and rejected referrals are searchable and returned. "We
+            turned that one away in March" is what the caller is ringing about.
+        reasonId:
+          type: string
+          format: uuid
+          description: >-
+            The main cause of crisis, and a fixed column rather than an answer.
+            Resolve it through the admin referral-reasons lookup, including
+            retired reasons. Never null — it is `NOT NULL` on the table and
+            survives the purge.
+        referrerName: { type: [string, 'null'] }
+        answers:
+          type: object
+          additionalProperties: true
+          description: >-
+            The referral's dynamic answers, whole and unfiltered, exactly as the
+            listener sheet and a parcel hand them over. **The secondary cause of
+            crisis and the additional crisis detail are in here**, under keys the
+            referral form owns — the server holds no form definition, does not
+            know which keys they are and will not guess. Extract them yourself,
+            the same arrangement as *Cause Details* elsewhere.
 
     FuelHelpHousehold:
       type: object
@@ -3765,10 +4010,8 @@ components:
           format: uuid
           description: >-
             The referral, not the parcel — the parcel does not exist yet. Get it
-            from `GET /referrals?sessionId=`, which also carries the derived
-            operational `adults`, `children` and `answers` your rules evaluate
-            against. `adults` is teenagers plus 18+ adults; `children` is ages
-            4-11; infants are ignored.
+            from `GET /referrals?sessionId=`, which also carries the `adults`,
+            `children` and `answers` your rules evaluate against.
 
             **It must be a referral on this session.** One that is not refuses
             the whole request with a `422` and
@@ -3860,17 +4103,9 @@ components:
         isDelivery:
           type: boolean
           description: Chooses delivery attendance labels. Address and phone stay out of this response.
-        adults:
-          type: integer
-          description: >-
-            The **derived** count (`teenagers12To17 + adults18Plus`), snapshot
-            at generation. The referral's four age bands are not on a parcel:
-            what a picker needs is the household size the parcel was chosen for.
-        children:
-          { type: integer, description: 'Derived (`children4To11`), snapshot at generation.' }
-        householdSize:
-          type: integer
-          description: '`adults + children`. Infants are not counted in it.'
+        adults: { type: integer }
+        children: { type: integer }
+        householdSize: { type: integer }
         reviewedAt: { type: [string, 'null'], format: date-time }
         attendance: { type: string, enum: [pending, attended, no_show, cancelled] }
         notes: { type: [string, 'null'] }
@@ -3918,14 +4153,7 @@ components:
         ]
       properties:
         pickNumber: { type: integer }
-        householdSize:
-          type: integer
-          description: >-
-            `adults + children`, the derived operational counts snapshot at
-            generation. **The referral's four age bands are deliberately not on
-            the sheet**, and neither is the infant count: the sheet is carried
-            round a hall and left on tables, and the person picking needs the
-            size the parcel was chosen for, not the shape of the household.
+        householdSize: { type: integer }
         adults: { type: integer }
         children: { type: integer }
         refereeFirstName: { type: [string, 'null'] }

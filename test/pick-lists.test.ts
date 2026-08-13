@@ -15,10 +15,8 @@ import { modelParcels, parcelGrid } from '../src/db/schema/rules.ts';
 import { recurringSessions, sessions } from '../src/db/schema/sessions.ts';
 import { stockItems, stockLedger } from '../src/db/schema/stock.ts';
 import { refreshTokens, users } from '../src/db/schema/users.ts';
-import { allGridKeys, type ParcelGrid } from '../src/modules/rules/engine.ts';
 import { authHeaders, buildTestApp, devLogin, type TestApp } from './helpers/app.ts';
 import {
-  addModelParcel,
   generatePickList,
   gridOf,
   readPickList,
@@ -333,170 +331,6 @@ describe('generating a pick list', () => {
   });
 });
 
-describe('derivation is what the parcel is chosen by', () => {
-  it('a household with one adult and two infants selects the same model parcel as one adult and no children', async () => {
-    const { testApp, token, world: w } = await world();
-
-    // Infants are collected and change nothing operational — see
-    // `age-bands.ts`. Both households derive to one adult, no children.
-    const plain = await submitReferral(testApp, w, {
-      infants: 0,
-      children4To11: 0,
-      teenagers12To17: 0,
-      adults18Plus: 1,
-    });
-    const withInfants = await submitReferral(testApp, w, {
-      infants: 2,
-      children4To11: 0,
-      teenagers12To17: 0,
-      adults18Plus: 1,
-    });
-
-    const { id } = await generatePickList(testApp, token, w.sessionId);
-    const { parcels: rows } = await readPickList(testApp, token, id);
-
-    const plainParcel = rows.find((p) => p.referralId === plain.id);
-    const withInfantsParcel = rows.find((p) => p.referralId === withInfants.id);
-
-    // Asserted on the actual generated lines, not merely on household size.
-    expect(plainParcel?.lines).toEqual([
-      expect.objectContaining({ stockItemId: w.stockItems.Beans, quantity: 2 }),
-    ]);
-    expect(withInfantsParcel?.lines).toEqual(plainParcel?.lines);
-  });
-
-  it('a teenager counts as an operational adult, picking the two-adults cell rather than one-adult-one-child', async () => {
-    const { testApp, token, world: w } = await world();
-
-    // A grid that genuinely distinguishes the two cells this test is about,
-    // rather than one where both happen to fall under the same "small"
-    // parcel — `gridOf`'s default grid would not catch a bug that swapped
-    // the two.
-    const twoAdultsParcel = await addModelParcel(testApp, token, 'Two adults, no children', [
-      { stockItemId: w.stockItems.Cereal, quantity: 7 },
-    ]);
-    expect(twoAdultsParcel.status).toBe(201);
-    const oneAndOneParcel = await addModelParcel(testApp, token, 'One adult, one child', [
-      { stockItemId: w.stockItems.Pasta, quantity: 3 },
-    ]);
-    expect(oneAndOneParcel.status).toBe(201);
-
-    const grid: ParcelGrid = {};
-    for (const key of allGridKeys()) grid[key] = 'Family parcel';
-    grid['2-0'] = 'Two adults, no children';
-    grid['1-1'] = 'One adult, one child';
-    expect((await saveGrid(testApp, token, grid)).status).toBe(200);
-
-    const referral = await submitReferral(testApp, w, {
-      infants: 0,
-      children4To11: 0,
-      teenagers12To17: 1,
-      adults18Plus: 1,
-    });
-
-    const { id } = await generatePickList(testApp, token, w.sessionId);
-    const { parcels: rows } = await readPickList(testApp, token, id);
-    const parcel = rows.find((p) => p.referralId === referral.id);
-
-    // The grid's `2-0` cell, not `1-1`.
-    expect(parcel?.lines).toEqual([
-      expect.objectContaining({ stockItemId: w.stockItems.Cereal, quantity: 7 }),
-    ]);
-
-    // The snapshot the parcel carries is the derived pair too.
-    expect(parcel?.adults).toBe(2);
-    expect(parcel?.children).toBe(0);
-  });
-
-  it('stores the derived adults and children on the parcel snapshot, not the raw bands', async () => {
-    const { testApp, token, world: w } = await world();
-    await submitReferral(testApp, w, {
-      infants: 3,
-      children4To11: 2,
-      teenagers12To17: 1,
-      adults18Plus: 1,
-    });
-
-    const { id } = await generatePickList(testApp, token, w.sessionId);
-    const { parcels: rows } = await readPickList(testApp, token, id);
-
-    // adults = teenagers (1) + 18+ (1) = 2; children = 4-11 (2). Infants (3)
-    // are nowhere in the snapshot.
-    expect(rows[0]?.adults).toBe(2);
-    expect(rows[0]?.children).toBe(2);
-  });
-});
-
-describe('migration 0023 preserves grid behaviour for a backfilled household', () => {
-  // Migration `0023` backfills every pre-existing referral as
-  // `{ infants: 0, teenagers12To17: 0, children4To11: <old children>,
-  // adults18Plus: <old adults> }`. `test/setup.ts` applies every migration to
-  // a fresh database before each test file runs, so there is no row left in
-  // this database that predates 0023 — the backfill has already run over
-  // zero rows, and there is nothing pre-migration to read back. What can be
-  // tested instead is the *property* the backfill exists to preserve: a
-  // referral whose bands are in exactly that backfilled shape must resolve
-  // through the grid to the same cell, clamp and all, that the old
-  // `{ adults, children }` pair resolved to before bands existed.
-
-  it('resolves an ordinary backfilled household to the same grid cell as its old adults/children pair', async () => {
-    const { testApp, token, world: w } = await world();
-
-    const referral = await submitReferral(testApp, w, {
-      infants: 0,
-      teenagers12To17: 0,
-      children4To11: 1,
-      adults18Plus: 3,
-    });
-
-    const { id } = await generatePickList(testApp, token, w.sessionId);
-    const { parcels: rows } = await readPickList(testApp, token, id);
-    const parcel = rows.find((p) => p.referralId === referral.id);
-
-    // Old household: 3 adults, 1 child — more than 2 people, so `gridOf`
-    // resolves it to the Family parcel.
-    expect(parcel?.lines).toHaveLength(3);
-    expect(parcel?.adults).toBe(3);
-    expect(parcel?.children).toBe(1);
-  });
-
-  it('clamps a backfilled household beyond the grid into the same 5x5 corner an old adults:9, children:9 household clamped into', async () => {
-    const { testApp, token, world: w } = await world();
-
-    // A model that only the clamped corner resolves to, so a bug that
-    // clamped to the wrong nearby cell (5-4, 4-5) would be caught rather than
-    // masked by every large household landing on "Family parcel" regardless.
-    const jumbo = await addModelParcel(testApp, token, 'Jumbo parcel', [
-      { stockItemId: w.stockItems.Cereal, quantity: 20 },
-    ]);
-    expect(jumbo.status).toBe(201);
-
-    const grid: ParcelGrid = {};
-    for (const key of allGridKeys()) grid[key] = 'Family parcel';
-    grid['5-5'] = 'Jumbo parcel';
-    expect((await saveGrid(testApp, token, grid)).status).toBe(200);
-
-    const referral = await submitReferral(testApp, w, {
-      infants: 0,
-      teenagers12To17: 0,
-      children4To11: 9,
-      adults18Plus: 9,
-    });
-
-    const { id } = await generatePickList(testApp, token, w.sessionId);
-    const { parcels: rows } = await readPickList(testApp, token, id);
-    const parcel = rows.find((p) => p.referralId === referral.id);
-
-    expect(parcel?.lines).toEqual([
-      expect.objectContaining({ stockItemId: w.stockItems.Cereal, quantity: 20 }),
-    ]);
-    // The snapshot keeps the true, unclamped derived pair; only the grid
-    // lookup clamps.
-    expect(parcel?.adults).toBe(9);
-    expect(parcel?.children).toBe(9);
-  });
-});
-
 describe('copying the contents', () => {
   it('editing a model parcel does not alter an existing pick list', async () => {
     // This is the whole immutability guarantee: contents are copied at
@@ -564,14 +398,7 @@ describe('copying the contents', () => {
     const amended = await testApp.request(`/api/v1/referrals/${referral.id}`, {
       method: 'PATCH',
       headers: { ...authHeaders(token), 'content-type': 'application/json' },
-      // `adults`/`children` are no longer accepted on a PATCH — the same
-      // operational household (2 adults, 1 child) expressed as bands.
-      body: JSON.stringify({
-        teenagers12To17: 0,
-        adults18Plus: 2,
-        children4To11: 1,
-        infants: 0,
-      }),
+      body: JSON.stringify({ adults: 2, children: 1 }),
     });
     expect(amended.status).toBe(200);
 

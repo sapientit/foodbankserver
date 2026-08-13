@@ -153,8 +153,9 @@ async function getRepeatReferrals(
   testApp: TestApp,
   token: string,
   id: string,
+  query = '',
 ): Promise<{ status: number; body: RepeatReferralListBody }> {
-  const response = await testApp.request(`/api/v1/referrals/${id}/repeat-referrals`, {
+  const response = await testApp.request(`/api/v1/referrals/${id}/repeat-referrals${query}`, {
     headers: authHeaders(token),
   });
   const body: RepeatReferralListBody = await response.json();
@@ -1143,6 +1144,264 @@ describe('the fifty-match cap on the list, and the uncapped count beside it', ()
     expect(detail.body.repeatReferrals?.count).toBe(bulkCount);
     expect(list.body.count).toBe(bulkCount);
     expect(list.body.matches).toHaveLength(REPEAT_REFERRAL_LIST_LIMIT);
+  });
+});
+
+/**
+ * `?excludePostcode=true` — the review screen's `Exclude postcode matches`
+ * checkbox. `INITIAL_SPEC1.txt`, `#Reviewing a referral`; `API.md`, "The
+ * `Exclude postcode matches` checkbox".
+ */
+describe('the Exclude postcode matches checkbox (?excludePostcode)', () => {
+  it('with excludePostcode omitted, still matches on date of birth, postcode and phone all at once', async () => {
+    const { testApp, token, world: w } = await referralWorld(NOW);
+    const shared = {
+      refereeDateOfBirth: '1970-06-15',
+      refereePostcode: 'GU1 4AA',
+      refereePhone: '07700 900111',
+    };
+    await submitReferral(testApp, w, shared, { clientIp: nextClientIp() });
+    const self = await submitReferral(testApp, w, shared, { clientIp: nextClientIp() });
+
+    const list = await getRepeatReferrals(testApp, token, self.id);
+    expect(list.body.matches[0]?.matchedOn).toEqual(['date_of_birth', 'postcode', 'phone']);
+  });
+
+  /**
+   * `repeatReferralsQuerySchema` parses `excludePostcode` as one of the two
+   * literal strings `'true'`/`'false'`, not `z.coerce.boolean()` — coercion
+   * would turn the non-empty string `"false"` into `true`. A postcode-only
+   * match is the fixture that tells the two apart: coerced to `true` it
+   * would vanish, read correctly as `false` it stays.
+   */
+  it('reads ?excludePostcode=false as false, not true — a postcode-only match still shows', async () => {
+    const { testApp, token, world: w } = await referralWorld(NOW);
+    await submitReferral(
+      testApp,
+      w,
+      {
+        refereeDateOfBirth: '1970-06-15',
+        refereePostcode: 'GU1 4AA',
+        refereePhone: '07700 900111',
+      },
+      { clientIp: nextClientIp() },
+    );
+    const self = await submitReferral(
+      testApp,
+      w,
+      {
+        refereeDateOfBirth: '1971-07-16',
+        refereePostcode: 'GU1 4AA',
+        refereePhone: '07700 900222',
+      },
+      { clientIp: nextClientIp() },
+    );
+
+    const list = await getRepeatReferrals(testApp, token, self.id, '?excludePostcode=false');
+    expect(list.body.matches).toHaveLength(1);
+    expect(list.body.matches[0]?.matchedOn).toEqual(['postcode']);
+  });
+
+  it('?excludePostcode=banana is a 400', async () => {
+    const { testApp, token, world: w } = await referralWorld(NOW);
+    const { id } = await submitReferral(testApp, w, {}, { clientIp: nextClientIp() });
+
+    const response = await testApp.request(
+      `/api/v1/referrals/${id}/repeat-referrals?excludePostcode=banana`,
+      { headers: authHeaders(token) },
+    );
+    expect(response.status).toBe(400);
+  });
+
+  it('drops a postcode-only match and recalculates count and mostRecentSessionDate — not just the list — while a phone match stays without postcode in its matchedOn even though the postcodes do in fact agree', async () => {
+    const { testApp, token, world: w } = await referralWorld(NOW);
+    // Later session: matches only on postcode.
+    const laterSessionId = await createSession(testApp, token, '2026-08-20');
+    // Earlier session: matches on phone, and happens to share the postcode too.
+    const earlierSessionId = await createSession(testApp, token, '2026-08-06');
+
+    const postcodeOnly = await submitReferral(
+      testApp,
+      inSession(w, laterSessionId),
+      {
+        refereeDateOfBirth: '1960-02-02',
+        refereePostcode: 'GU5 5EE',
+        refereePhone: '07700 900501',
+      },
+      { clientIp: nextClientIp() },
+    );
+    const phoneMatch = await submitReferral(
+      testApp,
+      inSession(w, earlierSessionId),
+      {
+        refereeDateOfBirth: '1961-03-03',
+        refereePostcode: 'GU5 5EE',
+        refereePhone: '07700 900500',
+      },
+      { clientIp: nextClientIp() },
+    );
+    const self = await submitReferral(
+      testApp,
+      w,
+      {
+        refereeDateOfBirth: '1975-01-01',
+        refereePostcode: 'GU5 5EE',
+        refereePhone: '07700 900500',
+      },
+      { clientIp: nextClientIp() },
+    );
+
+    // Positive control: with the checkbox unticked, both match and the most
+    // recent session date is the later, postcode-only one.
+    const before = await getRepeatReferrals(testApp, token, self.id);
+    expect(before.body.count).toBe(2);
+    expect(before.body.mostRecentSessionDate).toBe('2026-08-20');
+    expect(
+      before.body.matches.find((match) => match.referralId === postcodeOnly.id)?.matchedOn,
+    ).toEqual(['postcode']);
+    expect(
+      before.body.matches.find((match) => match.referralId === phoneMatch.id)?.matchedOn,
+    ).toEqual(['postcode', 'phone']);
+
+    const after = await getRepeatReferrals(testApp, token, self.id, '?excludePostcode=true');
+
+    // The postcode-only match is gone entirely, not merely unlabelled.
+    expect(after.body.matches.map((match) => match.referralId)).toEqual([phoneMatch.id]);
+    // Recalculated, not filtered client-side: had the list simply been
+    // filtered, this would still read 2026-08-20 from the match that no
+    // longer exists.
+    expect(after.body.count).toBe(1);
+    expect(after.body.mostRecentSessionDate).toBe('2026-08-06');
+    // The remaining match still shares a postcode with the referral under
+    // review, but the checkbox takes it out of the evidence reported.
+    expect(after.body.matches[0]?.matchedOn).toEqual(['phone']);
+  });
+
+  it('returns { count: 0, mostRecentSessionDate: null, matches: [] } when the referral under review has no date of birth and no usable phone, only a postcode, and the checkbox is ticked', async () => {
+    const { testApp, token, world: w } = await referralWorld(NOW);
+    await submitReferral(testApp, w, { refereePostcode: 'GU8 8FF' }, { clientIp: nextClientIp() });
+    const self = await submitReferral(
+      testApp,
+      w,
+      { refereePostcode: 'GU8 8FF' },
+      { clientIp: nextClientIp() },
+    );
+
+    // A live submission always requires a date of birth (see
+    // `referrals.schema.ts`), so this state — nothing but a postcode — is
+    // only real after hand-editing, the same as the existing "nothing
+    // matchable" fixture above.
+    await db
+      .update(referrals)
+      .set({ refereeDateOfBirth: null, refereePhone: null, refereePhoneNormalised: null })
+      .where(eq(referrals.id, self.id));
+
+    // Positive control: unticked, the postcode still matches the other referral.
+    const before = await getRepeatReferrals(testApp, token, self.id);
+    expect(before.body.count).toBe(1);
+
+    const after = await getRepeatReferrals(testApp, token, self.id, '?excludePostcode=true');
+    expect(after.body).toEqual({ count: 0, mostRecentSessionDate: null, matches: [] });
+  });
+
+  it('refuses a team lead the list even with the checkbox set', async () => {
+    const { world: w } = await referralWorld(NOW);
+    const lead = buildTestApp({ clock: fixedClock(NOW) });
+    const { accessToken: leadToken } = await devLogin(lead, {
+      email: 'lead@foodbank.org',
+      role: 'team_lead',
+    });
+
+    const response = await lead.request(
+      `/api/v1/referrals/${w.sessionId}/repeat-referrals?excludePostcode=true`,
+      { headers: authHeaders(leadToken) },
+    );
+    expect(response.status).toBe(403);
+  });
+
+  /**
+   * A referral that matches by date of birth alone, seeded directly through
+   * Drizzle for the same reason `seedMatchingReferral` above is: fifty-plus
+   * live submissions against a 5/60s limiter is not what this is testing.
+   */
+  async function seedDobMatchingReferral(
+    world: ReferralWorld,
+    sessionId: string,
+    dateOfBirth: string,
+  ): Promise<string> {
+    const id = crypto.randomUUID();
+    await db.insert(referrals).values({
+      id,
+      sessionId,
+      status: 'active',
+      referredAt: NOW,
+      cancelledAt: null,
+      cancelledReason: null,
+      reviewComment: null,
+      reviewedByUserId: null,
+      referrerOrganisation: 'Exclude Postcode Cap Test Org',
+      authorisedReferrerId: null,
+      adults: 1,
+      children: 0,
+      isDelivery: 0,
+      reasonId: world.reasonId,
+      needsFuelHelp: 0,
+      referrerName: null,
+      referrerEmail: null,
+      referrerPhone: null,
+      refereeFirstName: null,
+      refereeSurname: null,
+      refereeDateOfBirth: dateOfBirth,
+      refereeAddress: null,
+      // Shares a postcode too, so excluding it only removes it from the
+      // matching — the date of birth match must survive on its own.
+      refereePostcode: 'GU9 7ZZ',
+      refereePhone: null,
+      refereePostcodeNormalised: 'GU97ZZ',
+      refereePhoneNormalised: null,
+      answersJson: null,
+      piiPurgedAt: null,
+      createdByUserId: null,
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+    return id;
+  }
+
+  it('still applies the fifty-match cap and the uncapped count when excludePostcode=true', async () => {
+    const { testApp, token, world: w } = await referralWorld(NOW);
+    const bulkCount = REPEAT_REFERRAL_LIST_LIMIT + 5;
+    for (let i = 0; i < bulkCount; i += 1) {
+      await seedDobMatchingReferral(w, w.sessionId, '1955-05-05');
+    }
+    const self = await seedDobMatchingReferral(w, w.sessionId, '1955-05-05');
+
+    const list = await getRepeatReferrals(testApp, token, self, '?excludePostcode=true');
+
+    expect(list.body.matches).toHaveLength(50);
+    expect(list.body.count).toBe(bulkCount);
+    expect(list.body.count).toBeGreaterThan(list.body.matches.length);
+  });
+
+  it('still applies the twelve-month window when excludePostcode=true', async () => {
+    // Same BST-straddling instants as "the twelve-month window, on
+    // referredAt" above, computed by hand and independently of the code
+    // under test.
+    const NOW_STRADDLING_BST = '2026-08-20T23:30:00.000Z';
+    const JUST_INSIDE = '2025-08-20T23:30:00.000Z';
+    const JUST_OUTSIDE = '2025-08-20T23:29:00.000Z';
+
+    const { testApp, token, world: w } = await referralWorld(NOW_STRADDLING_BST);
+
+    const inside = await seedDobMatchingReferral(w, w.sessionId, '1944-04-04');
+    const outside = await seedDobMatchingReferral(w, w.sessionId, '1944-04-04');
+    const self = await seedDobMatchingReferral(w, w.sessionId, '1944-04-04');
+
+    await db.update(referrals).set({ referredAt: JUST_INSIDE }).where(eq(referrals.id, inside));
+    await db.update(referrals).set({ referredAt: JUST_OUTSIDE }).where(eq(referrals.id, outside));
+
+    const list = await getRepeatReferrals(testApp, token, self, '?excludePostcode=true');
+    expect(list.body.matches.map((match) => match.referralId)).toEqual([inside]);
   });
 });
 
