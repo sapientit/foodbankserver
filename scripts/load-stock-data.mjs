@@ -6,20 +6,46 @@
 // property that really matters is that running it twice is the same as running
 // it once.
 //
+// **The spreadsheet is not the source of truth, and this script is not how the
+// charity maintains its stock list.** The maintenance screen is both — that is
+// what `INITIAL_SPEC1.txt` means by the stock item list being administrator
+// only, and new items are created there. This loader has two jobs and no
+// others: getting the list in at go-live, and later bringing a test system back
+// into line with live. Do not grow it into a synchroniser.
+//
 // ## What it will and will not do
 //
-// **It never deletes anything.** Stock items and model parcels present in the
-// system but absent from the CSV are left exactly alone, because the CSV is one
-// person's working spreadsheet and the system may hold things it does not know
-// about. What it does replace, on a row it recognises, is the shelf, the
-// category, the description and the parcel quantities — those are the columns
-// the spreadsheet is authoritative for.
+// **It stops rather than diverge quietly.** Before it writes anything, it looks
+// the other way round — at what the system holds and the CSV does not name —
+// and an active stock item or a model parcel found that way halts the load. The
+// check is cheap, because both lists have to be fetched regardless, and it is
+// there for one specific accident: a name corrected in the spreadsheet reads as
+// an item the system has never heard of, so loading it would quietly create a
+// duplicate. Stopping turns that into a question.
+//
+// **`--force` is a normal answer, not an escape hatch.** Because the
+// maintenance screen owns the list, a system legitimately holding items this
+// CSV has never carried is the expected state after go-live, and a test system
+// behind live will differ in whole handfuls. `--force` says so and loads
+// anyway. What it must not become is the habit that gets typed without reading
+// the list above it, which is why it is not the default.
+//
+// Retired items are not a difference. An item taken out of use on the
+// maintenance screen and left off the spreadsheet is two people agreeing.
+//
+// **It never deletes anything**, forced or not. Retiring an item stays a job
+// for the maintenance screen, where a human can see what a pick list is about
+// to lose. What the loader does replace, on a row it recognises, is the shelf,
+// the category, the description and the parcel quantities — those are the
+// columns the spreadsheet is authoritative for.
 //
 // **A name is an identity, not a label.** Items and parcels are matched by
 // name, the same way the API's own uniqueness works. So correcting a spelling
-// in the CSV does not rename anything: it adds a second item under the new
-// name and leaves the old one behind, to be retired by hand. Get the names
-// right before the first load; everything else is safe to iterate on.
+// in the CSV cannot rename anything: it would add a second item under the new
+// name and leave the old one behind as a duplicate. That is what the check
+// above is really guarding — the orphaned old name is the evidence a rename
+// happened, and it is worth far more before the duplicate exists than after,
+// because afterwards both names look equally deliberate.
 //
 // **A model parcel's contents are replaced whole.** Clearing a cell in the
 // spreadsheet takes that item out of that parcel on the next run. Only the
@@ -43,6 +69,9 @@ Load stock items and model parcels from a CSV.
   --file <path>       CSV to read. Default: stockitems.csv
   --base-url <url>    Server to load into. Default: http://127.0.0.1:8787
   --dry-run           Report what would change and write nothing.
+  --force             Load even though the system holds active stock items or
+                      model parcels this CSV does not name. Without it, that
+                      stops the load before anything is written.
   --help
 
 The CSV's first four columns are the stock item: name, shelf, category,
@@ -55,12 +84,18 @@ const COLUMN = { name: 0, shelf: 1, category: 2, description: 3 };
 const FIRST_PARCEL_COLUMN = 5;
 
 function parseArgs(argv) {
-  const args = { file: 'stockitems.csv', baseUrl: 'http://127.0.0.1:8787', dryRun: false };
+  const args = {
+    file: 'stockitems.csv',
+    baseUrl: 'http://127.0.0.1:8787',
+    dryRun: false,
+    force: false,
+  };
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--help' || arg === '-h') return { help: true };
     else if (arg === '--dry-run') args.dryRun = true;
+    else if (arg === '--force') args.force = true;
     else if (arg === '--email') args.email = argv[(i += 1)];
     else if (arg === '--file') args.file = argv[(i += 1)];
     else if (arg === '--base-url') args.baseUrl = argv[(i += 1)].replace(/\/$/, '');
@@ -259,10 +294,70 @@ async function signIn(baseUrl, email) {
   return accessToken;
 }
 
+// ---------------------------------------------------------- the divergence --
+
+/**
+ * What the system holds that this CSV never mentions.
+ *
+ * Inactive stock items are skipped: an item retired on the maintenance screen
+ * and left off the spreadsheet is agreement, not divergence. Model parcels have
+ * no such flag, so every one that exists counts.
+ */
+function findOrphans({ existingItems, existingParcels, items, parcelColumns }) {
+  const namedItems = new Set(items.map((item) => key(item.name)));
+  const namedParcels = new Set(parcelColumns.map((parcel) => key(parcel.name)));
+
+  return {
+    items: existingItems.filter((item) => item.isActive && !namedItems.has(key(item.name))),
+    parcels: existingParcels.filter((parcel) => !namedParcels.has(key(parcel.name))),
+  };
+}
+
+/**
+ * Reports the difference, and stops unless it was asked for.
+ *
+ * A dry run reports and carries on. Refusing there would hide the rest of the
+ * comparison behind the first problem, and the point of a dry run is to see
+ * everything at once before touching anything.
+ */
+function checkOrphans(orphans, { force, dryRun }) {
+  if (orphans.items.length === 0 && orphans.parcels.length === 0) return;
+
+  console.log('In the system, not in the CSV:');
+  for (const item of orphans.items) {
+    console.log(`  ? ${item.name}  [${item.category}, ${item.shelfNumber}]`);
+  }
+  for (const parcel of orphans.parcels) {
+    console.log(`  ? ${parcel.name}  (model parcel, ${parcel.contents.length} items)`);
+  }
+  console.log('');
+
+  if (force) {
+    console.log('Loading anyway: --force was given. Nothing above will be changed or removed.\n');
+    return;
+  }
+
+  if (dryRun) {
+    console.log('A real run would stop here. Correct the CSV, or pass --force.\n');
+    return;
+  }
+
+  fail(
+    `The load was stopped and nothing was written.\n\n` +
+      `  If one of those is a row whose name you corrected in the CSV, loading would\n` +
+      `  have created a second item under the new name and left that one behind as a\n` +
+      `  duplicate. Put the old name back, or retire the item on the maintenance\n` +
+      `  screen, then run again.\n\n` +
+      `  Otherwise this is ordinary: the maintenance screen is where the stock list is\n` +
+      `  really kept, so items added there since this CSV was written will show up here,\n` +
+      `  and a test system standing behind live will show up in handfuls. Run again with\n` +
+      `  --force. Nothing listed above is ever deleted either way.`,
+  );
+}
+
 // ------------------------------------------------------------- the loading --
 
-async function loadStockItems(call, items, dryRun) {
-  const { items: existing } = await call('GET', '/stock/items?includeInactive=true&order=shelf');
+async function loadStockItems(call, items, existing, dryRun) {
   const byName = new Map(existing.map((item) => [key(item.name), item]));
   const tally = { created: 0, updated: 0, unchanged: 0 };
   const idsByName = new Map();
@@ -314,8 +409,7 @@ async function loadStockItems(call, items, dryRun) {
   return { tally, idsByName };
 }
 
-async function loadModelParcels(call, items, parcelColumns, idsByName, dryRun) {
-  const { modelParcels: existing } = await call('GET', '/model-parcels');
+async function loadModelParcels(call, items, parcelColumns, existing, idsByName, dryRun) {
   const byName = new Map(existing.map((parcel) => [key(parcel.name), parcel]));
   const tally = { created: 0, updated: 0, unchanged: 0, skipped: 0 };
 
@@ -392,14 +486,36 @@ if (warnings.length > 0) {
 const token = await signIn(args.baseUrl, args.email);
 const call = createClient(args.baseUrl, token);
 
+// Both lists are read before anything is written, so that the check below can
+// refuse a load whole rather than half-way through one.
+const { items: existingItems } = await call('GET', '/stock/items?includeInactive=true&order=shelf');
+const { modelParcels: existingParcels } = await call('GET', '/model-parcels');
+
+checkOrphans(findOrphans({ existingItems, existingParcels, items, parcelColumns }), {
+  force: args.force,
+  dryRun: args.dryRun,
+});
+
 console.log('Stock items');
-const { tally: itemTally, idsByName } = await loadStockItems(call, items, args.dryRun);
+const { tally: itemTally, idsByName } = await loadStockItems(
+  call,
+  items,
+  existingItems,
+  args.dryRun,
+);
 console.log(
   `  ${itemTally.created} created, ${itemTally.updated} updated, ${itemTally.unchanged} unchanged\n`,
 );
 
 console.log('Model parcels');
-const parcelTally = await loadModelParcels(call, items, parcelColumns, idsByName, args.dryRun);
+const parcelTally = await loadModelParcels(
+  call,
+  items,
+  parcelColumns,
+  existingParcels,
+  idsByName,
+  args.dryRun,
+);
 console.log(
   `  ${parcelTally.created} created, ${parcelTally.updated} updated, ` +
     `${parcelTally.unchanged} unchanged, ${parcelTally.skipped} skipped\n`,
