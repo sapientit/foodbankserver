@@ -142,6 +142,11 @@ export interface ReferralSearchCandidate {
   readonly reasonId: string;
   readonly referrerName: string | null;
   /**
+   * `NOT NULL` on the table and outside the PII block, like `reasonId`, so a
+   * purged referral still reports who sent it.
+   */
+  readonly referrerOrganisation: string;
+  /**
    * The dynamic answers blob, unparsed. The mapper turns it into an object;
    * the server never looks inside it. See `toReferralSearchResult`.
    */
@@ -476,6 +481,7 @@ export function createReferralsRepository(db: Database) {
             status: referrals.status,
             reasonId: referrals.reasonId,
             referrerName: referrals.referrerName,
+            referrerOrganisation: referrals.referrerOrganisation,
             answersJson: referrals.answersJson,
           })
           .from(referrals)
@@ -494,6 +500,10 @@ export function createReferralsRepository(db: Database) {
 
     buildInsertReferral(value: NewReferral) {
       return db.insert(referrals).values(value);
+    },
+
+    buildUpdateReferral(id: string, patch: Patch<NewReferral>) {
+      return db.update(referrals).set(patch).where(eq(referrals.id, id));
     },
 
     buildAudit(value: NewAuditEvent) {

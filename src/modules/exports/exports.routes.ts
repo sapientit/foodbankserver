@@ -5,6 +5,7 @@ import { requireAuth, requireRole } from '../../http/middleware/require-auth.ts'
 import type { AppEnv } from '../../http/types.ts';
 import { createReferralsRepository } from '../referrals/referrals.repository.ts';
 import { createReferralsService } from '../referrals/referrals.service.ts';
+import { createPickListsRepository } from '../pick-lists/pick-lists.repository.ts';
 import { createReferrersRepository } from '../referrers/referrers.repository.ts';
 import { createReferrersService } from '../referrers/referrers.service.ts';
 import { createSessionsRepository } from '../sessions/sessions.repository.ts';
@@ -105,6 +106,7 @@ function serviceFor(c: Context<AppEnv>) {
       sessions: createSessionsRepository(db),
       referrers,
       referrersService,
+      pickLists: createPickListsRepository(db),
     }),
     referrersService,
     clock,

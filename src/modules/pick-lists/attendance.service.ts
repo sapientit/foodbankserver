@@ -23,6 +23,12 @@ export interface AttendanceResult {
   readonly alreadyRecorded: boolean;
 }
 
+/**
+ * Raised both by the up-front check and by a cancellation that lands mid-flight.
+ * One message, because from the caller's side they are the same thing happening.
+ */
+const CANCELLED_HOUSEHOLD = 'That household has cancelled';
+
 /** The unique index that makes issuing stock exactly-once. */
 const PARCEL_GUARD = [
   'stock_ledger.parcel_id',
@@ -77,6 +83,19 @@ export function createAttendanceService(deps: AttendanceDeps) {
       // a conflict when someone taps twice.
       return { parcel, stockMoved: false, alreadyRecorded: true };
     }
+    // A cancelled household is not attending: flipping the snapshot back to
+    // `attended` would issue its lines, taking stock off the shelves for
+    // somebody the charity already knows is not coming, and reinstating is not
+    // a thing a referral can do.
+    //
+    // **This check alone is not the guarantee** — it is a read, and the write
+    // is three round trips away. `buildSetAttendance` and `buildParcelIssue`
+    // both carry the condition, which is what covers a cancellation landing
+    // inside that window. This one exists to refuse the ordinary case up front,
+    // before any of that work.
+    if (parcel.attendance === 'cancelled') {
+      throw new ConflictError(CANCELLED_HOUSEHOLD, { details: { parcelId } });
+    }
     if (parcel.reviewedAt === null) {
       throw new ConflictError('Review this pick list before recording attendance');
     }
@@ -102,10 +121,11 @@ export function createAttendanceService(deps: AttendanceDeps) {
     // not there is a no-op, so this is the same statement whether the outcome
     // is being recorded for the first time or taken back.
     if (attendance === 'no_show') {
-      await db.$client.batch([
+      const results = await db.$client.batch([
         repository.buildDeleteParcelIssue(parcelId),
         repository.buildSetAttendance({ parcelId, attendance, actorUserId: actor.userId, at: now }),
       ]);
+      assertNotCancelledUnderneath(results[1], parcelId);
 
       logger.info('recorded attendance', {
         parcelId,
@@ -132,7 +152,7 @@ export function createAttendanceService(deps: AttendanceDeps) {
     }
 
     try {
-      await db.$client.batch([
+      const results = await db.$client.batch([
         repository.buildParcelIssue({
           parcelId,
           sessionId: pickList.sessionId,
@@ -142,6 +162,10 @@ export function createAttendanceService(deps: AttendanceDeps) {
         }),
         repository.buildSetAttendance({ parcelId, attendance, actorUserId: actor.userId, at: now }),
       ]);
+      // Both statements carry the same `<> 'cancelled'` condition, so a zero
+      // here means neither ran: no ledger rows were written, and this request
+      // must not report that stock moved.
+      assertNotCancelledUnderneath(results[1], parcelId);
     } catch (error) {
       if (isUniqueViolation(error, ...PARCEL_GUARD)) {
         // This parcel has already been issued. Whether that was this request
@@ -169,9 +193,10 @@ export function createAttendanceService(deps: AttendanceDeps) {
     actor: Actor,
     at: string,
   ): Promise<Parcel> {
-    await db.$client.batch([
+    const results = await db.$client.batch([
       repository.buildSetAttendance({ parcelId, attendance, actorUserId: actor.userId, at }),
     ]);
+    assertNotCancelledUnderneath(results[0], parcelId);
 
     logger.info('recorded attendance without a stock movement', {
       parcelId,
@@ -221,6 +246,19 @@ export function createAttendanceService(deps: AttendanceDeps) {
       'Somebody else recorded this household at the same moment. Check the outcome and try again.',
       { cause, details: { parcelId, currentAttendance: current.attendance } },
     );
+  }
+
+  /**
+   * The referral was cancelled while this request was mid-flight.
+   *
+   * `buildSetAttendance` matched no row, so nothing was written — and because
+   * `buildParcelIssue` carries the same condition, no ledger rows were written
+   * beside it either. Reporting the conflict is all that is left to do.
+   */
+  function assertNotCancelledUnderneath(result: D1Result | undefined, parcelId: string): void {
+    if (result?.meta.changes === 0) {
+      throw new ConflictError(CANCELLED_HOUSEHOLD, { details: { parcelId } });
+    }
   }
 
   async function requireParcel(parcelId: string): Promise<Parcel> {

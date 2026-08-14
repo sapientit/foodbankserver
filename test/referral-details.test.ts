@@ -32,7 +32,8 @@ import {
  * paragraph; `API.md`, "5h. Session referral details".
  *
  * A wider read than the listener sheet (address, postcode, phone, the
- * referrer's name and number) and deliberately open to a team leader, so
+ * referrer's name, organisation and number) and deliberately open to a team
+ * leader, so
  * these tests are as much about the contrast with the listener sheet — what
  * it carries that the listener sheet does not, and what it withholds that
  * the listener sheet is the one place a team leader gets — as about the
@@ -60,6 +61,7 @@ interface ReferralDetailsHouseholdBody {
   readonly refereePostcode: string | null;
   readonly refereePhone: string | null;
   readonly referrerName: string | null;
+  readonly referrerOrganisation: string;
   readonly referrerPhone: string | null;
 }
 
@@ -140,6 +142,14 @@ describe('GET /sessions/{sessionId}/referral-details — role access', () => {
       },
     );
     expect(leadResponse.status).toBe(200);
+
+    // The referrer's organisation is on this list for a team lead as well as
+    // an administrator — the point of it is that whoever is running the
+    // session can see who has rung, and that is the team lead.
+    // `INITIAL_SPEC1.txt`, `#Reviewing a referral`.
+    const leadBody: Partial<ReferralDetailsResponseBody> = await leadResponse.json();
+    expect(leadBody.referrals?.[0]?.referrerOrganisation).toBe('Guildford Borough Council');
+    expect(admin.body.referrals?.[0]?.referrerOrganisation).toBe('Guildford Borough Council');
 
     const fuel = buildTestApp({ clock: fixedClock(NOW) });
     const { accessToken: fuelToken } = await devLogin(fuel, {
@@ -293,7 +303,7 @@ describe('who is included', () => {
 });
 
 describe('a purged household', () => {
-  it('still appears, with nulls rather than being dropped', async () => {
+  it('still appears, with nulls rather than being dropped, and keeps the referrer organisation', async () => {
     const { testApp, token, world } = await adminWorld();
     const { id } = await submitReferral(testApp, world, {}, { clientIp: nextClientIp() });
 
@@ -317,12 +327,16 @@ describe('a purged household', () => {
       refereeAddress: null,
       refereePostcode: null,
       refereePhone: null,
+      // Forgetting a household is not forgetting who referred them: the
+      // organisation is `NOT NULL` and the purge leaves it, so this field
+      // stays a string when everything around it has gone.
+      referrerOrganisation: 'Guildford Borough Council',
     });
   });
 });
 
 describe('the response allowlist', () => {
-  it('carries refereeAddress, refereePostcode, refereePhone, referrerName and referrerPhone, and never carries date of birth, the reason, the answers, the review comment, referrerEmail, referrerOrganisation, or any parcel or line data — asserted on the raw response text', async () => {
+  it('carries refereeAddress, refereePostcode, refereePhone, referrerName, referrerOrganisation and referrerPhone, and never carries date of birth, the reason, the answers, the review comment, referrerEmail, or any parcel or line data — asserted on the raw response text', async () => {
     const testApp = buildTestApp({ clock: fixedClock(NOW) });
     const { accessToken: token } = await devLogin(testApp, { email: 'admin@foodbank.org' });
     const world: PickingWorld = await setUpPickingWorld(testApp, token);
@@ -371,11 +385,13 @@ describe('the response allowlist', () => {
     expect(text).toContain('refereePostcode');
     expect(text).toContain('refereePhone');
     expect(text).toContain('referrerName');
+    expect(text).toContain('referrerOrganisation');
     expect(text).toContain('referrerPhone');
     expect(text).toContain('12 Bramble Cottages'); // the fixture's refereeAddress
     expect(text).toContain('GU1 4AA'); // the fixture's refereePostcode
     expect(text).toContain('07700 900123'); // the fixture's refereePhone
     expect(text).toContain('Jane Fieldsworth'); // referrerName
+    expect(text).toContain(UNKNOWN_REFERRER.referrerOrganisation);
     expect(text).toContain('01483 000111'); // referrerPhone
 
     // Absent on purpose.
@@ -391,8 +407,6 @@ describe('the response allowlist', () => {
       'Confidential referral note',
       UNKNOWN_REFERRER.referrerEmail,
       'referrerEmail',
-      UNKNOWN_REFERRER.referrerOrganisation,
-      'referrerOrganisation',
       'lines',
       'stockItemId',
       'pickListId',

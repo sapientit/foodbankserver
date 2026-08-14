@@ -112,18 +112,26 @@ export interface PreferenceLineInput {
   readonly lines: { stockItemId: string; quantity: number }[];
 }
 
+/** One household's pick-list information, as the client composed it from the form answers. */
+export interface PickListInformationInput {
+  readonly referralId: string;
+  readonly notes: string;
+}
+
 /**
- * Generates or reconciles, with or without preference lines.
+ * Generates or reconciles, with or without preference lines and pick-list
+ * information.
  *
- * With none supplied it POSTs **no body at all**, which is what the picking
- * screen does and what keeps the optional-body path covered by every existing
- * caller.
+ * With neither supplied it POSTs **no body at all**, which is what the
+ * picking screen does and what keeps the optional-body path covered by every
+ * existing caller.
  */
 export async function generatePickList(
   testApp: TestApp,
   token: string,
   sessionId: string,
   preferenceLines?: PreferenceLineInput[],
+  pickListInformation?: PickListInformationInput[],
 ): Promise<{
   status: number;
   id: string;
@@ -133,10 +141,18 @@ export async function generatePickList(
   preferenceLinesDropped: number;
   preferenceReferralsIgnored: number;
 }> {
+  const hasBody = preferenceLines !== undefined || pickListInformation !== undefined;
   const response = await testApp.request(`/api/v1/sessions/${sessionId}/pick-list`, {
     method: 'POST',
-    headers: preferenceLines === undefined ? authHeaders(token) : json(token),
-    ...(preferenceLines === undefined ? {} : { body: JSON.stringify({ preferenceLines }) }),
+    headers: hasBody ? json(token) : authHeaders(token),
+    ...(hasBody
+      ? {
+          body: JSON.stringify({
+            ...(preferenceLines === undefined ? {} : { preferenceLines }),
+            ...(pickListInformation === undefined ? {} : { pickListInformation }),
+          }),
+        }
+      : {}),
   });
   const body: {
     id?: string;
@@ -190,6 +206,8 @@ export async function readPickList(testApp: TestApp, token: string, pickListId: 
       pickNumber: number;
       adults: number;
       children: number;
+      notes: string | null;
+      attendance: string;
       lines: {
         stockItemId: string;
         name: string;

@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { fixedClock } from '../src/core/clock.ts';
 import { createDatabase } from '../src/db/client.ts';
 import { parcelLines, parcels, pickLists } from '../src/db/schema/pick-lists.ts';
+import { createPickListsRepository } from '../src/modules/pick-lists/pick-lists.repository.ts';
 import { auditEvents, referrals } from '../src/db/schema/referrals.ts';
 import { authorisedReferrers, referralReasons } from '../src/db/schema/referrers.ts';
 import { modelParcels, parcelGrid } from '../src/db/schema/rules.ts';
@@ -202,6 +203,64 @@ describe('recording attendance', () => {
         createdAt: now,
       }),
     ).rejects.toThrow();
+  });
+
+  it('issues nothing when the household is cancelled between the read and the write', async () => {
+    // The service checks `attendance === 'cancelled'` before it writes, but
+    // that read is three round trips from the batch, and an admin cancelling
+    // inside that window used to be overwritten back to `attended` — with the
+    // stock gone. So this drives the two statements directly, exactly as
+    // `record` composes them, against a parcel cancelled after the read: the
+    // condition lives on the statements, not in the service, and this is what
+    // proves it.
+    const { testApp, token, parcelId, world: w } = await oneParcel();
+    const repository = createPickListsRepository(db);
+    const lines = await repository.listLinesFor(parcelId);
+    expect(lines.length).toBeGreaterThan(0);
+
+    // The cancellation lands first — as `buildCancelParcelsFor` would leave it.
+    await db.update(parcels).set({ attendance: 'cancelled' }).where(eq(parcels.id, parcelId));
+
+    const results = await db.$client.batch([
+      repository.buildParcelIssue({
+        parcelId,
+        sessionId: w.sessionId,
+        actorUserId: null,
+        occurredAt: NOW,
+        lines,
+      }),
+      repository.buildSetAttendance({
+        parcelId,
+        attendance: 'attended',
+        actorUserId: null,
+        at: NOW,
+      }),
+    ]);
+
+    // Neither statement ran: the attendance stands at cancelled and not one
+    // bean came off the shelf.
+    expect(results[1]?.meta.changes).toBe(0);
+    expect(
+      await db.select().from(stockLedger).where(eq(stockLedger.movementType, 'parcel_issued')),
+    ).toHaveLength(0);
+    expect((await levels(testApp, token)).Beans).toBe(100);
+
+    const [row] = await db.select().from(parcels).where(eq(parcels.id, parcelId));
+    expect(row?.attendance).toBe('cancelled');
+  });
+
+  it('tells the caller when the household was cancelled mid-request', async () => {
+    // The same race through the route, so the service reports it rather than
+    // quietly succeeding on a write that did nothing.
+    const { testApp, token, parcelId } = await oneParcel();
+    await db.update(parcels).set({ attendance: 'cancelled' }).where(eq(parcels.id, parcelId));
+
+    const response = await markAttendance(testApp, token, parcelId, 'attended');
+
+    expect(response.status).toBe(409);
+    expect(
+      await db.select().from(stockLedger).where(eq(stockLedger.movementType, 'parcel_issued')),
+    ).toHaveLength(0);
   });
 
   it('survives being submitted five times', async () => {

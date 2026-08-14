@@ -864,6 +864,32 @@ describe('the printed sheet', () => {
     expect(text).not.toContain('no pork');
     expect(text).not.toContain('two cats');
   });
+
+  it('carries the saved pick-list note, but still never the answers or the reason for referral', async () => {
+    const { testApp, token, world: w } = await world();
+    const referral = await submitReferral(testApp, w, {
+      adults: 1,
+      children: 0,
+      answers: { Dietary: 'no pork', Pets: 'two cats' },
+    });
+    const { id } = await generatePickList(testApp, token, w.sessionId, undefined, [
+      { referralId: referral.id, notes: 'Allergies: 2 people who are vegan.' },
+    ]);
+    await reviewEveryParcel(testApp, token, id);
+
+    const response = await testApp.request(`/api/v1/pick-lists/${id}/print`, {
+      headers: authHeaders(token),
+    });
+    const text = await response.text();
+    const body = JSON.parse(text) as { parcels: { notes: string | null }[] };
+
+    expect(body.parcels[0]?.notes).toBe('Allergies: 2 people who are vegan.');
+    expect(text).not.toContain('answers');
+    expect(text).not.toContain('no pork');
+    expect(text).not.toContain('two cats');
+    expect(text).not.toContain('reasonId');
+    expect(text).not.toContain(w.reasonId);
+  });
 });
 
 describe('preferences on the pick-list maintenance screen', () => {
@@ -1344,6 +1370,329 @@ describe('preference lines at generation', () => {
   });
 });
 
+describe('pick-list information at generation', () => {
+  it('writes the annotation onto a parcel this call creates', async () => {
+    const { testApp, token, world: w } = await world();
+    const referral = await submitReferral(testApp, w, { adults: 1, children: 0 });
+
+    const result = await generatePickList(testApp, token, w.sessionId, undefined, [
+      {
+        referralId: referral.id,
+        notes: 'Allergies: 2 people who are vegan.\nBeans: Kidney beans please.',
+      },
+    ]);
+    expect(result.status).toBe(200);
+
+    const { parcels: rows } = await readPickList(testApp, token, result.id);
+    expect(rows[0]?.notes).toBe('Allergies: 2 people who are vegan.\nBeans: Kidney beans please.');
+  });
+
+  it('never overwrites a note a team leader has since edited via PATCH, even when reconciliation resends it', async () => {
+    const { testApp, token, world: w } = await world();
+    const referralA = await submitReferral(testApp, w, { adults: 1, children: 0 });
+
+    const original = [{ referralId: referralA.id, notes: 'Original note from the form.' }];
+    const first = await generatePickList(testApp, token, w.sessionId, undefined, original);
+    expect(first.status).toBe(200);
+    expect(first.parcelsCreated).toBe(1);
+
+    const { parcels: firstRows } = await readPickList(testApp, token, first.id);
+    const parcelA = firstRows.find((p) => p.referralId === referralA.id);
+
+    const patch = await testApp.request(`/api/v1/parcels/${parcelA?.id ?? ''}`, {
+      method: 'PATCH',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({ notes: 'Edited by the team leader.' }),
+    });
+    expect(patch.status).toBe(200);
+
+    const referralB = await submitReferral(testApp, w, { adults: 1, children: 0 });
+
+    // Sent again, unchanged, alongside a fresh entry for the newly-arrived
+    // household — the reconciliation the client actually performs.
+    const reconciled = await generatePickList(testApp, token, w.sessionId, undefined, [
+      ...original,
+      { referralId: referralB.id, notes: 'New household note.' },
+    ]);
+    expect(reconciled.status).toBe(200);
+    expect(reconciled.parcelsCreated).toBe(1);
+
+    const { parcels: rows } = await readPickList(testApp, token, first.id);
+    const stillA = rows.find((p) => p.referralId === referralA.id);
+    const nowB = rows.find((p) => p.referralId === referralB.id);
+    expect(stillA?.notes).toBe('Edited by the team leader.');
+    expect(nowB?.notes).toBe('New household note.');
+  });
+
+  it("gives each newly created parcel only its own referral's annotation, and null for one with none", async () => {
+    const { testApp, token, world: w } = await world();
+    const withNote = await submitReferral(testApp, w, { adults: 1, children: 0 });
+    const withoutNote = await submitReferral(testApp, w, { adults: 2, children: 0 });
+
+    const result = await generatePickList(testApp, token, w.sessionId, undefined, [
+      { referralId: withNote.id, notes: 'Only for this household.' },
+    ]);
+    expect(result.status).toBe(200);
+    expect(result.parcelsCreated).toBe(2);
+
+    const { parcels: rows } = await readPickList(testApp, token, result.id);
+    const notedParcel = rows.find((p) => p.referralId === withNote.id);
+    const unnotedParcel = rows.find((p) => p.referralId === withoutNote.id);
+    expect(notedParcel?.notes).toBe('Only for this household.');
+    expect(unnotedParcel?.notes).toBeNull();
+  });
+
+  it('refuses pick-list information naming the same referral twice', async () => {
+    const { testApp, token, world: w } = await world();
+    const referral = await submitReferral(testApp, w, { adults: 1, children: 0 });
+
+    const response = await testApp.request(`/api/v1/sessions/${w.sessionId}/pick-list`, {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({
+        pickListInformation: [
+          { referralId: referral.id, notes: 'First.' },
+          { referralId: referral.id, notes: 'Second.' },
+        ],
+      }),
+    });
+
+    expect(response.status).toBe(400);
+    expect(await db.select().from(pickLists)).toHaveLength(0);
+  });
+
+  it('refuses the whole request and writes nothing when pick-list information names a referral that is not on the session', async () => {
+    const { testApp, token, world: w } = await world();
+    await submitReferral(testApp, w, { adults: 1, children: 0 });
+
+    // A referral submitted to a different session entirely.
+    const otherSession = await testApp.request('/api/v1/sessions', {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sessionDate: '2026-08-18',
+        startTime: '10:00',
+        durationMinutes: 120,
+        location: 'Hall',
+      }),
+    });
+    const { id: otherSessionId }: { id: string } = await otherSession.json();
+    const elsewhere = await submitReferral(testApp, w, {
+      adults: 1,
+      children: 0,
+      sessionId: otherSessionId,
+    });
+
+    const response = await testApp.request(`/api/v1/sessions/${w.sessionId}/pick-list`, {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({
+        pickListInformation: [{ referralId: elsewhere.id, notes: 'Wrong session.' }],
+      }),
+    });
+
+    expect(response.status).toBe(422);
+    const body: {
+      error: { message: string; details?: { offSessionReferralIds?: string[] } };
+    } = await response.json();
+    expect(body.error.message).toBe(
+      'Pick-list information names referrals that are not on this session',
+    );
+    expect(body.error.details?.offSessionReferralIds).toEqual([elsewhere.id]);
+
+    // Nothing was written: not the pick list, not a parcel for the household
+    // that *was* on the session and would otherwise have been picked.
+    expect(await db.select().from(pickLists)).toHaveLength(0);
+    const check = await testApp.request(`/api/v1/sessions/${w.sessionId}/pick-list`, {
+      headers: authHeaders(token),
+    });
+    expect(check.status).toBe(404);
+  });
+
+  it('ignores pick-list information for a referral that already has a parcel', async () => {
+    const { testApp, token, world: w } = await world();
+    const referral = await submitReferral(testApp, w, { adults: 1, children: 0 });
+    const first = await generatePickList(testApp, token, w.sessionId);
+    expect(first.parcelsCreated).toBe(1);
+
+    const reconciled = await generatePickList(testApp, token, w.sessionId, undefined, [
+      { referralId: referral.id, notes: 'Too late, already picked.' },
+    ]);
+
+    expect(reconciled.status).toBe(200);
+    expect(reconciled.parcelsCreated).toBe(0);
+
+    // The existing parcel's note is untouched, still null.
+    const { parcels: rows } = await readPickList(testApp, token, first.id);
+    expect(rows[0]?.notes).toBeNull();
+  });
+
+  it('ignores pick-list information for a referral that is on the session but cancelled', async () => {
+    const { testApp, token, world: w } = await world();
+    const referral = await submitReferral(testApp, w, { adults: 1, children: 0 });
+    await testApp.request(`/api/v1/referrals/${referral.id}/cancel`, {
+      method: 'POST',
+      headers: authHeaders(token),
+    });
+
+    const result = await generatePickList(testApp, token, w.sessionId, undefined, [
+      { referralId: referral.id, notes: 'Should never be written.' },
+    ]);
+
+    // Not refused: a cancelled referral is still on the session, just not
+    // owed a parcel — an ordinary race, unlike an id from another session.
+    expect(result.status).toBe(200);
+    expect(result.parcelsCreated).toBe(0);
+    expect(await db.select().from(parcels)).toHaveLength(0);
+  });
+
+  it('ignores pick-list information for a referral that is on the session but rejected', async () => {
+    const { testApp, token, world: w } = await world();
+    const referral = await submitReferral(testApp, w, {
+      adults: 1,
+      children: 0,
+      ...UNKNOWN_REFERRER,
+    });
+    expect(referral.referralStatus).toBe('pending_review');
+
+    const reject = await testApp.request(`/api/v1/referrals/${referral.id}/reject`, {
+      method: 'POST',
+      headers: authHeaders(token),
+    });
+    expect(reject.status).toBe(200);
+
+    const result = await generatePickList(testApp, token, w.sessionId, undefined, [
+      { referralId: referral.id, notes: 'Should never be written.' },
+    ]);
+
+    expect(result.status).toBe(200);
+    expect(result.parcelsCreated).toBe(0);
+    expect(await db.select().from(parcels)).toHaveLength(0);
+  });
+
+  it('refuses an empty or whitespace-only note', async () => {
+    const { testApp, token, world: w } = await world();
+    const referral = await submitReferral(testApp, w, { adults: 1, children: 0 });
+
+    for (const notes of ['', '   ']) {
+      const response = await testApp.request(`/api/v1/sessions/${w.sessionId}/pick-list`, {
+        method: 'POST',
+        headers: { ...authHeaders(token), 'content-type': 'application/json' },
+        body: JSON.stringify({ pickListInformation: [{ referralId: referral.id, notes }] }),
+      });
+      expect(response.status, notes).toBe(400);
+    }
+    expect(await db.select().from(pickLists)).toHaveLength(0);
+  });
+
+  it('accepts a note of exactly 1200 characters and refuses one of 1201', async () => {
+    const { testApp, token, world: w } = await world();
+    const referral = await submitReferral(testApp, w, { adults: 1, children: 0 });
+    const withinLimit = 'a'.repeat(1200);
+    const overLimit = 'a'.repeat(1201);
+
+    const refused = await testApp.request(`/api/v1/sessions/${w.sessionId}/pick-list`, {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({
+        pickListInformation: [{ referralId: referral.id, notes: overLimit }],
+      }),
+    });
+    expect(refused.status).toBe(400);
+    expect(await db.select().from(pickLists)).toHaveLength(0);
+
+    const accepted = await generatePickList(testApp, token, w.sessionId, undefined, [
+      { referralId: referral.id, notes: withinLimit },
+    ]);
+    expect(accepted.status).toBe(200);
+
+    const { parcels: rows } = await readPickList(testApp, token, accepted.id);
+    expect(rows[0]?.notes).toBe(withinLimit);
+  });
+});
+
+describe('editing a parcel note', () => {
+  it('sets and then clears a parcel note via PATCH', async () => {
+    const { testApp, token, world: w } = await world();
+    await submitReferral(testApp, w, { adults: 1, children: 0 });
+    const { id } = await generatePickList(testApp, token, w.sessionId);
+    const { parcels: rows } = await readPickList(testApp, token, id);
+    const parcelId = rows[0]?.id ?? '';
+
+    const set = await testApp.request(`/api/v1/parcels/${parcelId}`, {
+      method: 'PATCH',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({ notes: 'Handle with care.' }),
+    });
+    expect(set.status).toBe(200);
+    expect(await set.json()).toEqual({ id: parcelId, notes: 'Handle with care.' });
+
+    const afterSet = await readPickList(testApp, token, id);
+    expect(afterSet.parcels[0]?.notes).toBe('Handle with care.');
+
+    const clear = await testApp.request(`/api/v1/parcels/${parcelId}`, {
+      method: 'PATCH',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({ notes: null }),
+    });
+    expect(clear.status).toBe(200);
+    expect(await clear.json()).toEqual({ id: parcelId, notes: null });
+
+    const afterClear = await readPickList(testApp, token, id);
+    expect(afterClear.parcels[0]?.notes).toBeNull();
+  });
+
+  it('refuses to edit a parcel note once the pick list has been confirmed', async () => {
+    const { testApp, token, world: w } = await world();
+    await submitReferral(testApp, w, { adults: 1, children: 0 });
+    const { id } = await generatePickList(testApp, token, w.sessionId);
+    const { parcels: rows } = await readPickList(testApp, token, id);
+    const parcelId = rows[0]?.id ?? '';
+
+    const confirmed = await testApp.request(`/api/v1/pick-lists/${id}/confirm`, {
+      method: 'POST',
+      headers: authHeaders(token),
+    });
+    expect(confirmed.status).toBe(200);
+
+    const patch = await testApp.request(`/api/v1/parcels/${parcelId}`, {
+      method: 'PATCH',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({ notes: 'Too late.' }),
+    });
+    expect(patch.status).toBe(409);
+
+    // Nothing changed underneath the refusal.
+    const [row] = await db.select().from(parcels).where(eq(parcels.id, parcelId));
+    expect(row?.notes).toBeNull();
+  });
+
+  it('accepts a PATCH note of exactly 1200 characters and refuses one of 1201', async () => {
+    const { testApp, token, world: w } = await world();
+    await submitReferral(testApp, w, { adults: 1, children: 0 });
+    const { id } = await generatePickList(testApp, token, w.sessionId);
+    const { parcels: rows } = await readPickList(testApp, token, id);
+    const parcelId = rows[0]?.id ?? '';
+    const withinLimit = 'b'.repeat(1200);
+    const overLimit = 'b'.repeat(1201);
+
+    const refused = await testApp.request(`/api/v1/parcels/${parcelId}`, {
+      method: 'PATCH',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({ notes: overLimit }),
+    });
+    expect(refused.status).toBe(400);
+
+    const accepted = await testApp.request(`/api/v1/parcels/${parcelId}`, {
+      method: 'PATCH',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({ notes: withinLimit }),
+    });
+    expect(accepted.status).toBe(200);
+    expect(await accepted.json()).toEqual({ id: parcelId, notes: withinLimit });
+  });
+});
+
 describe('the D1 query budget', () => {
   it('generates for twenty-five referrals within the free-tier query budget', async () => {
     // The free plan allows 50 queries per Worker invocation. Generation must
@@ -1425,5 +1774,251 @@ describe('the D1 query budget', () => {
         .filter((line) => line.stockItemId === w.stockItems.Beans)
         .every((line) => line.quantity === 5),
     ).toBe(true);
+  });
+});
+
+describe('cancelling a referral after its parcel has been picked', () => {
+  /**
+   * One household that stays active and three that get cancelled after
+   * generation, all four already carrying a parcel — the shape a real
+   * session produces once a team leader starts trimming no-shows before the
+   * day even starts.
+   */
+  async function buildCancelledScenario() {
+    const { testApp, token, world: w } = await world();
+    const active = await submitReferral(testApp, w, { adults: 1, children: 0 });
+    const cancelled: Awaited<ReturnType<typeof submitReferral>>[] = [];
+    for (let i = 0; i < 3; i++) {
+      cancelled.push(await submitReferral(testApp, w, { adults: 2, children: 0 }));
+    }
+
+    const generated = await generatePickList(testApp, token, w.sessionId, undefined, [
+      { referralId: active.id, notes: 'Keep me.' },
+      ...cancelled.map((referral, i) => ({
+        referralId: referral.id,
+        notes: `Cancel me ${String(i)}.`,
+      })),
+    ]);
+    expect(generated.parcelsCreated).toBe(4);
+
+    const before = await readPickList(testApp, token, generated.id);
+
+    for (const referral of cancelled) {
+      const response = await testApp.request(`/api/v1/referrals/${referral.id}/cancel`, {
+        method: 'POST',
+        headers: authHeaders(token),
+      });
+      expect(response.status).toBe(200);
+    }
+
+    return { testApp, token, w, active, cancelled, pickListId: generated.id, before };
+  }
+
+  it("marks each cancelled household's parcel cancelled, leaves its contents and pick number untouched, and leaves the active one pending", async () => {
+    const { testApp, token, active, pickListId, before } = await buildCancelledScenario();
+
+    const after = await readPickList(testApp, token, pickListId);
+    expect(after.parcels).toHaveLength(4);
+
+    // Nothing about the row itself moved: same id, same pick number, same
+    // lines, same note — cancelling flips a flag, it does not rewrite the
+    // snapshot.
+    for (const beforeParcel of before.parcels) {
+      const afterParcel = after.parcels.find((p) => p.id === beforeParcel.id);
+      expect(afterParcel?.pickNumber).toBe(beforeParcel.pickNumber);
+      expect(afterParcel?.lines).toEqual(beforeParcel.lines);
+      expect(afterParcel?.notes).toBe(beforeParcel.notes);
+    }
+
+    const activeParcel = after.parcels.find((p) => p.referralId === active.id);
+    expect(activeParcel?.attendance).toBe('pending');
+
+    const cancelledParcels = after.parcels.filter((p) => p.referralId !== active.id);
+    expect(cancelledParcels).toHaveLength(3);
+    expect(cancelledParcels.every((p) => p.attendance === 'cancelled')).toBe(true);
+  });
+
+  /**
+   * The session-scoped route specifically, not `GET /pick-lists/{id}` which
+   * the helper above uses. It is the one the run-session screen calls, and it
+   * resolves referrals separately — a cancelled household must still come back
+   * with the name its sheet was picked against, or the screen loses the only
+   * thing that says whose pick number is being stood down.
+   */
+  it('returns the cancelled parcels, named, from the session pick-list route', async () => {
+    const { testApp, token, w, active } = await buildCancelledScenario();
+
+    const response = await testApp.request(`/api/v1/sessions/${w.sessionId}/pick-list`, {
+      headers: authHeaders(token),
+    });
+    expect(response.status).toBe(200);
+
+    const body: {
+      parcels: { referralId: string; attendance: string; refereeSurname: string | null }[];
+    } = await response.json();
+
+    expect(body.parcels).toHaveLength(4);
+    const byReferral = new Map(body.parcels.map((parcel) => [parcel.referralId, parcel]));
+    expect(byReferral.get(active.id)?.attendance).toBe('pending');
+
+    for (const parcel of body.parcels.filter((p) => p.referralId !== active.id)) {
+      expect(parcel.attendance).toBe('cancelled');
+      expect(parcel.refereeSurname).not.toBeNull();
+    }
+  });
+
+  it("counts only the active household toward the session's booked total", async () => {
+    const { testApp, token, w } = await buildCancelledScenario();
+
+    const response = await testApp.request(`/api/v1/sessions/${w.sessionId}`, {
+      headers: authHeaders(token),
+    });
+    const body: { booked: number } = await response.json();
+
+    expect(body.booked).toBe(1);
+  });
+
+  it('excludes the cancelled households from referral-details and the listener sheet', async () => {
+    const { testApp, token, w, active } = await buildCancelledScenario();
+
+    const details = await testApp.request(`/api/v1/sessions/${w.sessionId}/referral-details`, {
+      headers: authHeaders(token),
+    });
+    const detailsBody: { referrals: { referralId: string }[] } = await details.json();
+    expect(detailsBody.referrals.map((r) => r.referralId)).toEqual([active.id]);
+
+    const sheet = await testApp.request(`/api/v1/sessions/${w.sessionId}/listener-sheet`, {
+      headers: authHeaders(token),
+    });
+    const sheetBody: { households: { referralId: string }[] } = await sheet.json();
+    expect(sheetBody.households.map((h) => h.referralId)).toEqual([active.id]);
+  });
+
+  it('prints once the active parcel is reviewed, leaving the never-reviewed cancelled parcels off the sheet', async () => {
+    const { testApp, token, active, pickListId } = await buildCancelledScenario();
+    const { parcels: rows } = await readPickList(testApp, token, pickListId);
+    const activeParcel = rows.find((p) => p.referralId === active.id);
+
+    // Before this change, an unreviewed cancelled parcel would have 409'd
+    // both of these.
+    const review = await testApp.request(`/api/v1/parcels/${activeParcel?.id ?? ''}/review`, {
+      method: 'POST',
+      headers: authHeaders(token),
+    });
+    expect(review.status).toBe(200);
+
+    const printed = await testApp.request(`/api/v1/pick-lists/${pickListId}/print`, {
+      headers: authHeaders(token),
+    });
+    expect(printed.status).toBe(200);
+    const body: { parcels: { pickNumber: number }[] } = await printed.json();
+    expect(body.parcels).toHaveLength(1);
+    expect(body.parcels[0]?.pickNumber).toBe(activeParcel?.pickNumber);
+
+    const stamped = await testApp.request(`/api/v1/pick-lists/${pickListId}/print`, {
+      method: 'POST',
+      headers: authHeaders(token),
+    });
+    expect(stamped.status).toBe(200);
+  });
+
+  it('does not block confirming the session once the active household has an outcome', async () => {
+    const { testApp, token, w, active, pickListId } = await buildCancelledScenario();
+    const { parcels: rows } = await readPickList(testApp, token, pickListId);
+    const activeParcel = rows.find((p) => p.referralId === active.id);
+
+    await testApp.request(`/api/v1/parcels/${activeParcel?.id ?? ''}/review`, {
+      method: 'POST',
+      headers: authHeaders(token),
+    });
+    const attendance = await testApp.request(
+      `/api/v1/parcels/${activeParcel?.id ?? ''}/attendance`,
+      {
+        method: 'POST',
+        headers: { ...authHeaders(token), 'content-type': 'application/json' },
+        body: JSON.stringify({ attendance: 'attended' }),
+      },
+    );
+    expect(attendance.status).toBe(200);
+
+    const confirmed = await testApp.request(`/api/v1/sessions/${w.sessionId}/confirm`, {
+      method: 'POST',
+      headers: authHeaders(token),
+    });
+    expect(confirmed.status).toBe(200);
+  });
+
+  it('refuses to record attendance against a cancelled parcel', async () => {
+    const { testApp, token, active, pickListId } = await buildCancelledScenario();
+    const { parcels: rows } = await readPickList(testApp, token, pickListId);
+    const cancelledParcel = rows.find((p) => p.referralId !== active.id);
+
+    const response = await testApp.request(
+      `/api/v1/parcels/${cancelledParcel?.id ?? ''}/attendance`,
+      {
+        method: 'POST',
+        headers: { ...authHeaders(token), 'content-type': 'application/json' },
+        body: JSON.stringify({ attendance: 'attended' }),
+      },
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      error: { message: 'That household has cancelled' },
+    });
+  });
+
+  it("keeps a parcel's recorded 'attended' outcome when its referral is cancelled afterwards", async () => {
+    // The pending guard on `buildCancelParcelsFor`: an outcome already
+    // recorded is left alone, not flipped to cancelled underneath it.
+    const { testApp, token, world: w } = await world();
+    const referral = await submitReferral(testApp, w, { adults: 1, children: 0 });
+    const { id: pickListId } = await generatePickList(testApp, token, w.sessionId);
+    const { parcels: rows } = await readPickList(testApp, token, pickListId);
+    const parcelId = rows[0]?.id ?? '';
+
+    await testApp.request(`/api/v1/parcels/${parcelId}/review`, {
+      method: 'POST',
+      headers: authHeaders(token),
+    });
+    const attendance = await testApp.request(`/api/v1/parcels/${parcelId}/attendance`, {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({ attendance: 'attended' }),
+    });
+    expect(attendance.status).toBe(200);
+
+    // Cancelling still requires the session be open, so this only works
+    // while it is unconfirmed — which it still is, since only attendance was
+    // recorded above, not confirmation.
+    const cancelled = await testApp.request(`/api/v1/referrals/${referral.id}/cancel`, {
+      method: 'POST',
+      headers: authHeaders(token),
+    });
+    expect(cancelled.status).toBe(200);
+
+    const after = await readPickList(testApp, token, pickListId);
+    expect(after.parcels[0]?.attendance).toBe('attended');
+  });
+
+  it('cancelling twice leaves the parcel cancelled and does not error', async () => {
+    const { testApp, token, world: w } = await world();
+    const referral = await submitReferral(testApp, w, { adults: 1, children: 0 });
+    const { id: pickListId } = await generatePickList(testApp, token, w.sessionId);
+
+    const first = await testApp.request(`/api/v1/referrals/${referral.id}/cancel`, {
+      method: 'POST',
+      headers: authHeaders(token),
+    });
+    expect(first.status).toBe(200);
+
+    const second = await testApp.request(`/api/v1/referrals/${referral.id}/cancel`, {
+      method: 'POST',
+      headers: authHeaders(token),
+    });
+    expect(second.status).toBe(200);
+
+    const { parcels: rows } = await readPickList(testApp, token, pickListId);
+    expect(rows[0]?.attendance).toBe('cancelled');
   });
 });

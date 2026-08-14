@@ -4,6 +4,7 @@ import { redactQueryParams, toSafeError } from '../src/core/log.ts';
 import { createDatabase } from '../src/db/client.ts';
 import { isAnyUniqueViolation, isUniqueViolation } from '../src/db/unique-violation.ts';
 import { authorisedReferrers } from '../src/db/schema/referrers.ts';
+import { createPickListsRepository } from '../src/modules/pick-lists/pick-lists.repository.ts';
 
 const db = createDatabase(env.DB);
 
@@ -125,5 +126,52 @@ describe('error redaction', () => {
       name: 'UnknownError',
       message: 'plain string',
     });
+  });
+});
+
+describe('a raw D1 statement failure', () => {
+  /**
+   * The bulk parcel insert runs through `db.$client` rather than a Drizzle
+   * query builder, and since pick-list information landed it carries free text
+   * about a household's allergies. Everything above pins the **Drizzle** path,
+   * where the wrapper embeds the bound row after `params:` and
+   * `redactQueryParams` strips it. D1's own driver is a different code path
+   * whose shape nobody had looked at — which is the exact mistake the rest of
+   * this file exists to guard against.
+   */
+  it('never carries the bound row, so a parcel note cannot reach a log', async () => {
+    const repository = createPickListsRepository(db);
+    const now = new Date().toISOString();
+    const statement = repository.buildInsertParcels([
+      {
+        id: crypto.randomUUID(),
+        // No such pick list and no such referral, so the insert fails on a
+        // foreign key with the note bound into the statement.
+        pickListId: crypto.randomUUID(),
+        referralId: crypto.randomUUID(),
+        pickNumber: 1,
+        adults: 1,
+        children: 0,
+        notes: 'Allergies: EpiPen in the house',
+        createdAt: now,
+        updatedAt: now,
+      },
+    ]);
+
+    let thrown: unknown;
+    try {
+      await db.$client.batch([statement]);
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    const safe = toSafeError(thrown);
+    const stack = thrown instanceof Error ? (thrown.stack ?? '') : '';
+    const everywhere = `${safe.name} ${safe.message} ${safe.cause ?? ''} ${stack}`;
+
+    expect(everywhere).toContain('FOREIGN KEY constraint failed');
+    expect(everywhere).not.toContain('EpiPen');
+    expect(everywhere).not.toContain('Allergies');
   });
 });

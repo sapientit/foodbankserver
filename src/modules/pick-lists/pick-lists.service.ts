@@ -14,7 +14,7 @@ import {
   type GenerationResult,
 } from './generation.service.ts';
 import type { ParcelWithLines, PickListsRepository } from './pick-lists.repository.ts';
-import type { PreferenceLineSet } from './pick-lists.schema.ts';
+import type { PickListInformationSet, PreferenceLineSet } from './pick-lists.schema.ts';
 
 export interface PickListsServiceDeps extends GenerationDeps {
   readonly repository: PickListsRepository;
@@ -75,8 +75,12 @@ export function createPickListsService(deps: PickListsServiceDeps) {
   async function getOrGenerate(
     sessionId: string,
     actor: Actor,
-    preferenceLines: PreferenceLineSet,
+    input: {
+      preferenceLines: PreferenceLineSet;
+      pickListInformation: PickListInformationSet;
+    },
   ): Promise<GenerationResult> {
+    const { preferenceLines, pickListInformation } = input;
     const existing = await repository.findBySession(sessionId);
     if (existing !== undefined) {
       if (existing.status === 'confirmed') {
@@ -91,10 +95,11 @@ export function createPickListsService(deps: PickListsServiceDeps) {
       }
       return generatePickList(deps, sessionId, actor, {
         preferenceLines,
+        pickListInformation,
         existingPickList: existing,
       });
     }
-    return generatePickList(deps, sessionId, actor, { preferenceLines });
+    return generatePickList(deps, sessionId, actor, { preferenceLines, pickListInformation });
   }
 
   /** Editing is allowed while draft and after printing — but never once confirmed. */
@@ -207,9 +212,17 @@ export function createPickListsService(deps: PickListsServiceDeps) {
    *
    * Reads the same rows the payload is built from rather than counting
    * separately, because the print route has no query to spare.
+   *
+   * **A cancelled parcel is neither printed nor waited for.** Its household is
+   * not coming, so a sheet for it is a bag packed for nobody — and holding the
+   * whole session's printing until somebody reviews a parcel that will never be
+   * picked would be worse still. The row itself stays: it is the record of what
+   * had been prepared, and `GET .../pick-list` still returns it.
    */
   async function listParcelsForPrint(pickListId: string): Promise<ParcelWithLines[]> {
-    const entries = await repository.listParcelsWithLines(pickListId);
+    const entries = (await repository.listParcelsWithLines(pickListId)).filter(
+      (entry) => entry.parcel.attendance !== 'cancelled',
+    );
     if (entries.some((entry) => entry.parcel.reviewedAt === null)) {
       throw new ConflictError(UNREVIEWED_PARCEL);
     }
@@ -228,7 +241,11 @@ export function createPickListsService(deps: PickListsServiceDeps) {
     const pickList = await requireEditable(pickListId);
 
     const parcelRows = await repository.listParcels(pickListId);
-    if (parcelRows.some((parcel) => parcel.reviewedAt === null)) {
+    // Cancelled parcels are excluded for the same reason they are left off the
+    // payload — see `listParcelsForPrint`.
+    if (
+      parcelRows.some((parcel) => parcel.reviewedAt === null && parcel.attendance !== 'cancelled')
+    ) {
       throw new ConflictError(UNREVIEWED_PARCEL);
     }
 

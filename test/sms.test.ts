@@ -13,6 +13,7 @@ import { smsMessages } from '../src/db/schema/sms.ts';
 import { stockItems, stockLedger } from '../src/db/schema/stock.ts';
 import { refreshTokens, users } from '../src/db/schema/users.ts';
 import { authHeaders, buildTestApp, devLogin, type TestApp } from './helpers/app.ts';
+import { generatePickList, setUpPickingWorld } from './helpers/picking-fixtures.ts';
 import {
   setUpReferralWorld,
   submitReferral,
@@ -304,6 +305,34 @@ describe('sending reminders', () => {
     );
 
     expect(response.status).toBe(200);
+  });
+
+  it('does not remind a household whose parcel was already picked before it was cancelled', async () => {
+    // The same exclusion as above, but in the shape a real session produces:
+    // cancelling after generation marks the parcel cancelled rather than
+    // touching the referral row a second way, so this proves the reminder
+    // list still comes from the referral's own status.
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(providerSuccess('prov-1'));
+
+    const testApp = buildSmsTestApp();
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const pickingWorld = await setUpPickingWorld(testApp, accessToken);
+    await submitReferral(testApp, pickingWorld);
+    const { id: toCancel } = await submitReferral(testApp, pickingWorld);
+
+    await generatePickList(testApp, accessToken, pickingWorld.sessionId);
+
+    await testApp.request(`${API_PREFIX}/referrals/${toCancel}/cancel`, {
+      method: 'POST',
+      headers: authHeaders(accessToken),
+    });
+
+    const response = await testApp.request(
+      `${API_PREFIX}/sessions/${pickingWorld.sessionId}/sms-reminders`,
+      { method: 'POST', headers: authHeaders(accessToken) },
+    );
+
+    expect(await response.json()).toMatchObject({ reminded: 1, failed: 0, alreadyReminded: 0 });
   });
 });
 

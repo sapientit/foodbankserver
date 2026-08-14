@@ -94,6 +94,8 @@ interface ReferralSearchResultBody {
   readonly refereePhone: string | null;
   readonly reasonId: string;
   readonly referrerName: string | null;
+  /** Never null: `NOT NULL` on the table and outside the PII block. */
+  readonly referrerOrganisation: string;
 }
 
 interface ReferralSearchResponseBody {
@@ -323,7 +325,7 @@ describe('each identifier finds a referral on its own', () => {
    * back, so searching on it and then reading the whole row is the sharpest
    * place to pin the shape.
    */
-  it('finds by date of birth alone, and a result row carries exactly the ten agreed fields', async () => {
+  it('finds by date of birth alone, and a result row carries exactly the eleven agreed fields', async () => {
     const { testApp, token, world: w } = await referralWorld(NOW);
     const { id } = await submitReferral(
       testApp,
@@ -354,6 +356,7 @@ describe('each identifier finds a referral on its own', () => {
           refereePhone: '07700 900430',
           reasonId: w.reasonId,
           referrerName: 'Jane Fieldsworth',
+          referrerOrganisation: 'Guildford Borough Council',
           // Whole and untouched. `Secondary` is in here as an ordinary answer,
           // not lifted out into a field of its own — the server does not know
           // that key means anything and must not learn.
@@ -361,6 +364,83 @@ describe('each identifier finds a referral on its own', () => {
         },
       ],
     });
+  });
+});
+
+describe('the referrer organisation on a result row', () => {
+  /**
+   * `INITIAL_SPEC1.txt`, `#Searching for a referral`: the organisation is what
+   * an administrator recognises a referral by, because the individual who sent
+   * it changes with who was on shift.
+   *
+   * Seeded with an organisation no other test uses, so the assertion cannot
+   * pass on a fixture default that happened to be right.
+   */
+  it('returns the organisation the referral was submitted with, exactly as typed', async () => {
+    const { testApp, token, world: w } = await referralWorld(NOW);
+    const distinctiveOrganisation = "St Ninian's Parish Pantry (Weekdays)";
+
+    const { id } = await submitReferral(
+      testApp,
+      w,
+      {
+        refereePostcode: 'GU41 6DD',
+        refereeDateOfBirth: '1975-11-30',
+        refereePhone: '07700 900461',
+        referrerOrganisation: distinctiveOrganisation,
+      },
+      { clientIp: nextClientIp() },
+    );
+
+    const response = await search(testApp, token, { postcode: 'GU41 6DD' });
+    expect(response.status).toBe(200);
+    expect(response.body.results.map((row) => row.referralId)).toEqual([id]);
+    expect(response.body.results[0]?.referrerOrganisation).toBe(distinctiveOrganisation);
+  });
+
+  /**
+   * The organisation is free text the referrer typed, so the food bank holds
+   * three spellings of the same council — and the search row shows what was
+   * stored rather than tidying it up. Tidying it up here would be the server
+   * inventing a fact about who referred somebody. See the accept endpoint,
+   * where the administrator types the authorised list's name themselves for
+   * exactly this reason.
+   */
+  it('does not tidy up two spellings of the same organisation into one', async () => {
+    const { testApp, token, world: w } = await referralWorld(NOW);
+
+    await submitReferral(
+      testApp,
+      w,
+      {
+        refereePostcode: 'GU41 7EE',
+        refereeDateOfBirth: '1976-01-15',
+        refereePhone: '07700 900471',
+        refereeSurname: 'Ashdown',
+        referrerOrganisation: 'Guildford BC',
+      },
+      { clientIp: nextClientIp() },
+    );
+    await submitReferral(
+      testApp,
+      w,
+      {
+        refereePostcode: 'GU41 7EE',
+        refereeDateOfBirth: '1977-02-16',
+        refereePhone: '07700 900472',
+        refereeSurname: 'Bellweather',
+        referrerOrganisation: 'guildford borough council',
+      },
+      { clientIp: nextClientIp() },
+    );
+
+    const response = await search(testApp, token, { postcode: 'GU41 7EE' });
+    expect(response.status).toBe(200);
+    expect(
+      response.body.results
+        .map((row) => row.referrerOrganisation)
+        .sort((left, right) => left.localeCompare(right)),
+    ).toEqual(['Guildford BC', 'guildford borough council']);
   });
 });
 
@@ -860,7 +940,8 @@ describe('ordering and the fifty-result cap', () => {
 describe('the response allowlist', () => {
   /**
    * A result row is what an administrator needs to recognise the household on
-   * the phone: name, postcode, phone number, reason, referrer and session date.
+   * the phone: name, postcode, phone number, reason, the referrer's name and
+   * organisation, and the session date.
    * It is deliberately **not** the referral. The address is the field that
    * turns a hostel postcode into a screen of other people's front doors, the
    * date of birth is only ever an input here, and the answers, the review
@@ -923,7 +1004,6 @@ describe('the response allowlist', () => {
       'referrerEmail',
       '01483 000111', // the referrer's own phone number
       'referrerPhone',
-      UNKNOWN_REFERRER.referrerOrganisation,
       'Church Hall', // the session location
       'sessionLocation',
     ]) {
@@ -937,6 +1017,11 @@ describe('the response allowlist', () => {
     expect(text).toContain(distinctivePhone);
     expect(text).toContain(w.reasonId);
     expect(text).toContain('Jane Fieldsworth'); // referrerName
+    // The organisation is on the row; the referrer's email and phone above are
+    // not. Where a referral came from is what this screen is scanned by — how
+    // to contact the person who sent it is a different question, answered by
+    // `GET /referrals/{id}`.
+    expect(text).toContain(UNKNOWN_REFERRER.referrerOrganisation);
 
     // The answers come through whole, and that is deliberate: the secondary
     // cause and the additional crisis detail live in there under keys only the

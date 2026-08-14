@@ -10,7 +10,7 @@ import { createRulesRepository } from '../rules/rules.repository.ts';
 import { createSessionsRepository } from '../sessions/sessions.repository.ts';
 import { createStockRepository } from '../stock/stock.repository.ts';
 import { createPickListsRepository } from './pick-lists.repository.ts';
-import { generatePickListSchema } from './pick-lists.schema.ts';
+import { generatePickListSchema, parcelNotesSchema } from './pick-lists.schema.ts';
 import { createPickListsService } from './pick-lists.service.ts';
 import { createAttendanceService } from './attendance.service.ts';
 import {
@@ -27,8 +27,9 @@ const lineSchema = z.object({
   quantity: z.number().int().min(0).max(1000),
 });
 
+/** `null` clears the note; the limit is the one generation writes under. */
 const notesSchema = z.object({
-  notes: z.string().trim().max(500).nullable(),
+  notes: parcelNotesSchema.nullable(),
 });
 
 const attendanceSchema = z.object({
@@ -50,17 +51,20 @@ export function pickListRoutes(): Hono<AppEnv> {
    * A POST rather than a GET because it creates. The frontend calls this when
    * the picking screen is opened; calling it again is harmless.
    *
-   * The body is optional and carries the preference lines the client's own
-   * rules resolved — it POSTs bare when there are none, which is why this
-   * parses optionally rather than requiring a body.
+   * The body is optional and carries what the client's own rules and form
+   * definition produced — the preference lines it resolved and the pick-list
+   * information it composed. It POSTs bare when there is neither, which is why
+   * this parses optionally rather than requiring a body.
    */
   routes.post('/sessions/:sessionId/pick-list', ...staff, async (c) => {
-    const { preferenceLines } = await parseOptionalJsonBody(c, generatePickListSchema);
-    const result = await serviceFor(c).getOrGenerate(
-      c.req.param('sessionId'),
-      actorOf(c),
-      preferenceLines,
+    const { preferenceLines, pickListInformation } = await parseOptionalJsonBody(
+      c,
+      generatePickListSchema,
     );
+    const result = await serviceFor(c).getOrGenerate(c.req.param('sessionId'), actorOf(c), {
+      preferenceLines,
+      pickListInformation,
+    });
 
     return c.json({
       ...toPickListResponse(result.pickList),

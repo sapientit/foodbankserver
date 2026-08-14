@@ -230,3 +230,93 @@ be added to the spreadsheet extract as four more fixed columns, alongside the de
 the four raw bands?
 
 **A:**
+
+---
+
+## Q32 — Does forgetting a referral also clear its parcel's pick-list information?
+
+`Status: open` · `Raised by: server` · `Blocks: nothing today — the note survives the purge`
+
+Pick-list information is now written onto a parcel at generation, out of the answers the client's
+form marks as belonging on a picking sheet (`INITIAL_SPEC1.txt`, "Picking list"). The spec describes
+what goes in it plainly: "the allergies, what nobody in the house can eat, the preference somebody
+wrote out in their own hand."
+
+**The twelve-month purge does not reach it.** `purgeReferralPii` nulls columns on `referrals` only —
+the name, date of birth, address, postcode, phone, the answers blob and `adminInfo`. It has never
+touched `parcels`, and `parcels.referral_id` has no `ON DELETE` behaviour, so the parcel row outlives
+the anonymised referral indefinitely. A year after a household is forgotten, a parcel row can still
+read "peanut allergy, EpiPen in the house" against a referral with no name left on it.
+
+This is not new in kind — a team leader could always type the same thing into a parcel note by hand —
+but it is newly systematic. Until now generation hard-coded that column to `NULL`; from this change
+on, every household's dietary and allergy answers are copied onto every parcel of every session
+automatically. So the question the charity was never really asked now has to be answered.
+
+What the charity should know before deciding:
+
+- **The reasoning that nulls `adminInfo` applies here unchanged.** `adminInfo` is purged because it
+  is free text describing the household rather than a decision about the referral. A pick-list note
+  is exactly that, and its contents are more sensitive than most of what the purge already clears.
+- **Clearing it costs nothing operational.** By the time a purge runs, the session is a year gone,
+  the food has been handed over and the sheet is long since in a recycling bin. Nothing reads a
+  parcel's note after its session is confirmed.
+- **But it is not free of consequence either.** The parcel is the record that a household was given
+  food and what was in it, and a note is sometimes the only explanation of why a parcel differed
+  from its model — a substitution made because of an allergy. Clearing the note leaves the odd
+  contents with nothing saying why. That may not matter a year later; it is worth saying out loud
+  rather than assuming.
+- **A middle answer exists if the charity wants one:** clear the note and keep the parcel's lines,
+  on the grounds that what was in the bag is a count and why it was in the bag was a person. That is
+  an option, not a recommendation — the server has no basis for choosing between the three.
+
+There is no migration in this either way — `parcels.notes` is already nullable, so purging it is one
+more statement in the update `purgeReferralPii` already runs.
+
+**Question for the charity:** When a referral is forgotten at twelve months, should its parcel's
+pick-list information be cleared along with the referral's own answers? Or is a parcel a record of a
+past occasion rather than of a household, and its note something the food bank means to keep?
+
+**A:**
+
+---
+
+## Q33 — Can a household be cancelled after they have already collected their parcel?
+
+`Status: open` · `Raised by: server` · `Blocks: nothing today — the recorded outcome is kept`
+
+Cancelling a referral now marks its parcel `cancelled`, so a household who pulls out stops reading as
+somebody the session is still waiting for (`INITIAL_SPEC1.txt`, "Referral maintenance"). That settles
+the ordinary case, where the parcel is picked and the household then rings to say they cannot come.
+
+It does not settle the other one. Nothing stops an administrator cancelling a referral **after** the
+team leader has already marked that household as having turned up and taken their food away. The
+session stays open to change until it is signed off, so there is a window — a whole session morning
+wide — in which both things can have happened.
+
+The server currently keeps the recorded outcome: a parcel marked as attended stays attended, and only
+a parcel still awaiting an outcome becomes cancelled. That is a guess, made this way because the
+alternative is demonstrably worse rather than because anybody asked for it:
+
+- **The food is gone.** Marking a household as attended is what takes their items off the shelves.
+  Rewriting the parcel to say they cancelled would leave the stock movements belonging to a parcel
+  that no longer says anyone was fed, and the next stock take would not reconcile.
+- **The repeat-referral count would under-report.** That screen counts a household as fed when one of
+  their parcels reads attended (`INITIAL_SPEC1.txt`, "Reviewing a referral"). A household who
+  collected in March and was cancelled in April would silently stop counting, which is the failure
+  that screen exists to prevent.
+- **But the administrator did press cancel**, and gets no warning that it did nothing to the parcel.
+  If what they meant was "this collection was recorded by mistake", the thing they actually want is
+  to take the attendance outcome back — which is a different button, and one they may not know is
+  there.
+
+So the question is really about what cancelling means once a household has been fed. The server's own
+view is that it is a data-entry mistake in one direction or the other, and that being told so is
+better than either silent outcome — but which mistake it is, is the charity's to say.
+
+**Question for the charity:** If a household has already been marked as having collected their
+parcel, should an administrator be able to cancel that referral at all? If they should, does the
+record say the household was fed, or that they cancelled — and if the answer is that they should be
+stopped and told to take the collection back first, say so and it becomes a refusal.
+
+**A:**

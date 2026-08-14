@@ -387,6 +387,16 @@ export interface ReferralSearchResult {
   readonly refereePhone: string | null;
   readonly reasonId: string;
   readonly referrerName: string | null;
+  /**
+   * Where the referral came from, which is what an administrator scans this
+   * list by — the individual's name varies with who was on shift, the
+   * organisation is what the household says on the phone.
+   *
+   * **Never null**, like `reasonId` and unlike everything else here: the
+   * column is `NOT NULL` and sits outside the PII block, so a purged referral
+   * still reports the organisation that sent it.
+   */
+  readonly referrerOrganisation: string;
   readonly answers: Record<string, unknown>;
 }
 
@@ -406,6 +416,7 @@ interface ReferralSearchMatchInput {
   readonly status: string;
   readonly reasonId: string;
   readonly referrerName: string | null;
+  readonly referrerOrganisation: string;
   readonly answersJson: string | null;
 }
 
@@ -420,6 +431,7 @@ export function toReferralSearchResult(match: ReferralSearchMatchInput): Referra
     refereePhone: match.refereePhone,
     reasonId: match.reasonId,
     referrerName: match.referrerName,
+    referrerOrganisation: match.referrerOrganisation,
     answers: parseAnswers(match.answersJson),
   };
 }
@@ -444,15 +456,15 @@ export function toReferralSearchResponse(result: {
  * One household on `GET /sessions/{sessionId}/referral-details` —
  * `INITIAL_SPEC1.txt`, `#Reviewing a referral`, the team-leader paragraph:
  * "the client name, address, postcode and phone number, and the referrer's
- * name and phone number. It does not carry the reason for referral, date of
- * birth, answers, review comment or parcel contents."
+ * name, organisation and phone number. It does not carry the reason for
+ * referral, date of birth, answers, review comment or parcel contents."
  *
  * This is a wider read than the listener sheet — it hands a team leader a
  * household's address and phone number, which the listener sheet deliberately
  * withholds — and it is deliberately narrower than `ReferralResponse`: no
- * reason, no date of birth, no answers, no review comment, no referrer email
- * or organisation. It exists so the team can ring a household, not so they
- * can read the referral.
+ * reason, no date of birth, no answers, no review comment, no referrer email.
+ * It exists so the team can ring a household, not so they can read the
+ * referral.
  */
 export interface ReferralDetailsHousehold {
   readonly referralId: string;
@@ -462,6 +474,13 @@ export interface ReferralDetailsHousehold {
   readonly refereePostcode: string | null;
   readonly refereePhone: string | null;
   readonly referrerName: string | null;
+  /**
+   * **Not nullable, unlike every other field here.** The column is `NOT NULL`
+   * and the purge does not touch it, for the same reason it leaves
+   * `referrerName` alone: forgetting a household is not forgetting who
+   * referred them.
+   */
+  readonly referrerOrganisation: string;
   readonly referrerPhone: string | null;
 }
 
@@ -474,6 +493,7 @@ export function toReferralDetailsHousehold(referral: Referral): ReferralDetailsH
     refereePostcode: referral.refereePostcode,
     refereePhone: referral.refereePhone,
     referrerName: referral.referrerName,
+    referrerOrganisation: referral.referrerOrganisation,
     referrerPhone: referral.referrerPhone,
   };
 }

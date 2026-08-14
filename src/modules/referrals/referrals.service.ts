@@ -17,6 +17,7 @@ import {
 import type { Session } from '../../db/schema/sessions.ts';
 import type { ReferrersRepository } from '../referrers/referrers.repository.ts';
 import type { ReferrersService } from '../referrers/referrers.service.ts';
+import type { PickListsRepository } from '../pick-lists/pick-lists.repository.ts';
 import type { SessionsRepository } from '../sessions/sessions.repository.ts';
 import {
   hasAnythingToMatchOn,
@@ -44,6 +45,13 @@ export interface ReferralsServiceDeps {
   readonly sessions: SessionsRepository;
   readonly referrers: ReferrersRepository;
   readonly referrersService: ReferrersService;
+  /**
+   * Cancelling a referral has to reach the parcel already picked for it, and
+   * has to do so in the *same* batch as the referral update — so this is the
+   * repository rather than the pick-lists service, which cannot hand back an
+   * unexecuted statement. Nothing else here touches it.
+   */
+  readonly pickLists: PickListsRepository;
   readonly clock: Clock;
   readonly logger: Logger;
 }
@@ -90,7 +98,7 @@ export interface ReferralSearchResults {
 }
 
 export function createReferralsService(deps: ReferralsServiceDeps) {
-  const { db, repository, sessions, referrers, referrersService, clock, logger } = deps;
+  const { db, repository, sessions, referrers, referrersService, pickLists, clock, logger } = deps;
 
   async function getReferral(id: string): Promise<Referral> {
     const referral = await repository.findById(id);
@@ -909,6 +917,18 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
    * record of *why* the charity turned the household away. Overwriting the
    * status would leave that comment attached to a referral whose status no
    * longer says a review ever took place.
+   *
+   * **A parcel already picked for this household is marked cancelled, not
+   * deleted or emptied.** It is the record of what the food bank prepared that
+   * morning and it stays exactly as it was picked; what changes is that it
+   * stops reading as a household still to come, so it is no longer waiting to
+   * be reviewed, no longer waiting for an attendance outcome, and no longer
+   * printed. Leaving it `pending` was worse than either: it held up printing
+   * and it counted as somebody the session was still waiting for.
+   *
+   * The three writes go in **one batch**. Without it a failure between them
+   * leaves a cancelled referral with a live parcel, which is exactly the state
+   * this exists to remove — and nothing would say so.
    */
   async function cancel(
     referral: Referral,
@@ -921,29 +941,36 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     await assertOpenToChange(referral);
 
     const now = clock.nowIso();
-    const updated = await repository.update(referral.id, {
+    const patch = {
       status: 'cancelled',
       cancelledAt: now,
       cancelledReason: reason,
       updatedAt: now,
-    });
-    if (updated === undefined) {
-      throw new NotFoundError('Referral not found');
-    }
+    } as const;
 
-    await repository.recordAudit({
-      id: crypto.randomUUID(),
-      occurredAt: now,
-      actorKind: actor.kind,
-      actorUserId: actor.userId,
-      entityType: 'referral',
-      entityId: referral.id,
-      action: 'cancelled',
-      detailJson: null,
-    });
+    await db.batch([
+      repository.buildUpdateReferral(referral.id, patch),
+      pickLists.buildCancelParcelsFor(referral.id, now),
+      repository.buildAudit({
+        id: crypto.randomUUID(),
+        occurredAt: now,
+        actorKind: actor.kind,
+        actorUserId: actor.userId,
+        entityType: 'referral',
+        entityId: referral.id,
+        action: 'cancelled',
+        detailJson: null,
+      }),
+    ]);
 
     logger.info('referral cancelled', { referralId: referral.id });
-    return updated;
+    // Read back rather than merging the patch onto the referral as it was
+    // loaded, the same way `submit` ends. The `UPDATE` names only the four
+    // cancellation columns, so an amendment that landed in the meantime is not
+    // clobbered — but merging locally would not show it either, and would hand
+    // the admin who cancelled a stale address. This also restores the
+    // `NotFoundError` that `.returning()` used to give when nothing matched.
+    return getReferral(referral.id);
   }
 
   /** Admin move between sessions. Over-capacity requires explicit acknowledgement. */

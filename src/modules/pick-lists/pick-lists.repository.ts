@@ -128,6 +128,29 @@ export function createPickListsRepository(db: Database) {
       return expectAtMostOne(rows);
     },
 
+    /**
+     * Marks every parcel of a cancelled referral as cancelled.
+     *
+     * A **Drizzle** builder rather than a raw D1 statement, unlike the
+     * generation builders below: this one is composed into the referrals
+     * service's `db.batch()`, and Drizzle's batch refuses anything that is not
+     * its own query builder.
+     *
+     * **Only from `pending`, and the condition travels with the write.** There
+     * is no transaction to make read-then-write safe, and an outcome already
+     * recorded is not a household still to come: a parcel marked `attended`
+     * moved stock, and overwriting that would leave `parcel_issued` rows
+     * belonging to a parcel that no longer says anybody was fed. The lines, the
+     * note and the pick number are untouched — the parcel is the record of what
+     * was picked that morning, not a row to tidy up.
+     */
+    buildCancelParcelsFor(referralId: string, at: string) {
+      return db
+        .update(parcels)
+        .set({ attendance: 'cancelled', updatedAt: at })
+        .where(and(eq(parcels.referralId, referralId), eq(parcels.attendance, 'pending')));
+    },
+
     async highestPickNumber(pickListId: string): Promise<number> {
       const rows = await db
         .select({ highest: sql<number | null>`MAX(${parcels.pickNumber})` })
@@ -190,7 +213,7 @@ export function createPickListsRepository(db: Database) {
              json_extract(value, '$.adults'),
              json_extract(value, '$.children'),
              'pending',
-             NULL,
+             json_extract(value, '$.notes'),
              json_extract(value, '$.createdAt'),
              json_extract(value, '$.updatedAt')
            FROM json_each(?)`,
@@ -234,7 +257,11 @@ export function createPickListsRepository(db: Database) {
              json_extract(value, '$.stockItemId'),
              json_extract(value, '$.quantityDelta'),
              'parcel_issued', ?2, ?3, ?4, ?5, ?5
-           FROM json_each(?1)`,
+           FROM json_each(?1)
+           WHERE EXISTS (
+             SELECT 1 FROM parcels
+              WHERE parcels.id = ?2 AND parcels.attendance <> 'cancelled'
+           )`,
         )
         .bind(
           JSON.stringify(rows),
@@ -261,6 +288,24 @@ export function createPickListsRepository(db: Database) {
       return db.$client.prepare(`DELETE FROM stock_ledger WHERE parcel_id = ?1`).bind(parcelId);
     },
 
+    /**
+     * Records an outcome — **never onto a cancelled parcel.**
+     *
+     * The condition travels with the write because `record` cannot hold one.
+     * It reads the parcel, then makes three more round trips before it commits,
+     * and a referral cancelled inside that window would otherwise be overwritten
+     * back to `attended` by a request that read `pending` before the
+     * cancellation landed. The service's own `cancelled` check catches the
+     * cancellation it can see; this catches the one that arrives afterwards.
+     *
+     * `<> 'cancelled'` rather than `= 'pending'`: this same statement is how an
+     * outcome is taken back, so it must still move `attended` to `no_show` and
+     * back. **`buildParcelIssue` carries the matching condition**, so when this
+     * matches nothing the ledger insert beside it in the batch inserts nothing
+     * either — the pair no-ops together rather than issuing stock for a parcel
+     * whose attendance was refused. Zero rows changed is the signal `record`
+     * reads to tell the caller it lost the race.
+     */
     buildSetAttendance(input: {
       parcelId: string;
       attendance: 'attended' | 'no_show';
@@ -274,7 +319,7 @@ export function createPickListsRepository(db: Database) {
                   attendance_recorded_at = ?3,
                   attendance_recorded_by_user_id = ?4,
                   updated_at = ?3
-            WHERE id = ?1`,
+            WHERE id = ?1 AND attendance <> 'cancelled'`,
         )
         .bind(input.parcelId, input.attendance, input.at, input.actorUserId);
     },

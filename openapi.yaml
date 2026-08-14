@@ -814,17 +814,18 @@ paths:
         it.
 
         **This is a contact list, not a listener sheet.** It carries the
-        household's address, postcode and phone number, and the referrer's name
-        and phone number — so the person running the session can find a door,
-        ring a household that has not arrived, or ring the professional who sent
-        them. It is the one place a team leader is given a household's phone
-        number outside the picking sheet for a delivery.
+        household's address, postcode and phone number, and the referrer's name,
+        organisation and phone number — so the person running the session can
+        find a door, ring a household that has not arrived, or ring the
+        professional who sent them and know where they are ringing. It is the
+        one place a team leader is given a household's phone number outside the
+        picking sheet for a delivery.
 
         **What it deliberately leaves out:** date of birth, the reason for
         referral, the form answers, the administrator's review comment, the
-        parcel contents, and the referrer's email address and organisation. The
-        reason in particular stays where it was — a team leader gets it on the
-        listener sheet and nowhere else.
+        parcel contents, and the referrer's email address. The reason in
+        particular stays where it was — a team leader gets it on the listener
+        sheet and nowhere else.
 
         **Who is on it:** every household holding a place — `pending_review`,
         `active` and `reviewed` alike. Cancelled and rejected households are
@@ -1329,7 +1330,8 @@ paths:
 
         **What comes back is the administrator's working list:** session date,
         referral status, first name, surname, postcode, phone number, the main
-        reason id, the referrer's name, and the dynamic `answers` whole.
+        reason id, the referrer's name and organisation, and the dynamic
+        `answers` whole.
         Resolve `reasonId` using the admin-only referral-reasons lookup. The
         secondary cause and the additional crisis detail are answers, so they
         arrive inside `answers` under the keys your form owns — the server does
@@ -1462,6 +1464,24 @@ paths:
 
         A referral on a **confirmed** session is also a `409`: the session is
         closed to every kind of change, cancellation included.
+
+        **If a pick list has already been generated, this marks that household's
+        parcel `attendance: "cancelled"` in the same write.** The parcel is not
+        deleted and its lines, notes and `pickNumber` are untouched — it stays
+        the record of what was picked. What changes is that it stops reading as
+        a household still to come: it no longer needs reviewing, no longer needs
+        an attendance outcome, is left out of `GET /pick-lists/{id}/print`, and
+        `POST /parcels/{id}/attendance` on it is a `409`. It is still returned
+        by `GET /sessions/{sessionId}/pick-list`, so a session screen can show
+        why that pick number is not coming.
+      x-assumed: >-
+        A parcel whose outcome has **already been recorded** keeps it: an
+        `attended` parcel stays `attended` when its referral is cancelled
+        afterwards, because that parcel moved stock and the repeat-referral
+        count reads it as the household having been fed. Only a `pending`
+        parcel becomes `cancelled`. Whether an administrator should be able to
+        cancel a household who has already collected at all is `OPEN-QUESTIONS.md`
+        Q33.
       requestBody:
         content:
           application/json:
@@ -2190,6 +2210,15 @@ paths:
         preference can never cut a larger household's share. Send the whole
         session's lines every time; entries for households that already have a
         parcel are ignored and counted, not refused.
+
+        **Pick-list information is optional and belongs to the client too.** The
+        body may carry the finished text to write onto each parcel — allergies,
+        what the household cannot eat, whatever your form marks as belonging on
+        a picking sheet. The server stores it as sent and never reads a
+        referral's answers to compose it. Like preference lines it reaches
+        **only parcels this call creates**: an existing parcel's note is a
+        snapshot the team leader may already have edited, and a reconciliation
+        never overwrites one. Send the whole session's information every time.
       requestBody:
         required: false
         content:
@@ -2224,9 +2253,12 @@ paths:
         '400': { description: Malformed body, or the same referral or stock item named twice }
         '422':
           description: >-
-            A model parcel is not configured for every booked household size, or
+            A model parcel is not configured for every booked household size; or
             a preference line names a stock item that does not exist
-            (`details.unknownStockItemIds`). Nothing is created either way.
+            (`details.unknownStockItemIds`); or a preference line or a
+            pick-list information entry names a referral that is not on this
+            session (`details.offSessionReferralIds`). Nothing is created in
+            any of those cases.
 
   /api/v1/pick-lists/{id}:
     parameters: [{ $ref: '#/components/parameters/Id' }]
@@ -2258,11 +2290,19 @@ paths:
 
         **Never contains the reason for referral**, and no name or address
         unless it is a delivery. A sheet gets carried round a hall and left on
-        tables. Dietary notes *are* included: the picker is the only person who
-        can act on them.
+        tables. The parcel's pick-list information *is* included, as saved: the
+        picker is the only person who can act on it. The referral's answers
+        never are.
 
         Refused with `409` until every parcel on the pick list has been
         reviewed.
+
+        **Parcels whose referral has been cancelled are left out** and are not
+        waited for: their household is not coming, so a sheet for one would be a
+        bag packed for nobody, and holding up the session's printing until
+        somebody reviews a parcel that will never be picked would be worse. They
+        are still returned by `GET /sessions/{sessionId}/pick-list`, reading
+        `attendance: "cancelled"`.
       responses:
         '200':
           description: Sheets
@@ -2283,8 +2323,9 @@ paths:
       description: >
         Only the first print is stamped. Refused with `409` until every parcel
         has been reviewed — on a reprint too, because reconciling a late
-        referral adds its parcel unreviewed. **Lines can still be edited after
-        printing** — the list locks on confirm, not on print.
+        referral adds its parcel unreviewed. A parcel reading
+        `attendance: "cancelled"` is not waited for. **Lines can still be edited
+        after printing** — the list locks on confirm, not on print.
       responses:
         '200':
           description: Marked
@@ -2370,7 +2411,15 @@ paths:
     parameters: [{ $ref: '#/components/parameters/Id' }]
     patch:
       tags: [Pick lists]
-      summary: Set a note on a parcel
+      summary: Set the pick-list information on a parcel
+      description: |
+        Replaces the parcel's note outright; `null` clears it. Editable while
+        the pick list is draft or printed, on the same terms as its lines, and
+        refused with `409` once the pick list or the session is confirmed.
+
+        The note is the team leader's from the moment the parcel exists.
+        Whatever was written here survives every later reconciliation of the
+        session's pick list, and it is what the printed sheet carries.
       requestBody:
         required: true
         content:
@@ -2379,7 +2428,13 @@ paths:
               type: object
               required: [notes]
               properties:
-                notes: { type: [string, 'null'], maxLength: 500 }
+                notes:
+                  type: [string, 'null']
+                  maxLength: 1200
+                  description: >-
+                    The same limit generation writes under, so a note created
+                    there can always be edited and put back. Trimmed before it
+                    is measured.
       responses:
         '200':
           description: Updated
@@ -2387,11 +2442,11 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [id, isActive]
+                required: [id, notes]
                 properties:
                   id: { type: string, format: uuid }
-                  isActive: { type: boolean }
-        '409': { description: The pick list has been confirmed }
+                  notes: { type: [string, 'null'] }
+        '409': { description: The pick list or the session has been confirmed }
 
   /api/v1/parcels/{id}/lines:
     parameters: [{ $ref: '#/components/parameters/Id' }]
@@ -2491,6 +2546,11 @@ paths:
         an outcome can no longer be changed and this returns `409`, because a
         session that has been signed off must not have its figures move
         underneath it.
+
+        **A parcel reading `attendance: "cancelled"` is refused with a `409`.**
+        Its referral was cancelled, so the household is not coming; issuing it
+        would take stock off the shelves for somebody the charity already knows
+        will not collect. There is nothing that reinstates a referral.
       requestBody:
         required: true
         content:
@@ -2514,9 +2574,9 @@ paths:
                   alreadyRecorded: { type: boolean }
         '409':
           description: >-
-            The pick list has not been reviewed yet, the session has been
-            confirmed, or somebody else recorded this household at the same
-            moment.
+            The pick list has not been reviewed yet, this household has
+            cancelled, the session has been confirmed, or somebody else recorded
+            this household at the same moment.
 
   # ---------------------------------------------------------- admin set-up --
   /api/v1/authorised-referrers:
@@ -3773,9 +3833,10 @@ components:
       type: object
       description: >-
         One household's contact details for the session being run. Every field
-        below is nullable because the referee and referrer columns are nulled by
-        the retention purge — a purged household is still on the session and
-        still has to appear, with nothing left to reach it by.
+        below is nullable except `referrerOrganisation`, because the referee
+        columns are nulled by the retention purge — a purged household is still
+        on the session and still has to appear, with nothing left to reach it
+        by.
       required:
         [
           referralId,
@@ -3785,6 +3846,7 @@ components:
           refereePostcode,
           refereePhone,
           referrerName,
+          referrerOrganisation,
           referrerPhone,
         ]
       properties:
@@ -3805,6 +3867,12 @@ components:
             The professional who sent them. **Survives a purge** — the point of
             forgetting is to stop holding details of the household, not of the
             referrer.
+        referrerOrganisation:
+          type: string
+          description: >-
+            Where the referrer works — what the referrer said it was, so expect
+            three spellings of the same council. **Never null**, here or after a
+            purge: it is the one non-nullable field on this object.
         referrerPhone: { type: [string, 'null'] }
 
     ReferralSearchRequest:
@@ -3874,6 +3942,7 @@ components:
           status,
           reasonId,
           referrerName,
+          referrerOrganisation,
           answers,
         ]
       properties:
@@ -3901,6 +3970,14 @@ components:
             retired reasons. Never null — it is `NOT NULL` on the table and
             survives the purge.
         referrerName: { type: [string, 'null'] }
+        referrerOrganisation:
+          type: string
+          description: >-
+            Where the referral came from — what the referrer typed on the form,
+            so expect three spellings of the same council. **Never null**: it is
+            `NOT NULL` on the table and outside the PII block, so a purged
+            referral still reports it. `referrerName` is unchanged and still
+            returned.
         answers:
           type: object
           additionalProperties: true
@@ -4000,6 +4077,56 @@ components:
             One entry per household, each naming a referral and the stock items
             your rules resolved for it. A referral must not appear twice.
           items: { $ref: '#/components/schemas/PreferenceLineEntry' }
+        pickListInformation:
+          type: array
+          maxItems: 100
+          description: >-
+            One entry per household, each naming a referral and the finished
+            text to write onto the parcel this call creates for it. A referral
+            must not appear twice. Optional, and independent of
+            `preferenceLines` — send either, both, or no body at all.
+          items: { $ref: '#/components/schemas/PickListInformationEntry' }
+
+    PickListInformationEntry:
+      type: object
+      required: [referralId, notes]
+      properties:
+        referralId:
+          type: string
+          format: uuid
+          description: >-
+            The referral, not the parcel — the parcel does not exist yet.
+
+            **It must be a referral on this session**, on the same terms as
+            `PreferenceLineEntry.referralId`: one that is not refuses the whole
+            request with a `422` and `details.offSessionReferralIds`. A referral
+            that *is* on the session but gets no parcel — cancelled, rejected,
+            or already picked — is fine to send and is quietly ignored.
+        notes:
+          type: string
+          minLength: 1
+          maxLength: 1200
+          description: >-
+            The pick-list information as it should read on the sheet, composed
+            by you from the answers your form marks as belonging there —
+            labels and all. The server holds no form definition, never inspects
+            an answer and never understands a question key; it stores exactly
+            what you send.
+
+            Trimmed before it is measured, and it must not be empty once
+            trimmed. To clear a note, use `PATCH /parcels/{id}` with `null`
+            rather than sending an empty one here.
+
+            **Written only onto a parcel this call creates.** Sending the same
+            entry on a later reconciliation never overwrites what is already
+            on a parcel — by then the note belongs to the team leader, who may
+            have corrected it.
+          x-assumed: >-
+            Q32 — that a parcel's pick-list information survives the twelve-month
+            purge. The purge clears the referral's own answers but has never
+            touched `parcels`, so text about a household's allergies now outlives
+            the anonymised referral it describes. Whether the charity means
+            forgetting a household to reach the parcel is still open.
 
     PreferenceLineEntry:
       type: object
@@ -4107,8 +4234,32 @@ components:
         children: { type: integer }
         householdSize: { type: integer }
         reviewedAt: { type: [string, 'null'], format: date-time }
-        attendance: { type: string, enum: [pending, attended, no_show, cancelled] }
-        notes: { type: [string, 'null'] }
+        attendance:
+          type: string
+          enum: [pending, attended, no_show, cancelled]
+          description: >-
+            `cancelled` means the **referral** was cancelled after this parcel
+            was generated. The parcel is kept as the record of what had been
+            picked, but the household is no longer one the session is being run
+            for: exclude it from the client list, from printing, from completion
+            checks and from SMS conversations. It is neither pending attendance
+            nor pending review, and `POST /parcels/{id}/attendance` on it is a
+            `409`.
+        notes:
+          type: [string, 'null']
+          description: >-
+            The parcel's pick-list information: snapshotted from your
+            `pickListInformation` when the parcel was created, and the team
+            leader's to edit through `PATCH /parcels/{id}` from then on. Show
+            this rather than recomposing it from `answers`, which would hide
+            any correction made to it.
+
+            Unlike `answers`, it is **not** emptied when the referral's personal
+            data is purged — see `x-assumed` on
+            `PickListInformationEntry.notes`.
+          x-assumed: >-
+            Q32 — that a parcel's pick-list information survives the twelve-month
+            purge, where the referral's `answers` it was composed from do not.
         answers:
           type: object
           additionalProperties: true
@@ -4170,7 +4321,11 @@ components:
         deliveryPhone:
           type: [string, 'null']
           description: For the driver who cannot find the door. Null for a collection.
-        notes: { type: [string, 'null'] }
+        notes:
+          type: [string, 'null']
+          description: >-
+            The pick-list information as saved on the parcel — what the team
+            leader meant the sheet to say, not the answers as they read today.
         lines:
           type: array
           items: { $ref: '#/components/schemas/ParcelLine' }

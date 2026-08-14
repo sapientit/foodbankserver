@@ -133,14 +133,54 @@ one to stock. `-1` can only be created at generation, on a parcel that is by def
 unreviewed; `PUT /parcels/:id/lines` accepts `0` and above. **The charity settled this on
 2026-08-11** — see `INITIAL_SPEC1.txt`, "Picking list".
 
+**A parcel's pick-list information is written once, at creation, and never overwritten.** The
+client composes it from the answers its form marks as belonging on a sheet and sends the finished
+text as `pickListInformation`; the server stores it verbatim in `parcels.notes` and never reads an
+answer to build it. Generation applies an entry only to a parcel it is creating, so sending the
+whole session's information on every reconciliation is safe — from the moment the parcel exists the
+note is the team leader's, editable through `PATCH /parcels/:id` until confirmation, and the printed
+sheet carries it as saved. The invariant is the same one that protects a parcel's lines, and it
+matters more here: the note is where an allergy is written down, and a reconciliation that reverted
+a correction to one would be silent. Capped at `PARCEL_NOTES_MAX_LENGTH` (1,200) in Zod only —
+`parcels.notes` is unbounded `TEXT`, so the limit lives at the boundary and nowhere else.
+
 **A parcel reaches neither paper nor a household until it has been reviewed.** Attendance on an
 unreviewed parcel is a `ConflictError`, and so is a print request — both `GET /pick-lists/:id/print`
 and the `POST` that stamps it — while any parcel on the list is unreviewed. The `POST` is checked
 even on a reprint, because reconciliation adds a late referral's parcel unreviewed and a second run
 of sheets would otherwise carry it.
 
+**Cancelling a referral marks its parcel `cancelled` rather than deleting it.** The parcel is the
+record of what was picked, so `buildCancelParcelsFor` touches the attendance column and nothing
+else — not the lines, not the note, not the pick number. From then on the parcel is outside every
+"still to come" set: not waited on for review, left out of the print payload, not counted by
+`confirmSession`, and refused by `record`. That last one is what stops a cancelled parcel being
+flipped to `attended` and issuing stock for a household nobody expects.
+
+> **The service's `cancelled` check is not what makes that safe.** `record` reads the parcel, then
+> makes three more round trips before it commits, so a cancellation landing inside that window would
+> be overwritten back to `attended` — with the stock gone. **`buildSetAttendance` and
+> `buildParcelIssue` therefore both carry `attendance <> 'cancelled'`**, so the pair no-ops together
+> rather than issuing stock against an attendance write that was refused, and `record` reads
+> `meta.changes === 0` to tell the caller it lost the race. The up-front check only saves the work in
+> the ordinary case. `<> 'cancelled'` and not `= 'pending'`: the same statement is how an outcome is
+> taken back, so it must still move `attended` to `no_show` and back.
+
+The write is guarded `WHERE attendance = 'pending'`, in the statement rather than in TypeScript
+because there is no transaction to make read-then-write safe. So **an outcome already recorded
+survives a later cancellation**: an `attended` parcel moved stock, and rewriting it would leave
+`parcel_issued` rows on a parcel that no longer says anyone was fed, and would silently drop the
+household out of the repeat-referral count. That is the server's judgement, not the charity's —
+`OPEN-QUESTIONS.md` Q33.
+
+Because cancellation has to reach `parcels` in the **same** `db.batch()` as the referral update,
+`referrals.service.ts` takes the pick-lists _repository_, not its service: a service cannot hand
+back an unexecuted statement, and a second write outside the batch would be free to fail on its own,
+leaving exactly the state this removes with nothing recording it.
+
 **A session cannot be closed while anybody is unmarked.** `POST /sessions/:id/confirm` refuses with
-the outstanding pick numbers. No override, and no defaulting to no-show.
+the outstanding pick numbers. No override, and no defaulting to no-show. A cancelled parcel is not
+unmarked — it only ever blocked because it sat at `pending`.
 
 **The stock ledger holds one period, not a history.** The level is still `SUM(quantity_delta)`, and a
 row is still never `UPDATE`d — but there are exactly **two deletes**, and both are the design rather

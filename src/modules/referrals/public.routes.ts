@@ -3,6 +3,7 @@ import type { AppEnv } from '../../http/types.ts';
 import { parseJsonBody } from '../../http/validate.ts';
 import { rateLimit } from '../../http/middleware/rate-limit.ts';
 import { requireTurnstile, TURNSTILE_HEADER } from '../security/turnstile.ts';
+import { createPickListsRepository } from '../pick-lists/pick-lists.repository.ts';
 import { createReferrersRepository } from '../referrers/referrers.repository.ts';
 import { createReferrersService } from '../referrers/referrers.service.ts';
 import { createSessionsRepository } from '../sessions/sessions.repository.ts';
@@ -63,5 +64,6 @@ function serviceFor(c: Context<AppEnv>) {
     sessions: createSessionsRepository(db),
     referrers,
     referrersService: createReferrersService({ repository: referrers, clock }),
+    pickLists: createPickListsRepository(db),
   });
 }

@@ -123,6 +123,16 @@ classified has to be assumed personal. Keeping a key because it looks harmless i
 purge cannot take back. Whether the charity needs any answers to survive for reporting is **Q12** in
 `OPEN-QUESTIONS.md`.
 
+**`parcels.notes` is the one place a copy of those answers outlives them.** A parcel's pick-list
+information is composed by the client from the answers its form marks as belonging on a picking
+sheet — allergies, what a household cannot eat — and written onto the parcel at generation. The
+purge nulls columns on `referrals` only; it has never touched `parcels`, and the parcel row outlives
+the anonymised referral. So free text about a household survives a purge that clears the answers it
+came from. That is the same reasoning that gets `adminInfo` cleared, pointed at a table the purge
+does not visit, and it is **Q32** in `OPEN-QUESTIONS.md`. Nothing here should be changed until Pete
+answers it — but nothing else should be written into `parcels` on the assumption that the purge
+covers it, because it does not.
+
 The retention period is **twelve months**, settled by the charity on 2026-08-06 and recorded in
 `INITIAL_SPEC1.txt` under `#Forgetting a referral`. The schema isolates PII so a purge needs no
 table rebuild, and the job is written, tested and scheduled — it purges nothing until
