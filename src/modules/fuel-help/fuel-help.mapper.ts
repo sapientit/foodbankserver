@@ -14,9 +14,14 @@ import type { Session } from '../../db/schema/sessions.ts';
  * sheet stays the only place outside the administrators where the reason
  * appears.
  *
- * **No date of birth, no household counts, and not whether the parcel was
- * delivered.** None of them bears on a fuel bill, and the row already holds
- * enough to identify somebody.
+ * **No household counts, and not whether the parcel was delivered.** Neither
+ * bears on a fuel bill.
+ *
+ * The date of birth **is** here. It was deliberately absent until the charity
+ * asked for it — it identifies the household to whoever follows the fuel bill
+ * up. Do not take it back out on the strength of an older comment saying the
+ * row already holds enough to identify somebody; that was the rule and is not
+ * any more.
  *
  * `answers` is handed over **whole**, exactly as the listener sheet does it.
  * The pre-payment-meter and permission-to-ring questions are ordinary
@@ -35,6 +40,8 @@ export interface FuelHelpHousehold {
   readonly sessionDate: string;
   readonly refereeFirstName: string | null;
   readonly refereeSurname: string | null;
+  /** `YYYY-MM-DD`. A date, not an age — an age is wrong a year later. */
+  readonly refereeDateOfBirth: string | null;
   readonly refereeAddress: string | null;
   readonly refereePostcode: string | null;
   readonly refereePhone: string | null;
@@ -47,6 +54,7 @@ export function toFuelHelpHousehold(referral: Referral, session: Session): FuelH
     sessionDate: session.sessionDate,
     refereeFirstName: referral.refereeFirstName,
     refereeSurname: referral.refereeSurname,
+    refereeDateOfBirth: referral.refereeDateOfBirth,
     refereeAddress: referral.refereeAddress,
     refereePostcode: referral.refereePostcode,
     refereePhone: referral.refereePhone,

@@ -1234,8 +1234,8 @@ outcome is a `409`. Disable the control there rather than letting someone try.
 ```
 GET /api/v1/fuel-help-list
   → 200 { households: [ { referralId, sessionDate, refereeFirstName,
-                          refereeSurname, refereeAddress, refereePostcode,
-                          refereePhone, answers } ] }
+                          refereeSurname, refereeDateOfBirth, refereeAddress,
+                          refereePostcode, refereePhone, answers } ] }
 ```
 
 **This is the whole of a `fuel_admin`'s application.** That role reaches this
@@ -1272,10 +1272,17 @@ the session the referral currently points at — a referral moved after picking
 keeps its parcel on the original session. Do not join it back to a referral's
 own session and expect them to match.
 
-**No reason for referral, no date of birth, no household counts, no delivery
-flag.** None of them bears on a fuel bill. `refereePhone` is free text exactly
-as the referrer typed it — it is **not** normalised, so format for display
-rather than assuming a shape, and it may be `null`.
+**No reason for referral, no household counts, no delivery flag.** None of them
+bears on a fuel bill. `refereePhone` is free text exactly as the referrer typed
+it — it is **not** normalised, so format for display rather than assuming a
+shape, and it may be `null`.
+
+**`refereeDateOfBirth` is new, and this row did not carry it before.** It is
+`YYYY-MM-DD` — a date, not an age — and it is there to identify the household to
+whoever follows the bill up. It is typed nullable like every personal field here,
+but unlike `refereePhone` it is always given on a referral — the only way it
+comes back `null` is a purged one, and the retention window is far longer than
+this list's fourteen days, so in practice you will not see it.
 
 ---
 

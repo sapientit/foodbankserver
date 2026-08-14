@@ -130,6 +130,7 @@ interface FuelHousehold {
   sessionDate: string;
   refereeFirstName: string | null;
   refereeSurname: string | null;
+  refereeDateOfBirth: string | null;
   refereeAddress: string | null;
   refereePostcode: string | null;
   refereePhone: string | null;
@@ -179,6 +180,7 @@ describe('the fuel help list', () => {
         sessionDate: '2026-08-18',
         refereeFirstName: 'Alice',
         refereeSurname: 'Wintergreen',
+        refereeDateOfBirth: '1985-03-14',
         refereeAddress: '12 Bramble Cottages',
         refereePostcode: 'GU1 4AA',
         refereePhone: '07700 900123',
@@ -221,7 +223,6 @@ describe('the fuel help list', () => {
     for (const absent of [
       'reasonId',
       'reason',
-      'refereeDateOfBirth',
       'adults',
       'children',
       'householdSize',

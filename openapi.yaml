@@ -4001,6 +4001,7 @@ components:
           sessionDate,
           refereeFirstName,
           refereeSurname,
+          refereeDateOfBirth,
           refereeAddress,
           refereePostcode,
           refereePhone,
@@ -4018,6 +4019,12 @@ components:
             sorted by this, oldest first.
         refereeFirstName: { type: [string, 'null'] }
         refereeSurname: { type: [string, 'null'] }
+        refereeDateOfBirth:
+          type: [string, 'null']
+          format: date
+          description: >-
+            `YYYY-MM-DD`. A date, not an age — an age is wrong a year later.
+            Here to identify the household to whoever follows the bill up.
         refereeAddress:
           type: [string, 'null']
           description: Where the household lives. A delivery goes here too.
