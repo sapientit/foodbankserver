@@ -18,7 +18,10 @@ import type { MatchKind } from './matching.ts';
  *
  * **`adminInfo` is admin-only and narrower still** — it is only emitted when a
  * caller asks for it, which is what keeps it off the referral list. See
- * `ReferralResponseOptions`.
+ * `ReferralResponseOptions`. `ReferralSearchResult` is the one response
+ * carrying more than one referral that does carry the note, settled by the
+ * charity on 2026-08-15 and explained there; every other list still withholds
+ * it.
  *
  * That rule is enforced here rather than by hoping each query forgets to
  * select the column, because adding a column to a table must never widen an
@@ -372,6 +375,17 @@ export function toRepeatReferralListResponse(list: {
  * one thing this design has consistently refused. The whole blob belongs to the
  * client; the client reads what it needs out of it.
  *
+ * **The administrators' note rides this row, and only this row.** It is the one
+ * response carrying more than one referral that carries `adminInfo` — the
+ * charity settled that on 2026-08-15, because an administrator on the phone to
+ * a household wants what the office learned last time it rang them at the same
+ * moment it wants the causes. `INITIAL_SPEC1.txt`, `#Searching for a referral`.
+ * It is **required and nullable here**, not optional as it is on
+ * `ReferralResponse`: this endpoint is admin-only outright — a team lead gets a
+ * `403` rather than a thinner row — so there is no recipient who gets the row
+ * without the field, and "absent" would describe a role difference that cannot
+ * happen. `null` means there is no note, and nothing else.
+ *
  * **Still no review comment, referrer email or referrer phone**, and no date of
  * birth or address. `reasonId` is resolved by the client against the admin
  * referral-reasons lookup.
@@ -398,6 +412,11 @@ export interface ReferralSearchResult {
    */
   readonly referrerOrganisation: string;
   readonly answers: Record<string, unknown>;
+  /**
+   * The administrators' own note about the household, or `null` when there is
+   * none. Always present — see the note above on why this is not optional.
+   */
+  readonly adminInfo: string | null;
 }
 
 /**
@@ -418,6 +437,7 @@ interface ReferralSearchMatchInput {
   readonly referrerName: string | null;
   readonly referrerOrganisation: string;
   readonly answersJson: string | null;
+  readonly adminInfo: string | null;
 }
 
 export function toReferralSearchResult(match: ReferralSearchMatchInput): ReferralSearchResult {
@@ -433,6 +453,7 @@ export function toReferralSearchResult(match: ReferralSearchMatchInput): Referra
     referrerName: match.referrerName,
     referrerOrganisation: match.referrerOrganisation,
     answers: parseAnswers(match.answersJson),
+    adminInfo: match.adminInfo,
   };
 }
 

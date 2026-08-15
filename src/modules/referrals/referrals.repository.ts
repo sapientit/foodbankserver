@@ -129,6 +129,14 @@ function repeatReferralPredicate(
  * to be the one that hit. Not selecting them at all is a stronger guarantee
  * than mapping them away afterwards, and `referrals.mapper.ts` is still the
  * allowlist that decides what leaves.
+ *
+ * **It does select `adminInfo`, and this is the only multi-referral response
+ * that does.** The charity settled it on 2026-08-15: the search screen is an
+ * administrator on the phone to a household, and what the office learned the
+ * last time it rang them is wanted at the same moment the causes are. The
+ * exception is bounded by the route being admin-only outright — a team lead
+ * gets a `403` here rather than a narrower row — so widening it to any other
+ * list needs the charity, not an analogy.
  */
 export interface ReferralSearchCandidate {
   readonly id: string;
@@ -151,6 +159,12 @@ export interface ReferralSearchCandidate {
    * the server never looks inside it. See `toReferralSearchResult`.
    */
   readonly answersJson: string | null;
+  /**
+   * The administrators' own note about the household. Inside the PII block, so
+   * the purge nulls it — and a purged referral cannot be reached by this
+   * search at all, since the purge nulls the columns it matches on too.
+   */
+  readonly adminInfo: string | null;
 }
 
 /**
@@ -483,6 +497,7 @@ export function createReferralsRepository(db: Database) {
             referrerName: referrals.referrerName,
             referrerOrganisation: referrals.referrerOrganisation,
             answersJson: referrals.answersJson,
+            adminInfo: referrals.adminInfo,
           })
           .from(referrals)
           .innerJoin(sessions, eq(sessions.id, referrals.sessionId))
@@ -504,6 +519,39 @@ export function createReferralsRepository(db: Database) {
 
     buildUpdateReferral(id: string, patch: Patch<NewReferral>) {
       return db.update(referrals).set(patch).where(eq(referrals.id, id));
+    },
+
+    /**
+     * Moves a referral to another session **only if none of its parcels holds
+     * an attendance outcome**, and returns the row when it did.
+     *
+     * The condition travels with the write, following
+     * `updateLeavingAnotherAdmin`. D1 has no interactive transaction, so
+     * `move`'s up-front read cannot make this safe on its own: between reading
+     * the parcels and running the batch, a team leader can mark the household
+     * as having turned up. Without the condition here the move would land
+     * anyway and record a household as due food on a day they had already been
+     * fed on — silently, since nothing else would object.
+     *
+     * The up-front read stays, because it is what produces a `409` that says
+     * what is wrong. This is what makes the rule true.
+     *
+     * **`<> 'pending'` deliberately, the same test the service applies**, so
+     * the two cannot drift into disagreeing about what an outcome is.
+     */
+    buildMoveReferral(id: string, sessionId: string, at: string) {
+      return db
+        .update(referrals)
+        .set({ sessionId, updatedAt: at })
+        .where(
+          and(
+            eq(referrals.id, id),
+            sql`NOT EXISTS (SELECT 1 FROM ${parcels}
+                            WHERE ${parcels.referralId} = ${id}
+                              AND ${parcels.attendance} <> 'pending')`,
+          ),
+        )
+        .returning();
     },
 
     buildAudit(value: NewAuditEvent) {

@@ -1,4 +1,5 @@
 import { env } from 'cloudflare:workers';
+import { eq } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createDatabase } from '../src/db/client.ts';
 import { auditEvents, referrals } from '../src/db/schema/referrals.ts';
@@ -312,12 +313,18 @@ describe('the fuel help list', () => {
     ]);
   });
 
-  it('reports the session the parcel was issued at, not the one the referral was moved to', async () => {
+  it('still reports the session the parcel was issued at when a move afterwards is attempted and refused', async () => {
+    // Previously a referral moved after its parcel was fed left that parcel
+    // behind on the old session, so this test drove exactly that and checked
+    // the list followed the parcel rather than the referral's new
+    // `sessionId`. Moving a referral with an attendance outcome is now
+    // refused outright (`referrals.service.ts`, `move()`), so that state can
+    // no longer be produced through the API — this instead proves the move
+    // is refused and the household still reports against the session it was
+    // actually fed at, which is the same guarantee this test always existed
+    // to protect.
     const { testApp, token, world } = await adminWorld();
 
-    // Fed at the earlier session, then moved to a later one afterwards. The
-    // parcel stays behind on the session it was picked for, and that is the
-    // session the household was actually given food at.
     const fedAt = await fedAtSession(testApp, token, world, '2026-08-10', {}, { confirm: false });
 
     const later = await testApp.request('/api/v1/sessions', {
@@ -338,7 +345,10 @@ describe('the fuel help list', () => {
       headers: json(token),
       body: JSON.stringify({ sessionId: laterSessionId, acknowledgeOverCapacity: true }),
     });
-    expect(moved.status).toBe(200);
+    expect(moved.status).toBe(409);
+
+    const [row] = await db.select().from(referrals).where(eq(referrals.id, fedAt.referralId));
+    expect(row?.sessionId).toBe(fedAt.sessionId);
 
     await testApp.request(`/api/v1/sessions/${fedAt.sessionId}/confirm`, {
       method: 'POST',

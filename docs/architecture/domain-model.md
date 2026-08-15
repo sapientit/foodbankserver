@@ -178,6 +178,26 @@ Because cancellation has to reach `parcels` in the **same** `db.batch()` as the 
 back an unexecuted statement, and a second write outside the batch would be free to fail on its own,
 leaving exactly the state this removes with nothing recording it.
 
+**Moving deletes the parcel; cancelling keeps it.** The two look alike and are opposites. A cancelled
+household really was one that session prepared a parcel for, so the parcel stays and says
+`cancelled`. A moved household is not that session's business at all, so the parcel on the session it
+leaves is deleted outright — nothing was handed over, no stock moved, and left in place it would sit
+on that morning's list as somebody still to come and be packed a second time. This shares the
+cancellation batch's reasoning exactly: the delete rides the same `db.batch()` as the referral update
+and the audit row, through the same pick-lists _repository_ dependency.
+
+**A referral whose parcel has an outcome cannot be moved at all** — a `409`, and not covered by the
+confirmed-session rule, because a session stays open until _every_ household has an outcome, so an
+`attended` household sits on an open session with its stock already gone. The delete is guarded
+`WHERE attendance = 'pending'` in the statement for the same reason the cancellation write is: there
+is no transaction, so an outcome recorded between the check and the batch must lose quietly rather
+than take its `parcel_issued` rows with it. `stock_ledger.parcel_id` carries **no** foreign key, so
+an orphan there would be silent rather than refused — which is what makes the guard load-bearing
+rather than belt-and-braces.
+
+This is a delete on `parcels`, not on the ledger: the two ledger deletes below are unchanged and this
+is not a third.
+
 **A session cannot be closed while anybody is unmarked.** `POST /sessions/:id/confirm` refuses with
 the outstanding pick numbers. No override, and no defaulting to no-show. A cancelled parcel is not
 unmarked — it only ever blocked because it sat at `pending`.
@@ -203,9 +223,17 @@ re-timed or cancelled occurrence safe by construction.
 Enforce both in the response mapper, not by hoping a query forgets to select them.
 
 **`adminInfo` — the administrators' own note about a household — is admin-only and single-referral
-only.** The mapper emits it when the route asks for it, so `GET /referrals` never carries it and
-`GET /referrals/{id}` does. Opt-in rather than opt-out because the list is the response somebody
-widens by accident.
+only, with one settled exception.** The mapper emits it when the route asks for it, so
+`GET /referrals` never carries it and `GET /referrals/{id}` does. Opt-in rather than opt-out because
+the list is the response somebody widens by accident.
+
+The exception is `POST /referrals/search`, where every result row carries the note — the only
+response holding more than one referral that does. The charity settled it on 2026-08-15
+(`INITIAL_SPEC1.txt`, `#Searching for a referral`): that screen is an administrator on the phone to a
+household, and the note is wanted at the same moment the causes are. It stays bounded because the
+route is admin-only outright — a team lead gets a `403`, not a thinner row — which is why the field
+is required-and-nullable there rather than optional. Do not extend it to another list by analogy;
+the reasoning is about that one screen.
 
 **A team lead sees `pending_review` referrals but never `rejected` ones** — absent from the list, and
 `404` rather than `403` by id, because a team lead has no business learning that one exists.

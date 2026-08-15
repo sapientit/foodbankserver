@@ -376,7 +376,16 @@ describe('absent from every list, export and print-oriented payload', () => {
     expect(text).toContain(id);
   });
 
-  it('is absent from POST /referrals/search', async () => {
+  // The one deliberate exception, settled 2026-08-15 (`INITIAL_SPEC1.txt`,
+  // `#Searching for a referral`): the search route is admin-only outright, so
+  // there is no thinner-row recipient to withhold the note from, and it rides
+  // every result row. Full coverage of the shape (the null case, the role
+  // boundary, the twelve-field row) lives in `test/referral-search.test.ts`;
+  // this is the regression guard that sits next to every other "absent"
+  // assertion in this describe block, so a change that put the note back
+  // behind a role check here would be visible right where the rest of the
+  // exceptions are.
+  it('is present on POST /referrals/search — the one list of households that carries it', async () => {
     const { testApp, token, world: w } = await adminWorld();
     const { id } = await submitReferral(
       testApp,
@@ -394,8 +403,8 @@ describe('absent from every list, export and print-oriented payload', () => {
     expect(response.status).toBe(200);
     const text = await response.text();
 
-    expect(text).not.toContain('adminInfo');
-    expect(text).not.toContain(NOTE);
+    expect(text).toContain('adminInfo');
+    expect(text).toContain(NOTE);
     expect(text).toContain(id);
   });
 

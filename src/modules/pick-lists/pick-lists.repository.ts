@@ -151,6 +151,56 @@ export function createPickListsRepository(db: Database) {
         .where(and(eq(parcels.referralId, referralId), eq(parcels.attendance, 'pending')));
     },
 
+    /**
+     * Every parcel picked for one referral, across every pick list. A referral
+     * can hold more than one: before moving deleted the old parcel, a move
+     * after generation left one behind on each list.
+     *
+     * Read by `move` to refuse a transfer once an outcome has been recorded.
+     */
+    async listParcelsForReferral(referralId: string): Promise<Parcel[]> {
+      return db.select().from(parcels).where(eq(parcels.referralId, referralId));
+    },
+
+    /**
+     * Moving a referral to another session deletes the parcel picked for it on
+     * the session it is leaving — `INITIAL_SPEC1.txt`, `#Referral maintenance`.
+     * The household is being fed on a different day and will be picked for
+     * again there; the parcel it leaves behind was never handed to anybody and
+     * would otherwise sit on the old list as somebody still to come.
+     *
+     * **Scoped by referral, not by session, and that is wider than the sentence
+     * above.** It clears *every* pending parcel the referral holds, on any pick
+     * list. Going forward there is only ever the one, because each move clears
+     * as it goes — but a referral moved before this rule existed left a parcel
+     * behind on each list it passed through, and those are all equally stale:
+     * the referral is on one session, so a pending parcel anywhere else is for
+     * a day this household is not coming. Scoping to the session being left
+     * would leave those sitting there forever. The cost of the wider sweep is
+     * that moving *onto* a session where such a leftover exists deletes it too
+     * and generation makes a fresh one, losing that parcel's preference lines
+     * and note — acceptable, because it can only happen to a parcel that was
+     * already orphaned, and the list is reconciled rather than lost.
+     *
+     * **This is not a third stock-ledger delete.** The ledger's two deletes
+     * (a stock take, and taking an attendance outcome back) are untouched: this
+     * deletes `parcels` rows, and only ones that never moved stock. Lines go
+     * with it — `parcel_lines.parcel_id` is `ON DELETE CASCADE`.
+     *
+     * **`attendance = 'pending'` travels in the `WHERE`, and that is what makes
+     * it safe.** `move` reads the parcels first to produce a clean `409`, but
+     * D1 has no interactive transaction, so between that read and this write an
+     * outcome could be recorded. Conditioning the delete means the race loses
+     * quietly — a parcel whose stock has moved cannot be deleted here, so no
+     * `stock_ledger` row is ever orphaned. `stock_ledger.parcel_id` carries no
+     * foreign key, so an orphan would be silent rather than refused.
+     */
+    buildDeletePendingParcelsFor(referralId: string) {
+      return db
+        .delete(parcels)
+        .where(and(eq(parcels.referralId, referralId), eq(parcels.attendance, 'pending')));
+    },
+
     async highestPickNumber(pickListId: string): Promise<number> {
       const rows = await db
         .select({ highest: sql<number | null>`MAX(${parcels.pickNumber})` })

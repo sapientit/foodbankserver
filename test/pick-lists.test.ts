@@ -15,6 +15,7 @@ import { modelParcels, parcelGrid } from '../src/db/schema/rules.ts';
 import { recurringSessions, sessions } from '../src/db/schema/sessions.ts';
 import { stockItems, stockLedger } from '../src/db/schema/stock.ts';
 import { refreshTokens, users } from '../src/db/schema/users.ts';
+import { createReferralsRepository } from '../src/modules/referrals/referrals.repository.ts';
 import { authHeaders, buildTestApp, devLogin, type TestApp } from './helpers/app.ts';
 import {
   generatePickList,
@@ -2020,5 +2021,353 @@ describe('cancelling a referral after its parcel has been picked', () => {
 
     const { parcels: rows } = await readPickList(testApp, token, pickListId);
     expect(rows[0]?.attendance).toBe('cancelled');
+  });
+});
+
+describe('moving a referral to another session', () => {
+  /**
+   * Contrast with `describe('cancelling a referral after its parcel has
+   * been picked', …)` above: cancelling marks a parcel `cancelled` and keeps
+   * it; moving deletes it. Both are proven here so the difference stays a
+   * checked rule rather than something the next reader has to re-derive.
+   */
+
+  async function createSession(
+    testApp: TestApp,
+    token: string,
+    sessionDate: string,
+  ): Promise<string> {
+    const response = await testApp.request('/api/v1/sessions', {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sessionDate,
+        startTime: '10:00',
+        durationMinutes: 120,
+        location: 'Annexe',
+        capacity: 25,
+      }),
+    });
+    const { id }: { id: string } = await response.json();
+    return id;
+  }
+
+  async function stockUp(testApp: TestApp, token: string, w: PickingWorld): Promise<void> {
+    await testApp.request('/api/v1/stock/take', {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({
+        counts: [
+          { stockItemId: w.stockItems.Beans, countedQuantity: 100 },
+          { stockItemId: w.stockItems.Pasta, countedQuantity: 100 },
+          { stockItemId: w.stockItems.Cereal, countedQuantity: 100 },
+        ],
+      }),
+    });
+  }
+
+  async function markAttendance(
+    testApp: TestApp,
+    token: string,
+    parcelId: string,
+    attendance: 'attended' | 'no_show',
+  ): Promise<void> {
+    await testApp.request(`/api/v1/parcels/${parcelId}/review`, {
+      method: 'POST',
+      headers: authHeaders(token),
+    });
+    const response = await testApp.request(`/api/v1/parcels/${parcelId}/attendance`, {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({ attendance }),
+    });
+    expect(response.status).toBe(200);
+  }
+
+  async function movePatch(
+    testApp: TestApp,
+    token: string,
+    referralId: string,
+    sessionId: string,
+  ): Promise<Response> {
+    return testApp.request(`/api/v1/referrals/${referralId}`, {
+      method: 'PATCH',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId }),
+    });
+  }
+
+  it("deletes the referral's pending parcel and its lines from the session it left", async () => {
+    const { testApp, token, world: w } = await world();
+    const referral = await submitReferral(testApp, w, { adults: 1, children: 0 });
+    const { id: pickListId } = await generatePickList(testApp, token, w.sessionId);
+    const { parcels: rows } = await readPickList(testApp, token, pickListId);
+    const parcelId = rows[0]?.id ?? '';
+    expect(parcelId).not.toBe('');
+
+    const linesBefore = await db
+      .select()
+      .from(parcelLines)
+      .where(eq(parcelLines.parcelId, parcelId));
+    expect(linesBefore.length).toBeGreaterThan(0);
+
+    const destinationSessionId = await createSession(testApp, token, '2026-08-18');
+    const moved = await movePatch(testApp, token, referral.id, destinationSessionId);
+    expect(moved.status).toBe(200);
+
+    const [storedReferral] = await db.select().from(referrals).where(eq(referrals.id, referral.id));
+    expect(storedReferral?.sessionId).toBe(destinationSessionId);
+
+    // Gone, not merely unreferenced: the parcel row itself.
+    const parcelRows = await db.select().from(parcels).where(eq(parcels.referralId, referral.id));
+    expect(parcelRows).toHaveLength(0);
+
+    // Its lines went with it — the FK cascade, not a leftover to prove
+    // separately.
+    const lineRows = await db.select().from(parcelLines).where(eq(parcelLines.parcelId, parcelId));
+    expect(lineRows).toHaveLength(0);
+  });
+
+  it('lets the destination session pick the moved household afresh, with no duplicate pick numbers on either list', async () => {
+    const { testApp, token, world: w } = await world();
+    // A second household stays behind, so the origin list still has a parcel
+    // to compare pick numbers against.
+    const staying = await submitReferral(testApp, w, { adults: 1, children: 0 });
+    const moving = await submitReferral(testApp, w, { adults: 2, children: 0 });
+
+    const { id: originPickListId } = await generatePickList(testApp, token, w.sessionId);
+    const before = await readPickList(testApp, token, originPickListId);
+    expect(before.parcels).toHaveLength(2);
+
+    const destinationSessionId = await createSession(testApp, token, '2026-08-18');
+    const moved = await movePatch(testApp, token, moving.id, destinationSessionId);
+    expect(moved.status).toBe(200);
+
+    const destination = await generatePickList(testApp, token, destinationSessionId);
+    expect(destination.parcelsCreated).toBe(1);
+
+    const originAfter = await readPickList(testApp, token, originPickListId);
+    expect(originAfter.parcels.map((p) => p.referralId)).toEqual([staying.id]);
+
+    const destinationList = await readPickList(testApp, token, destination.id);
+    expect(destinationList.parcels).toHaveLength(1);
+    expect(destinationList.parcels[0]?.referralId).toBe(moving.id);
+    // A normal pick number on the fresh list — 1, not a reservation carried
+    // over from the list it left.
+    expect(destinationList.parcels[0]?.pickNumber).toBe(1);
+
+    for (const list of [originAfter.parcels, destinationList.parcels]) {
+      const pickNumbers = list.map((p) => p.pickNumber);
+      expect(new Set(pickNumbers).size).toBe(pickNumbers.length);
+    }
+  });
+
+  it('refuses to move a referral whose parcel has already been marked attended, leaving the parcel and its stock movements untouched', async () => {
+    const { testApp, token, world: w } = await world();
+    await stockUp(testApp, token, w);
+    const referral = await submitReferral(testApp, w, { adults: 1, children: 0 });
+    const { id: pickListId } = await generatePickList(testApp, token, w.sessionId);
+    const { parcels: rows } = await readPickList(testApp, token, pickListId);
+    const parcelId = rows[0]?.id ?? '';
+
+    await markAttendance(testApp, token, parcelId, 'attended');
+
+    const ledgerBefore = await db
+      .select()
+      .from(stockLedger)
+      .where(eq(stockLedger.parcelId, parcelId));
+    expect(ledgerBefore.length).toBeGreaterThan(0);
+
+    const destinationSessionId = await createSession(testApp, token, '2026-08-18');
+    const moved = await movePatch(testApp, token, referral.id, destinationSessionId);
+    expect(moved.status).toBe(409);
+
+    const [storedReferral] = await db.select().from(referrals).where(eq(referrals.id, referral.id));
+    expect(storedReferral?.sessionId).toBe(w.sessionId);
+
+    const [storedParcel] = await db.select().from(parcels).where(eq(parcels.id, parcelId));
+    expect(storedParcel).toBeDefined();
+    expect(storedParcel?.attendance).toBe('attended');
+
+    // Nothing orphaned: the same ledger rows, untouched by the refused move.
+    const ledgerAfter = await db
+      .select()
+      .from(stockLedger)
+      .where(eq(stockLedger.parcelId, parcelId));
+    expect(ledgerAfter).toEqual(ledgerBefore);
+  });
+
+  it('refuses to move a referral whose parcel has already been marked no_show', async () => {
+    const { testApp, token, world: w } = await world();
+    const referral = await submitReferral(testApp, w, { adults: 1, children: 0 });
+    const { id: pickListId } = await generatePickList(testApp, token, w.sessionId);
+    const { parcels: rows } = await readPickList(testApp, token, pickListId);
+    const parcelId = rows[0]?.id ?? '';
+
+    await markAttendance(testApp, token, parcelId, 'no_show');
+
+    const destinationSessionId = await createSession(testApp, token, '2026-08-18');
+    const moved = await movePatch(testApp, token, referral.id, destinationSessionId);
+    expect(moved.status).toBe(409);
+
+    const [storedReferral] = await db.select().from(referrals).where(eq(referrals.id, referral.id));
+    expect(storedReferral?.sessionId).toBe(w.sessionId);
+
+    const [storedParcel] = await db.select().from(parcels).where(eq(parcels.id, parcelId));
+    expect(storedParcel).toBeDefined();
+    expect(storedParcel?.attendance).toBe('no_show');
+  });
+
+  it('still moves a referral with no parcel at all — no pick list generated on its session yet', async () => {
+    const { testApp, token, world: w } = await world();
+    const referral = await submitReferral(testApp, w, { adults: 1, children: 0 });
+
+    const destinationSessionId = await createSession(testApp, token, '2026-08-18');
+    const moved = await movePatch(testApp, token, referral.id, destinationSessionId);
+    expect(moved.status).toBe(200);
+
+    const [storedReferral] = await db.select().from(referrals).where(eq(referrals.id, referral.id));
+    expect(storedReferral?.sessionId).toBe(destinationSessionId);
+
+    const parcelRows = await db.select().from(parcels).where(eq(parcels.referralId, referral.id));
+    expect(parcelRows).toHaveLength(0);
+  });
+
+  it("records a 'moved' audit row", async () => {
+    const { testApp, token, world: w } = await world();
+    const referral = await submitReferral(testApp, w, { adults: 1, children: 0 });
+    const destinationSessionId = await createSession(testApp, token, '2026-08-18');
+
+    const moved = await movePatch(testApp, token, referral.id, destinationSessionId);
+    expect(moved.status).toBe(200);
+
+    const audit = await db.select().from(auditEvents).where(eq(auditEvents.entityId, referral.id));
+    const movedRow = audit.find((row) => row.action === 'moved');
+    expect(movedRow).toBeDefined();
+    expect(movedRow?.actorKind).toBe('user');
+    expect(movedRow?.detailJson).toContain('sessionId');
+  });
+
+  describe("buildMoveReferral's own condition, run directly against the database", () => {
+    /**
+     * `move()`'s up-front read (`listParcelsForReferral`, exercised by the
+     * tests above) always catches an attended or no_show parcel first, so the
+     * conditioned `UPDATE` in `buildMoveReferral` — the one D1's lack of
+     * interactive transactions actually requires — is never reached through
+     * the HTTP API in any of those cases. A `NOT EXISTS` that was inverted,
+     * always-true, or correlated on the wrong column would pass every test
+     * above and every test in this file. These call the builder directly, the
+     * same way `move()`'s own `db.batch(...)` does, to close that gap.
+     */
+
+    it("returns no row and leaves the session unchanged when the referral's only parcel is attended", async () => {
+      const { testApp, token, world: w } = await world();
+      await stockUp(testApp, token, w);
+      const referral = await submitReferral(testApp, w, { adults: 1, children: 0 });
+      const { id: pickListId } = await generatePickList(testApp, token, w.sessionId);
+      const { parcels: rows } = await readPickList(testApp, token, pickListId);
+      const parcelId = rows[0]?.id ?? '';
+      await markAttendance(testApp, token, parcelId, 'attended');
+
+      const destinationSessionId = await createSession(testApp, token, '2026-08-18');
+      const repository = createReferralsRepository(db);
+      const [movedRows] = await db.batch([
+        repository.buildMoveReferral(referral.id, destinationSessionId, NOW),
+      ]);
+      expect(movedRows).toHaveLength(0);
+
+      const [storedReferral] = await db
+        .select()
+        .from(referrals)
+        .where(eq(referrals.id, referral.id));
+      expect(storedReferral?.sessionId).toBe(w.sessionId);
+    });
+
+    it("returns no row and leaves the session unchanged when the referral's only parcel is no_show", async () => {
+      const { testApp, token, world: w } = await world();
+      const referral = await submitReferral(testApp, w, { adults: 1, children: 0 });
+      const { id: pickListId } = await generatePickList(testApp, token, w.sessionId);
+      const { parcels: rows } = await readPickList(testApp, token, pickListId);
+      const parcelId = rows[0]?.id ?? '';
+      await markAttendance(testApp, token, parcelId, 'no_show');
+
+      const destinationSessionId = await createSession(testApp, token, '2026-08-18');
+      const repository = createReferralsRepository(db);
+      const [movedRows] = await db.batch([
+        repository.buildMoveReferral(referral.id, destinationSessionId, NOW),
+      ]);
+      expect(movedRows).toHaveLength(0);
+
+      const [storedReferral] = await db
+        .select()
+        .from(referrals)
+        .where(eq(referrals.id, referral.id));
+      expect(storedReferral?.sessionId).toBe(w.sessionId);
+    });
+
+    it("returns the moved row and changes the session when the referral's only parcel is still pending — the positive control for the two refusals above", async () => {
+      const { testApp, token, world: w } = await world();
+      const referral = await submitReferral(testApp, w, { adults: 1, children: 0 });
+      // A pending parcel actually exists, so a `WHERE` that matches nothing at
+      // all could not pass this test the way it could pass "no parcel at all".
+      await generatePickList(testApp, token, w.sessionId);
+
+      const destinationSessionId = await createSession(testApp, token, '2026-08-18');
+      const repository = createReferralsRepository(db);
+      const [movedRows] = await db.batch([
+        repository.buildMoveReferral(referral.id, destinationSessionId, NOW),
+      ]);
+      expect(movedRows).toHaveLength(1);
+
+      const [storedReferral] = await db
+        .select()
+        .from(referrals)
+        .where(eq(referrals.id, referral.id));
+      expect(storedReferral?.sessionId).toBe(destinationSessionId);
+    });
+
+    it('returns the moved row and changes the session when the referral has no parcel at all', async () => {
+      const { testApp, token, world: w } = await world();
+      const referral = await submitReferral(testApp, w, { adults: 1, children: 0 });
+
+      const destinationSessionId = await createSession(testApp, token, '2026-08-18');
+      const repository = createReferralsRepository(db);
+      const [movedRows] = await db.batch([
+        repository.buildMoveReferral(referral.id, destinationSessionId, NOW),
+      ]);
+      expect(movedRows).toHaveLength(1);
+
+      const [storedReferral] = await db
+        .select()
+        .from(referrals)
+        .where(eq(referrals.id, referral.id));
+      expect(storedReferral?.sessionId).toBe(destinationSessionId);
+    });
+
+    it("only counts the referral's own parcels — another referral's attended parcel does not block this one from moving", async () => {
+      const { testApp, token, world: w } = await world();
+      await stockUp(testApp, token, w);
+      const blocked = await submitReferral(testApp, w, { adults: 1, children: 0 });
+      const moving = await submitReferral(testApp, w, { adults: 1, children: 0 });
+      const { id: pickListId } = await generatePickList(testApp, token, w.sessionId);
+      const { parcels: rows } = await readPickList(testApp, token, pickListId);
+      const blockedParcel = rows.find((p) => p.referralId === blocked.id);
+      expect(blockedParcel).toBeDefined();
+      await markAttendance(testApp, token, blockedParcel?.id ?? '', 'attended');
+
+      const destinationSessionId = await createSession(testApp, token, '2026-08-18');
+      const repository = createReferralsRepository(db);
+      const [movedRows] = await db.batch([
+        repository.buildMoveReferral(moving.id, destinationSessionId, NOW),
+      ]);
+      expect(movedRows).toHaveLength(1);
+
+      const [storedReferral] = await db.select().from(referrals).where(eq(referrals.id, moving.id));
+      expect(storedReferral?.sessionId).toBe(destinationSessionId);
+
+      // The other referral's parcel — and its outcome — are untouched.
+      const [storedBlocked] = await db.select().from(referrals).where(eq(referrals.id, blocked.id));
+      expect(storedBlocked?.sessionId).toBe(w.sessionId);
+    });
   });
 });

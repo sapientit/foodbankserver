@@ -1175,6 +1175,24 @@ paths:
         household off one is the case worth naming, because it would leave them
         recorded against two sessions and change the figures of a session that
         was already signed off.
+
+        **A move deletes the parcel picked on the session being left**, the
+        parcel and its lines both. Nothing was handed over and no stock moved,
+        so there is nothing to account for, and a parcel left behind would sit
+        on that morning's list as a household still to come and be packed a
+        second time. The household is picked for again on the session it moves
+        to and takes a pick number there. **This is the opposite of cancelling**,
+        which keeps the parcel and marks it `cancelled`, because a cancelled
+        household really was one that session prepared for. If a team lead has
+        already printed the old session's sheet, that pick number is now gone
+        from the list rather than shown as cancelled — reprint after a move.
+
+        **A referral whose parcel already has an outcome cannot be moved** and
+        is a `409`. The confirmed-session rule above does not cover this: a
+        session stays open until *every* household has an outcome, so one that
+        has been marked attended or no-show — its stock already off the shelves
+        — can sit on a session that is still open to change. A household given
+        another chance after a no-show is a new referral, not a move.
       requestBody:
         required: true
         content:
@@ -1195,7 +1213,9 @@ paths:
         '409':
           description: >-
             Target session is full and not acknowledged, the referral is
-            cancelled or rejected, or its current session has been confirmed
+            cancelled or rejected, its current session has been confirmed, or
+            one of its parcels already has an attendance outcome so it can no
+            longer be moved
         '422':
           description: The chosen reason for referral is no longer offered
 
@@ -1339,8 +1359,13 @@ paths:
 
         **What comes back is the administrator's working list:** session date,
         referral status, first name, surname, postcode, phone number, the main
-        reason id, the referrer's name and organisation, and the dynamic
-        `answers` whole.
+        reason id, the referrer's name and organisation, the dynamic `answers`
+        whole, and `adminInfo` — the administrators' own note about the
+        household. **This is the one response carrying more than one referral
+        that carries the note**, and that exception is deliberate: this screen
+        is an administrator on the phone to a household. Every other list still
+        withholds it. It is required and nullable rather than optional, because
+        the endpoint is admin-only outright, so `null` means there is no note.
         Resolve `reasonId` using the admin-only referral-reasons lookup. The
         secondary cause and the additional crisis detail are answers, so they
         arrive inside `answers` under the keys your form owns — the server does
@@ -3595,9 +3620,11 @@ components:
         The staff view. **The last six fields are admin-only** — a team lead
         receives the object without them, so treat them as optional.
 
-        `adminInfo` is narrower again: admin-only **and** only on a response
-        carrying one referral. It is absent from the rows of `GET /referrals`
-        for everybody, an administrator included.
+        `adminInfo` is narrower again: admin-only **and**, with one settled
+        exception, only on a response carrying one referral. It is absent from
+        the rows of `GET /referrals` for everybody, an administrator included.
+        The exception is `ReferralSearchResult`, and it is not a licence to
+        expect the note on any other list.
 
         **A team lead does not see rejected referrals at all.** They are absent
         from the list, and fetching one by id is a `404`. Pending ones they do
@@ -3724,13 +3751,20 @@ components:
           type: [string, 'null']
           maxLength: 2000
           description: >
-            **Admin only, and only on a response carrying one referral** —
-            `GET /referrals/{id}`, `PATCH /referrals/{id}`, and the accept,
-            reject, review and cancel routes. **Absent from the `GET
-            /referrals` list rows**, absent from search results, and absent
+            **Admin only, and — with one settled exception — only on a response
+            carrying one referral** — `GET /referrals/{id}`,
+            `PATCH /referrals/{id}`, and the accept, reject, review and cancel
+            routes. **Absent from the `GET /referrals` list rows**, and absent
             from every printed, exported or messaged payload: the listener
             sheet, the referral-details list, the repeat-referral list, the
             pick list, the fuel help list, SMS and the spreadsheet extract.
+
+            **The exception is `ReferralSearchResult`**, where the note is on
+            every row — the only response carrying more than one referral that
+            has it, settled by the charity on 2026-08-15 because that screen is
+            an administrator on the phone to a household. See that schema for
+            why it is required-and-nullable there rather than optional as it is
+            here. It is not a licence to expect the note on any other list.
 
             The administrators' own free-text note about the household — what
             the office learned from ringing them. It is **not** one of
@@ -3938,9 +3972,9 @@ components:
       type: object
       description: >-
         The administrator's referral-search working row: the identifiers, the
-        referral context, and the dynamic answers whole. Not the date of birth,
-        the address, the review comment, the referrer email or the referrer
-        phone.
+        referral context, the dynamic answers whole, and the administrators'
+        own note. Not the date of birth, the address, the review comment, the
+        referrer email or the referrer phone.
       required:
         [
           referralId,
@@ -3954,6 +3988,7 @@ components:
           referrerName,
           referrerOrganisation,
           answers,
+          adminInfo,
         ]
       properties:
         referralId:
@@ -3998,6 +4033,26 @@ components:
             referral form owns — the server holds no form definition, does not
             know which keys they are and will not guess. Extract them yourself,
             the same arrangement as every other answer a sheet shows.
+        adminInfo:
+          type: [string, 'null']
+          maxLength: 2000
+          description: >-
+            The administrators' own note about the household — free text
+            written by the office, not by the referrer. The same column and the
+            same 2,000-character limit as `Referral.adminInfo`. **This is the only
+            response carrying more than one referral that has it**, and the
+            exception is deliberate: an administrator on the phone to a
+            household wants what the office learned last time it rang them at
+            the same moment it wants the causes. Everything else still
+            withholds it — see `API.md`, "Field-level visibility".
+
+            **Required and nullable here, not optional as on `Referral`.** This
+            endpoint is admin-only outright — a team lead gets a `403`, not a
+            thinner row — so no recipient gets the row without the field, and
+            `null` means there is no note rather than "you may not see it". A
+            referral whose details have been purged has no note either, but you
+            will not meet one here: the purge nulls the columns this searches
+            on, so it cannot be found at all.
 
     FuelHelpHousehold:
       type: object
@@ -4025,8 +4080,12 @@ components:
           description: >-
             The session's own `YYYY-MM-DD`, London wall clock — **the session
             the parcel was issued at**, which is not always the session the
-            referral now points at if it was moved after picking. The list is
-            sorted by this, oldest first.
+            referral now points at. Moving now deletes the pending parcel on the
+            session being left, and a referral whose parcel has an outcome
+            cannot be moved, so the two agree for anything moved from now on;
+            referrals moved before that rule can still differ. Read this as
+            given rather than joining back. The list is sorted by this, oldest
+            first.
         refereeFirstName: { type: [string, 'null'] }
         refereeSurname: { type: [string, 'null'] }
         refereeDateOfBirth:

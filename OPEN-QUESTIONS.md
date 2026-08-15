@@ -327,3 +327,34 @@ stopped and told to take the collection back first, say so and it becomes a refu
 
 **A:**
 No - if they have collected/been delivered to (or even a no show/not-in then they cannot be cancelled. In the no-show event they could possibly be over to a different session, but that would be best done as a clone of the referral - leave the no show where it is. This is a possible future requirement. Currently no cancel after the status has been set.
+
+---
+
+## Q35 — Can a referral whose details have been forgotten still be moved to another session?
+
+`Status: open` · `Raised by: client` · `Blocks: nothing — the client has stopped offering it, which is the guess`
+
+Pete asked on 2026-08-15 for cancel and move to sit together as two buttons on one line of the
+referral screen (`screenDetails.md`, the referral detail screen). They did not previously live
+together: cancel was inside the block the screen hides once a referral has been purged, and move had
+a section of its own that was shown regardless. Putting them on one line settles that difference by
+accident, and the client has settled it the strict way — **neither is offered on a purged referral**.
+
+The reasoning for that reading, which is the client's and not the charity's: twelve months on, the
+household's name, address and answers are gone, so moving the referral to a future session would put
+a parcel with nobody's name on it onto a pick list, and the printed sheet exists to let a volunteer
+check they are handing the right bag to the right person.
+
+Against it: nothing was actually wrong with the old behaviour, and an administrator who wanted to
+move a purged referral had a reason nobody has asked about.
+
+Mark reviewed is now on that same line and inherits the same rule, so it too has stopped appearing on
+a purged referral — where it used to appear at both ends of the page. That one is easier to argue
+for: there is nothing left to read through, so nothing to mark as read.
+
+**Question for the charity:** should a purged referral still be movable to another session, and
+should it still be markable as reviewed? If either should, that button alone survives the purge while
+the rest of the line does not, which is easy enough to write but needs saying, because it reads like
+an oversight otherwise.
+
+**A:**

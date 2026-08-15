@@ -79,9 +79,9 @@ async function createSession(
 }
 
 /**
- * The nine fields a result row carries, and nothing else. Declared by hand
- * rather than imported from `referrals.mapper.ts` on purpose: a test that took
- * its expected shape from the mapper would agree with the mapper however the
+ * The fields a result row carries, and nothing else. Declared by hand rather
+ * than imported from `referrals.mapper.ts` on purpose: a test that took its
+ * expected shape from the mapper would agree with the mapper however the
  * mapper changed, which is a test that proves nothing.
  */
 interface ReferralSearchResultBody {
@@ -96,6 +96,14 @@ interface ReferralSearchResultBody {
   readonly referrerName: string | null;
   /** Never null: `NOT NULL` on the table and outside the PII block. */
   readonly referrerOrganisation: string;
+  /**
+   * The administrators' own note about the household. Settled 2026-08-15,
+   * `INITIAL_SPEC1.txt` `#Searching for a referral`: this is the one
+   * multi-referral response that carries it, because the route is admin-only
+   * outright — a team lead gets `403`, not a thinner row — so it is always
+   * present here, `null` meaning there is no note rather than absent.
+   */
+  readonly adminInfo: string | null;
 }
 
 interface ReferralSearchResponseBody {
@@ -115,6 +123,25 @@ async function search(
   });
   const parsed: ReferralSearchResponseBody = await response.json();
   return { status: response.status, body: parsed };
+}
+
+/**
+ * Sets the administrators' note the same way an admin screen would —
+ * `PATCH /referrals/{id}` with `adminInfo` — following
+ * `test/referral-admin-info.test.ts`'s `patchReferral`.
+ */
+async function patchAdminInfo(
+  testApp: TestApp,
+  token: string,
+  id: string,
+  adminInfo: string | null,
+): Promise<void> {
+  const response = await testApp.request(`/api/v1/referrals/${id}`, {
+    method: 'PATCH',
+    headers: json(token),
+    body: JSON.stringify({ adminInfo }),
+  });
+  expect(response.status).toBe(200);
 }
 
 beforeEach(async () => {
@@ -183,6 +210,63 @@ describe('POST /referrals/search — role access', () => {
       count: 1,
       results: [{ referralId: id }],
     });
+  });
+
+  /**
+   * Since `adminInfo` (2026-08-15) rides every search row unconditionally,
+   * the `403` above stopped being one layer of a defence in depth and became
+   * the *only* thing keeping the administrators' note off a team lead's or a
+   * fuel administrator's screen — there is no row-shaping fallback behind it
+   * the way there is on `GET /referrals/{id}`, where a non-admin still gets a
+   * row with the field simply missing. If that role check were ever
+   * loosened, dropped, or reordered behind the query, the note would leak in
+   * full on the first successful search rather than being quietly withheld.
+   */
+  it("the 403 for a team lead is now the only thing withholding the administrators' note", async () => {
+    const { testApp, token, world: w } = await referralWorld(NOW);
+    const note = 'ADMIN NOTE: this household must not see this on the phone';
+    const { id } = await submitReferral(
+      testApp,
+      w,
+      { refereePostcode: 'GU40 9ZZ' },
+      { clientIp: nextClientIp() },
+    );
+    await patchAdminInfo(testApp, token, id, note);
+    const body = JSON.stringify({ postcode: 'GU40 9ZZ' });
+
+    const lead = buildTestApp({ clock: fixedClock(NOW) });
+    const { accessToken: leadToken } = await devLogin(lead, {
+      email: 'lead@foodbank.org',
+      role: 'team_lead',
+    });
+    const leadResponse = await lead.request('/api/v1/referrals/search', {
+      method: 'POST',
+      headers: json(leadToken),
+      body,
+    });
+    expect(leadResponse.status).toBe(403);
+    expect(await leadResponse.text()).not.toContain(note);
+
+    const fuel = buildTestApp({ clock: fixedClock(NOW) });
+    const { accessToken: fuelToken } = await devLogin(fuel, {
+      email: 'fuel@foodbank.org',
+      role: 'fuel_admin',
+    });
+    const fuelResponse = await fuel.request('/api/v1/referrals/search', {
+      method: 'POST',
+      headers: json(fuelToken),
+      body,
+    });
+    expect(fuelResponse.status).toBe(403);
+    expect(await fuelResponse.text()).not.toContain(note);
+
+    // Positive control: the same request, as an admin, both succeeds and
+    // carries the note — so the two 403s above are refusing a search that
+    // really would have handed it over, not one that could never have found
+    // anything to leak.
+    const adminSearch = await search(testApp, token, { postcode: 'GU40 9ZZ' });
+    expect(adminSearch.status).toBe(200);
+    expect(adminSearch.body.results).toEqual([expect.objectContaining({ adminInfo: note })]);
   });
 });
 
@@ -325,7 +409,7 @@ describe('each identifier finds a referral on its own', () => {
    * back, so searching on it and then reading the whole row is the sharpest
    * place to pin the shape.
    */
-  it('finds by date of birth alone, and a result row carries exactly the eleven agreed fields', async () => {
+  it('finds by date of birth alone, and a result row carries exactly the twelve agreed fields', async () => {
     const { testApp, token, world: w } = await referralWorld(NOW);
     const { id } = await submitReferral(
       testApp,
@@ -361,9 +445,66 @@ describe('each identifier finds a referral on its own', () => {
           // not lifted out into a field of its own — the server does not know
           // that key means anything and must not learn.
           answers: { Dietary: 'no pork', Secondary: 'a-reason-id-the-server-never-reads' },
+          // No note has been set on this referral, so the field is present
+          // and null rather than absent — this endpoint is admin-only
+          // outright, so there is no thinner-row recipient for "absent" to
+          // describe. See the dedicated describe block below for the
+          // populated case.
+          adminInfo: null,
         },
       ],
     });
+  });
+});
+
+describe("the administrators' note on a search result row", () => {
+  /**
+   * Settled 2026-08-15, `INITIAL_SPEC1.txt` `#Searching for a referral`:
+   * `POST /referrals/search` is the one response carrying more than one
+   * referral that returns `adminInfo`, because the route is admin-only
+   * outright — a team lead gets `403` rather than a thinner row, so there is
+   * no recipient to withhold the field from. Written through
+   * `PATCH /referrals/{id}`, the same route `test/referral-admin-info.test.ts`
+   * uses.
+   */
+  it('carries the note exactly as an admin last saved it', async () => {
+    const { testApp, token, world: w } = await referralWorld(NOW);
+    const note = 'ADMIN NOTE: household called back about a delivery';
+    const { id } = await submitReferral(
+      testApp,
+      w,
+      { refereePostcode: 'GU49 1AA' },
+      { clientIp: nextClientIp() },
+    );
+    await patchAdminInfo(testApp, token, id, note);
+
+    const response = await search(testApp, token, { postcode: 'GU49 1AA' });
+    expect(response.status).toBe(200);
+    expect(response.body.results).toEqual([expect.objectContaining({ adminInfo: note })]);
+  });
+
+  /**
+   * `null` and present, not absent: the key must survive a round trip even
+   * when there is nothing to say, because a client that only ever sees the
+   * key when there is a note would have to treat its absence as meaningful,
+   * which is not what "no note yet" is.
+   */
+  it('carries null, not an absent key, when the referral has no note', async () => {
+    const { testApp, token, world: w } = await referralWorld(NOW);
+    const { id } = await submitReferral(
+      testApp,
+      w,
+      { refereePostcode: 'GU49 2BB' },
+      { clientIp: nextClientIp() },
+    );
+
+    const response = await search(testApp, token, { postcode: 'GU49 2BB' });
+    expect(response.status).toBe(200);
+    expect(response.body.results).toHaveLength(1);
+    const [row] = response.body.results;
+    expect(row?.referralId).toBe(id);
+    expect(Object.keys(row ?? {})).toContain('adminInfo');
+    expect(row?.adminInfo).toBeNull();
   });
 });
 
@@ -980,6 +1121,12 @@ describe('the response allowlist', () => {
       headers: json(token),
       body: JSON.stringify({ comment: 'Confidential note: watch this referrer closely' }),
     });
+    // The administrators' own note, set the same way an admin screen would.
+    // Both this and the review comment above are administrator-written text
+    // on the same referral — only one of them belongs on this row, and the
+    // point of this test is that the difference is a rule, not an accident.
+    const distinctiveAdminInfo = 'ADMIN NOTE: verified by phone, keep an eye on this one';
+    await patchAdminInfo(testApp, token, id, distinctiveAdminInfo);
 
     const response = await testApp.request('/api/v1/referrals/search', {
       method: 'POST',
@@ -1031,5 +1178,15 @@ describe('the response allowlist', () => {
     expect(JSON.parse(text).results[0].answers).toEqual({
       Dietary: 'Allergic to peanuts specifically',
     });
+
+    // The second positive control, and the point of the test now that
+    // `adminInfo` is on this row: the review comment above is written by an
+    // administrator and stays off it; the note is also written by an
+    // administrator and does not. Asserting both in the same test makes that
+    // contrast a checked rule rather than something a reader has to take on
+    // trust.
+    expect(text).toContain(distinctiveAdminInfo);
+    expect(text).toContain('adminInfo');
+    expect(JSON.parse(text).results[0].adminInfo).toBe(distinctiveAdminInfo);
   });
 });

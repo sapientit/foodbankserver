@@ -152,9 +152,12 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
    * `attended` if any of the referral's parcels was attended, else
    * `no_show` if any was marked as not turning up, else `booked` — which
    * covers both "picked but not yet marked" and "no pick list generated for
-   * this referral's session yet". A referral can hold more than one parcel
-   * (a referral moved after a pick list was generated leaves the old one
-   * behind), so this folds over all of them rather than reading one.
+   * this referral's session yet". A referral can hold more than one parcel, so
+   * this folds over all of them rather than reading one. Moving now deletes the
+   * pending parcel on the session being left and is refused once an outcome
+   * exists, so a referral moved from here on holds exactly one — but referrals
+   * moved before that rule still hold two, and this has to keep reading them
+   * correctly.
    */
   function deriveOutcome(attendances: readonly AttendanceStatus[]): RepeatReferralOutcome {
     if (attendances.includes('attended')) return 'attended';
@@ -204,9 +207,10 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
    *
    * Three queries when there is anything to find, issued together: the
    * count, the matching referrals, and their parcel attendance. The
-   * attendance is a query of its own because a referral moved after a pick
-   * list was generated can hold a parcel on each of two lists, and joining
-   * would duplicate the referral row.
+   * attendance is a query of its own because a referral can hold a parcel on
+   * each of two lists, and joining would duplicate the referral row. Moving no
+   * longer creates that state — the parcel on the session being left is
+   * deleted — but referrals moved before that rule are still in it.
    *
    * **`count` comes from its own query, not from `matches.length`.** The
    * list is capped at `REPEAT_REFERRAL_LIST_LIMIT` and the count is not, so
@@ -973,7 +977,34 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     return getReferral(referral.id);
   }
 
-  /** Admin move between sessions. Over-capacity requires explicit acknowledgement. */
+  /**
+   * Admin move between sessions. Over-capacity requires explicit
+   * acknowledgement.
+   *
+   * **A referral whose parcel already has an outcome cannot be moved.** The
+   * session's own `confirmed` check does not cover this: a session stays open
+   * until *every* parcel has an outcome, so one household can be marked
+   * attended — stock gone off the shelves — while the session is still open to
+   * change. Moving that household would say it is to be fed on a day it has
+   * already been fed on. `INITIAL_SPEC1.txt`, `#Referral maintenance`: an
+   * outcome is where a referral stops being movable, and a household who turned
+   * up somewhere else is a new referral rather than a relocated one.
+   *
+   * **The pending parcel on the session being left is deleted** — and so is
+   * any other pending parcel the referral still holds, which only a referral
+   * moved before this rule can have; see `buildDeletePendingParcelsFor`.
+   * Nothing was handed over and no stock moved, so it is not a record of
+   * anything; left behind it would sit on the old list as a household still to
+   * come and would be picked and packed for a second time. This is the one
+   * place a parcel is deleted,
+   * and it is deliberately not what cancelling does — a cancelled household
+   * stays on the list saying it cancelled, because the food bank really did
+   * prepare that parcel for that morning.
+   *
+   * The three writes go in **one batch**, for the reason `cancel` does: a
+   * failure between them would leave the referral on its new session with a
+   * live parcel still waiting on the old one, and nothing would say so.
+   */
   async function move(
     referral: Referral,
     sessionId: string,
@@ -983,27 +1014,66 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     if (referral.sessionId === sessionId) return referral;
     await assertOpenToChange(referral);
 
+    const settled = (await pickLists.listParcelsForReferral(referral.id)).filter(
+      (parcel) => parcel.attendance !== 'pending',
+    );
+    if (settled.length > 0) {
+      throw new ConflictError(
+        'That referral already has an attendance outcome and can no longer be moved',
+      );
+    }
+
     await assertSessionAccepts(sessionId, acknowledgeOverCapacity);
 
     const now = clock.nowIso();
-    const updated = await repository.update(referral.id, { sessionId, updatedAt: now });
-    if (updated === undefined) {
-      throw new NotFoundError('Referral not found');
+
+    const [moved] = await db.batch([
+      // Carries the same "no outcome" condition as the check above, so the two
+      // cannot disagree if an outcome lands between them. Zero rows back means
+      // it did, and the move is refused below.
+      repository.buildMoveReferral(referral.id, sessionId, now),
+      // Conditioned on `pending` in its own `WHERE` for the same reason, so an
+      // outcome recorded in that gap survives rather than having its stock
+      // movements orphaned.
+      pickLists.buildDeletePendingParcelsFor(referral.id),
+      repository.buildAudit({
+        id: crypto.randomUUID(),
+        occurredAt: now,
+        actorKind: 'user',
+        actorUserId: actor.userId,
+        entityType: 'referral',
+        entityId: referral.id,
+        action: 'moved',
+        detailJson: JSON.stringify({ changedFields: ['sessionId'] }),
+      }),
+    ]);
+
+    // The conditioned `UPDATE` matched nothing, which here can only mean an
+    // outcome was recorded between the check above and the batch. The referral
+    // has not moved and the parcel has not been deleted — the delete carries
+    // the same condition — so the data is right and the caller is told.
+    //
+    // **The audit row is written even so, and that is a knowing trade.** The
+    // batch commits as one transaction and a zero-row `UPDATE` is not an error,
+    // so the only ways to avoid it are an `INSERT ... SELECT ... WHERE NOT
+    // EXISTS` — hand-ordered columns in raw SQL on every move, to fix a race of
+    // microseconds, where an ordering slip would corrupt the audit log always
+    // rather than rarely — or splitting the batch, which would let a failure
+    // land a moved referral beside the live parcel this exists to remove. A
+    // stray `moved` row against a referral that did not move is the smallest of
+    // the three harms. If the audit log ever becomes evidence rather than a
+    // record, revisit this.
+    if (moved.length === 0) {
+      throw new ConflictError(
+        'That referral already has an attendance outcome and can no longer be moved',
+      );
     }
 
-    await repository.recordAudit({
-      id: crypto.randomUUID(),
-      occurredAt: now,
-      actorKind: 'user',
-      actorUserId: actor.userId,
-      entityType: 'referral',
-      entityId: referral.id,
-      action: 'moved',
-      detailJson: JSON.stringify({ changedFields: ['sessionId'] }),
-    });
-
     logger.info('referral moved', { referralId: referral.id, sessionId, userId: actor.userId });
-    return updated;
+    // Read back rather than merging locally, the same way `cancel` ends: the
+    // `UPDATE` names only the two columns, so an amendment that landed in the
+    // meantime is neither clobbered nor hidden from the admin who moved it.
+    return getReferral(referral.id);
   }
 
   return {

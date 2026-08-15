@@ -20,12 +20,16 @@ export interface FuelHelpRow {
  *
  * ## Why the join runs through the parcel, not the referral
  *
- * A referral moved to another session **after** its parcel was generated
- * leaves that parcel behind on the old session's pick list, so
  * `referrals.sessionId` and `pickLists.sessionId` can disagree. The spec says
  * the household "was given their parcel" at a session that "has been
  * confirmed" — which is the session the *parcel* sat on, not the one the
  * referral now points at.
+ *
+ * Moving no longer creates that disagreement: a referral whose parcel has an
+ * outcome cannot be moved at all, and a move deletes the pending parcel on the
+ * session being left. **The join must still run this way regardless**, because
+ * referrals moved before that rule are still in the old state and this list
+ * reaches back fourteen dates over exactly that data.
  *
  * So the path is `sessions → pick_lists → parcels → referrals`, and
  * **`referrals.sessionId` is never read here.** Following the referral instead

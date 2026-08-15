@@ -239,9 +239,21 @@ free-text note about the household, and it is on responses that carry **one**
 referral: `GET /referrals/{id}`, `PATCH /referrals/{id}`, and the accept,
 reject, review and cancel routes. It is **absent from the `GET /referrals` list
 rows for an administrator too**, so do not build a list column from it — open
-the referral. It is on nothing else at all: not search results, not the
-repeat-referral list, not the listener sheet, the referral-details list, the
-pick list, the fuel help list, an SMS payload or the spreadsheet extract.
+the referral.
+
+**`POST /referrals/search` is the single exception**, settled by the charity on
+2026-08-15: a search result row carries `adminInfo`, and it is the only response
+carrying more than one referral that does. The reason is that screen's whole
+purpose — an administrator on the phone to a household wants what the office
+learned the last time it rang them at the same moment it wants the causes. On
+that row it is `string | null` and always present, not optional: the endpoint is
+admin-only outright, a team lead gets a `403` rather than a thinner row, so
+`null` means there is no note and nothing else.
+
+Apart from that one row it is on nothing else at all: not the repeat-referral
+list, not the listener sheet, the referral-details list, the pick list, the fuel
+help list, an SMS payload or the spreadsheet extract. Do not read the search
+exception as permission to put the note on any of them.
 
 A team lead also **does not see rejected referrals at all**. They are missing
 from `GET /referrals` whatever you filter by (`status=rejected` returns an empty
@@ -624,8 +636,15 @@ this searches on.
 
 **The results are the administrator's working list**: session date, status,
 first name, surname, postcode, phone number, the main reason id, the referrer's
-name and organisation, and `answers` whole. Resolve `reasonId` using the
-admin-only referral-reasons lookup, including retired reasons.
+name and organisation, `answers` whole, and `adminInfo`. Resolve `reasonId`
+using the admin-only referral-reasons lookup, including retired reasons.
+
+**`adminInfo` is here and nowhere else that carries more than one referral.**
+The administrators' own note about the household rides the search row by the
+charity's decision of 2026-08-15 — see _Field-level visibility_ above for the
+rule and the reason. It is `string | null` and always present, because this
+endpoint is admin-only outright, so `null` is "no note" rather than "not for
+you".
 
 **`referrerOrganisation` is the one field here that is never null.** It is
 `NOT NULL` on the table and outside the PII block, so it survives the purge —
@@ -1147,6 +1166,15 @@ one of these is now a `409`:
 The move is the one that used to do real damage: it left the household recorded
 against two sessions and changed the figures of a session already signed off.
 
+**A move has a second `409` that is not about the session at all.** A referral
+whose parcel already carries an attendance outcome cannot be moved, even though
+its session is still open — a session stays open until _every_ household has an
+outcome, so one that has been marked attended or no-show, stock already gone,
+sits on an open session. Moving it would say it is due food on a day it has
+already been dealt with. Giving a no-show another chance is a **new referral**,
+not a move. Disable move on any referral whose parcel has an outcome, not only
+on a confirmed session.
+
 **What the screen should do:** disable amend, move and cancel for any referral
 whose session is confirmed. `Referral` carries `sessionId`, not the session's
 status, so you need the session — which a referral screen almost always has
@@ -1267,10 +1295,13 @@ Show that answer prominently; it is the whole reason it is there.
 expected and nothing de-duplicates it, so a household who was would appear once
 per session.
 
-`sessionDate` is the session the **parcel was issued at**, which is not always
-the session the referral currently points at — a referral moved after picking
-keeps its parcel on the original session. Do not join it back to a referral's
-own session and expect them to match.
+`sessionDate` is the session the **parcel was issued at**. Read it as given and
+do not join it back to a referral's own session expecting them to match. Moving
+a referral now deletes the pending parcel on the session it leaves, and a
+referral whose parcel already has an outcome cannot be moved at all, so the two
+agree for anything moved from now on — but referrals moved before that rule can
+still hold a parcel on a session they no longer point at, and this row is
+historical by nature.
 
 **No reason for referral, no household counts, no delivery flag.** None of them
 bears on a fuel bill. `refereePhone` is free text exactly as the referrer typed
