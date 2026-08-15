@@ -67,6 +67,7 @@ If some answers should survive a purge, the server needs to be told which, and b
 durable than a client that may have moved on several form versions by then.
 
 **A:**
+The plan is that there is no longer a data cleanup operation, just a data delete. Certainly there will be no personal identifiable data held in the json, so a cleanup if it did happen would just anonymise the data the server can see.
 
 ## Q20 — What are the actual choices on six of the referral form's questions?
 
@@ -103,6 +104,7 @@ The list that would settle all of it is the stock item list — these are all th
 either has on a shelf or does not.
 
 **A:**
+These questions have been answered by setting up a spreadsheet to maintain the config.
 
 ---
 
@@ -157,6 +159,7 @@ referral at all, and delete the referral. That preserves reporting and holds not
 at the cost of a second table and the work to maintain it.
 
 **A:**
+All data will be deleted not anonymised.
 
 ---
 
@@ -186,6 +189,7 @@ needs reviewing again before the list is printed? If so, does the same apply to 
 printing, before attendance is recorded?
 
 **A:**
+No - the review and the change would be done by the same team lead. No separate "review again" step is necessary
 
 ---
 
@@ -230,6 +234,7 @@ be added to the spreadsheet extract as four more fixed columns, alongside the de
 the four raw bands?
 
 **A:**
+This has been answered separately - the household composition will mean all columns are extracted individually.
 
 ---
 
@@ -278,6 +283,7 @@ pick-list information be cleared along with the referral's own answers? Or is a 
 past occasion rather than of a household, and its note something the food bank means to keep?
 
 **A:**
+All data associated with the referral will be deleted at the same time
 
 ---
 
@@ -320,3 +326,4 @@ record say the household was fed, or that they cancelled — and if the answer i
 stopped and told to take the collection back first, say so and it becomes a refusal.
 
 **A:**
+No - if they have collected/been delivered to (or even a no show/not-in then they cannot be cancelled. In the no-show event they could possibly be over to a different session, but that would be best done as a clone of the referral - leave the no show where it is. This is a possible future requirement. Currently no cancel after the status has been set.
