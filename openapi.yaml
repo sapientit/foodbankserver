@@ -777,10 +777,11 @@ paths:
         Deliberately minimal. **No address, postcode, phone, date of birth or
         anything about the referrer.** This ends up on paper in a hall.
 
-        `answers` is the referral's dynamic answers **whole and unfiltered**.
-        The sheet's *Cause Details* is one of them, and **the client extracts
-        it**: the client owns the form definition and the server holds none, so
-        naming the key here would be a guess rather than a contract.
+        `answers` is the referral's dynamic answers **whole and unfiltered**, and
+        **the client chooses which of them belong on the sheet**: its referral
+        form marks them, because the client owns that definition and the server
+        holds none. Naming keys here would be a guess rather than a contract —
+        and a guess that goes stale, since the charity renames its questions.
         **Who is on it: the households coming to the session in person.**
         `pending_review`, `active` and `reviewed` alike — whether an
         administrator has read the referral says nothing about whether the
@@ -885,16 +886,24 @@ paths:
         The two questions that follow the fuel question — whether the household
         is on a pre-payment meter, and whether they will let us ring them about
         it — are ordinary questions on the referral form, so they arrive inside
-        `answers` and **the client extracts them**, exactly as it does *Cause
-        Details* on the listener sheet. **Nobody is left off the list on the
+        `answers` and **the client extracts them**. The client's own referral
+        form marks which answers belong on this list, the same way it marks what
+        belongs on the listener sheet and on a picking sheet; the server holds no
+        such list and will not guess at one. **Nobody is left off the list on the
         strength of them:** every household meeting the four conditions is
         listed, and the person about to make the call reads the answers and
         decides whether to make it. A household who said no to a call may still
         be somebody worth writing to.
 
-        **No reason for referral, no date of birth, no household counts and no
-        delivery flag.** None of them bears on helping with a fuel bill, and the
-        row already holds enough to identify somebody.
+        **No reason for referral, no household counts and no delivery flag.**
+        None of them bears on helping with a fuel bill, and the row already
+        holds enough to identify somebody.
+
+        **The date of birth is the exception, and it is carried.** Some of the
+        organisations the fuel team hands a household on to will not act without
+        an age. It is sent as a date rather than an age for the reason the field
+        gives: an age is right on the day it is written down and wrong a year
+        later.
 
         A row is a **referral**, not a household. Being fed twice inside a
         fortnight is not expected to happen and nothing de-duplicates it, so a
@@ -3809,8 +3818,9 @@ components:
           type: object
           additionalProperties: true
           description: >-
-            The dynamic answers, whole. Extract *Cause Details* here; the server
-            does not know which key it is. `{}` once purged.
+            The dynamic answers, whole. Take whichever of them the client's
+            referral form marks for this sheet; the server does not know which
+            keys those are. `{}` once purged.
 
     SessionReferralDetails:
       type: object
@@ -3987,7 +3997,7 @@ components:
             crisis and the additional crisis detail are in here**, under keys the
             referral form owns — the server holds no form definition, does not
             know which keys they are and will not guess. Extract them yourself,
-            the same arrangement as *Cause Details* elsewhere.
+            the same arrangement as every other answer a sheet shows.
 
     FuelHelpHousehold:
       type: object
