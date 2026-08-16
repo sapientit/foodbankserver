@@ -8,8 +8,9 @@ import { createPickListsRepository } from '../pick-lists/pick-lists.repository.t
 import { createReferrersRepository } from '../referrers/referrers.repository.ts';
 import { createReferrersService } from '../referrers/referrers.service.ts';
 import { createSessionsRepository } from '../sessions/sessions.repository.ts';
+import type { Referral } from '../../db/schema/referrals.ts';
 import { createReferralsRepository } from './referrals.repository.ts';
-import { createReferralsService } from './referrals.service.ts';
+import { createReferralsService, type ReferralsService } from './referrals.service.ts';
 import {
   toReferralDetailsResponse,
   toReferralResponse,
@@ -20,11 +21,13 @@ import {
   type ReferralDetailsResponse,
   type ReferralResponse,
   type ReferralSearchResponse,
+  type RepeatReferralSummaryResponse,
   type RepeatReferralListResponse,
 } from './referrals.mapper.ts';
 import {
   acceptReferralSchema,
   cancelReferralSchema,
+  copyReferralSchema,
   referralAdminAmendSchema,
   referralListQuerySchema,
   referralSearchSchema,
@@ -105,7 +108,7 @@ export function referralRoutes(): Hono<AppEnv> {
         ? toRepeatReferralSummary(await service.repeatReferralSummary(referral))
         : undefined;
 
-    return c.json(toReferralResponse(referral, actor, { repeatReferrals, includeAdminInfo: true }));
+    return c.json(await oneReferral(service, referral, actor, repeatReferrals));
   });
 
   /**
@@ -171,7 +174,33 @@ export function referralRoutes(): Hono<AppEnv> {
       });
     }
 
-    return c.json(toReferralResponse(referral, actor, { includeAdminInfo: true }));
+    return c.json(await oneReferral(service, referral, actor));
+  });
+
+  /**
+   * Copying a referral that came to nothing onto a later session, so the
+   * household can be given another chance. `INITIAL_SPEC1.txt`,
+   * `#Copying a referral`.
+   *
+   * **Admin-only, which is why it is a route of its own.** The public
+   * `POST /public/referrals` is the only other way a referral is created, and
+   * it is unauthenticated and Turnstile-guarded because anybody may reach it.
+   * Nothing here is submitted by a member of the public: the household's
+   * details come off the original and the only thing the caller chooses is the
+   * session.
+   *
+   * `201` with the copy, not the original — the original is untouched, and the
+   * client navigates to what it has just made.
+   */
+  routes.post('/referrals/:id/copy', ...admins, async (c) => {
+    const { sessionId, acknowledgeOverCapacity } = await parseJsonBody(c, copyReferralSchema);
+    const actor = actorOf(c);
+    const service = serviceFor(c);
+
+    const original = await service.getReferral(c.req.param('id'));
+    const copy = await service.copy(original, sessionId, acknowledgeOverCapacity, actor);
+
+    return c.json(await oneReferral(service, copy, actor), 201);
   });
 
   /**
@@ -191,7 +220,8 @@ export function referralRoutes(): Hono<AppEnv> {
   routes.post('/referrals/:id/accept', ...admins, async (c) => {
     const { comment, authoriseReferrer } = await parseOptionalJsonBody(c, acceptReferralSchema);
     const actor = actorOf(c);
-    const accepted = await serviceFor(c).review(
+    const service = serviceFor(c);
+    const accepted = await service.review(
       c.req.param('id'),
       'active',
       comment ?? null,
@@ -199,22 +229,18 @@ export function referralRoutes(): Hono<AppEnv> {
       authoriseReferrer,
     );
 
-    return c.json(toReferralResponse(accepted, actor, { includeAdminInfo: true }));
+    return c.json(await oneReferral(service, accepted, actor));
   });
 
   routes.post('/referrals/:id/reject', ...admins, async (c) => {
     const { comment } = await parseOptionalJsonBody(c, rejectReferralSchema);
     const actor = actorOf(c);
+    const service = serviceFor(c);
     // No read first: the "still pending" guard is in the UPDATE itself, so a
     // read here would only add a query and a race window. See the service.
-    const rejected = await serviceFor(c).review(
-      c.req.param('id'),
-      'rejected',
-      comment ?? null,
-      actor,
-    );
+    const rejected = await service.review(c.req.param('id'), 'rejected', comment ?? null, actor);
 
-    return c.json(toReferralResponse(rejected, actor, { includeAdminInfo: true }));
+    return c.json(await oneReferral(service, rejected, actor));
   });
 
   /**
@@ -227,8 +253,9 @@ export function referralRoutes(): Hono<AppEnv> {
    */
   routes.post('/referrals/:id/review', ...admins, async (c) => {
     const actor = actorOf(c);
-    const reviewed = await serviceFor(c).markReviewed(c.req.param('id'), actor);
-    return c.json(toReferralResponse(reviewed, actor, { includeAdminInfo: true }));
+    const service = serviceFor(c);
+    const reviewed = await service.markReviewed(c.req.param('id'), actor);
+    return c.json(await oneReferral(service, reviewed, actor));
   });
 
   routes.post('/referrals/:id/cancel', ...admins, async (c) => {
@@ -242,10 +269,32 @@ export function referralRoutes(): Hono<AppEnv> {
       userId: actor.userId,
     });
 
-    return c.json(toReferralResponse(cancelled, actor, { includeAdminInfo: true }));
+    return c.json(await oneReferral(service, cancelled, actor));
   });
 
   return routes;
+}
+
+/**
+ * Every response carrying **one** referral, assembled the same way.
+ *
+ * The referral list deliberately does not come through here: it withholds the
+ * administrators' note, and it does not pay for the outcome query — see
+ * `ReferralResponse.outcome` and `ReferralResponseOptions.includeAdminInfo`.
+ * One helper rather than six copies, so a route added later cannot quietly
+ * ship a referral without what became of the household on it.
+ */
+async function oneReferral(
+  service: ReferralsService,
+  referral: Referral,
+  actor: Actor,
+  repeatReferrals?: RepeatReferralSummaryResponse,
+): Promise<ReferralResponse> {
+  return toReferralResponse(referral, actor, {
+    outcome: await service.outcomeFor(referral.id),
+    includeAdminInfo: true,
+    ...(repeatReferrals === undefined ? {} : { repeatReferrals }),
+  });
 }
 
 function actorOf(c: Context<AppEnv>): Actor {

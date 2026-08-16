@@ -186,6 +186,24 @@ export const cancelReferralSchema = z.object({
 });
 
 /**
+ * `POST /referrals/{id}/copy` — the session the copy goes onto, and the same
+ * over-capacity acknowledgement a move takes, because choosing a session works
+ * the same way for both. `INITIAL_SPEC1.txt`, `#Copying a referral`.
+ *
+ * **Nothing about the household, deliberately.** Every other field on the copy
+ * comes from the original or is the server's own. A body that could carry a
+ * name here would be a way of creating a referral for anybody through an
+ * admin-only route that skips the review the public one goes through — and the
+ * point of a copy is that it is the same household, not a new one. An
+ * administrator who needs to change something corrects the copy afterwards,
+ * which is what `PATCH /referrals/{id}` is for.
+ */
+export const copyReferralSchema = z.strictObject({
+  sessionId: z.uuid(),
+  acknowledgeOverCapacity: z.boolean().default(false),
+});
+
+/**
  * The administrator's note on why a referral was let through or turned away.
  *
  * One short line. It is overwritten by a later decision — there is no history —

@@ -35,7 +35,7 @@ import type {
 import {
   toListenerSheetHousehold,
   type ListenerSheetHousehold,
-  type RepeatReferralOutcome,
+  type ReferralOutcome,
 } from './referrals.mapper.ts';
 import type { ReferralAmend, ReferralSearch, ReferralSubmission } from './referrals.schema.ts';
 
@@ -66,7 +66,7 @@ export interface ReferralsServiceDeps {
  * a client.
  */
 export interface RepeatReferralMatch extends RepeatReferralCandidate {
-  readonly outcome: RepeatReferralOutcome;
+  readonly outcome: ReferralOutcome;
   readonly matchedOn: readonly MatchKind[];
 }
 
@@ -96,6 +96,14 @@ export interface ReferralSearchResults {
   readonly count: number;
   readonly results: readonly ReferralSearchCandidate[];
 }
+
+/**
+ * One message, thrown from both the up-front read and the conditioned write.
+ * They describe the same refusal and must not drift into wording it
+ * differently — a client matching on the text would see two rules.
+ */
+const CANNOT_CANCEL_WITH_OUTCOME =
+  'That referral already has an attendance outcome and can no longer be cancelled';
 
 export function createReferralsService(deps: ReferralsServiceDeps) {
   const { db, repository, sessions, referrers, referrersService, pickLists, clock, logger } = deps;
@@ -159,10 +167,27 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
    * moved before that rule still hold two, and this has to keep reading them
    * correctly.
    */
-  function deriveOutcome(attendances: readonly AttendanceStatus[]): RepeatReferralOutcome {
+  function deriveOutcome(attendances: readonly AttendanceStatus[]): ReferralOutcome {
     if (attendances.includes('attended')) return 'attended';
     if (attendances.includes('no_show')) return 'no_show';
     return 'booked';
+  }
+
+  /**
+   * The same answer for one referral, for a response that carries it.
+   *
+   * **One query, and only routes that return a single referral pay it.** The
+   * referral list does not — the client reads outcomes off the session screen,
+   * and a second query over every household on a session is not worth a field
+   * nobody asked for there. See `ReferralResponse.outcome`.
+   *
+   * A referral with no parcels at all — nothing generated for its session yet,
+   * or a copy just made — reads `booked`, which is what `deriveOutcome` says
+   * about an empty list and what the charity means by "still to come".
+   */
+  async function outcomeFor(referralId: string): Promise<ReferralOutcome> {
+    const parcels = await pickLists.listParcelsForReferral(referralId);
+    return deriveOutcome(parcels.map((parcel) => parcel.attendance));
   }
 
   /**
@@ -639,9 +664,10 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     });
 
     if (updated === undefined) {
-      // Nothing matched: either there is no such referral, or it is no longer
-      // pending. Tell those two apart so an admin is not sent chasing a ghost.
-      await getReferral(referralId);
+      // Nothing matched: there is no such referral, its details have been
+      // forgotten, or it is no longer pending. Tell the three apart so an
+      // admin is not sent chasing a ghost.
+      assertNotPurged(await getReferral(referralId));
       throw new ConflictError('That referral is not waiting to be reviewed');
     }
 
@@ -684,6 +710,11 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     actor: Actor,
   ): Promise<void> {
     const referral = await getReferral(referralId);
+    // Before the list entry is written: the accept that follows will be
+    // refused for a forgotten referral, and authorising a referrer off the
+    // back of a decision that then does not happen is the state this ordering
+    // exists to avoid.
+    assertNotPurged(referral);
     const email = referral.referrerEmail;
     if (email === null) {
       throw new UnprocessableError('That referral has no referrer address to authorise');
@@ -726,7 +757,9 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     });
 
     if (updated === undefined) {
-      await getReferral(referralId);
+      // Three cases again, as in `review` above: no such referral, forgotten,
+      // or not `active`. A forgotten referral has nothing left to read.
+      assertNotPurged(await getReferral(referralId));
       throw new ConflictError('That referral is not waiting to be read');
     }
 
@@ -746,6 +779,25 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
   }
 
   /**
+   * A referral whose details have been forgotten cannot be acted on at all.
+   *
+   * Twelve months on there is no name, no address and no answers left, so
+   * there is nothing to correct, nothing to move to another session, nothing
+   * to cancel and nothing to copy — `INITIAL_SPEC1.txt`, `#Referral
+   * maintenance`. Amending is the sharpest of the four: writing a name back
+   * onto a purged referral would put back exactly what the charity promised to
+   * forget.
+   *
+   * Pure and synchronous, so it can guard the copy route as well without
+   * pulling in the session read `assertOpenToChange` does.
+   */
+  function assertNotPurged(referral: Referral): void {
+    if (referral.piiPurgedAt !== null) {
+      throw new ConflictError('That referral has been forgotten and can no longer be changed');
+    }
+  }
+
+  /**
    * A referral that is finished with cannot be changed, and neither can one on
    * a session that has been confirmed.
    *
@@ -762,6 +814,7 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
    * session confirmed with one set of figures quietly acquires another.
    */
   async function assertOpenToChange(referral: Referral): Promise<void> {
+    assertNotPurged(referral);
     if (referral.status === 'cancelled') {
       throw new ConflictError('That referral has been cancelled');
     }
@@ -930,6 +983,18 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
    * printed. Leaving it `pending` was worse than either: it held up printing
    * and it counted as somebody the session was still waiting for.
    *
+   * **A referral whose parcel already has an outcome cannot be cancelled**,
+   * the same rule and the same stopping point as moving. Once a household has
+   * collected, been delivered to or been marked as not turning up, what
+   * happened on the day is the record: the food is off the shelves and cannot
+   * be un-given, and cancelling afterwards would leave the parcel's account of
+   * the morning and the referral's contradicting each other. The charity
+   * settled this on 2026-08-15 — `INITIAL_SPEC1.txt`, `#Referral maintenance`
+   * — knowing the alternatives: an administrator who meant "this outcome was
+   * recorded by mistake" takes the outcome back, and one who meant "give this
+   * household another chance" copies the referral, leaving the no show where
+   * it happened.
+   *
    * The three writes go in **one batch**. Without it a failure between them
    * leaves a cancelled referral with a live parcel, which is exactly the state
    * this exists to remove — and nothing would say so.
@@ -940,9 +1005,20 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     actor: { kind: 'user'; userId: string | null },
   ): Promise<Referral> {
     if (referral.status === 'cancelled') return referral; // Idempotent.
-    // Same guard as amending and moving: a rejection is not a cancellation,
-    // and a confirmed session is closed to all three.
+    // Same guard as amending and moving: a rejection is not a cancellation, a
+    // forgotten household is not one waiting for food, and a confirmed session
+    // is closed to all three.
     await assertOpenToChange(referral);
+
+    // The same read `move` makes, for the same reason and against the same
+    // test. It is what produces a `409` that says what is wrong; the condition
+    // on the statement below is what makes the rule true.
+    const settled = (await pickLists.listParcelsForReferral(referral.id)).filter(
+      (parcel) => parcel.attendance !== 'pending',
+    );
+    if (settled.length > 0) {
+      throw new ConflictError(CANNOT_CANCEL_WITH_OUTCOME);
+    }
 
     const now = clock.nowIso();
     const patch = {
@@ -952,8 +1028,10 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
       updatedAt: now,
     } as const;
 
-    await db.batch([
-      repository.buildUpdateReferral(referral.id, patch),
+    const [cancelled] = await db.batch([
+      // Carries the same "no outcome" condition as the check above, so the two
+      // cannot disagree if an outcome lands between them.
+      repository.buildCancelReferralIfNoOutcome(referral.id, patch),
       pickLists.buildCancelParcelsFor(referral.id, now),
       repository.buildAudit({
         id: crypto.randomUUID(),
@@ -966,6 +1044,25 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
         detailJson: null,
       }),
     ]);
+
+    // The conditioned `UPDATE` matched nothing, which here can only mean an
+    // outcome was recorded between the read above and the batch. The referral
+    // has not been cancelled and the caller is told.
+    //
+    // **The parcel `UPDATE` is conditioned on `pending`, not on the same `NOT
+    // EXISTS`, and for the ordinary referral that is the same thing**: the one
+    // parcel that acquired the outcome is no longer `pending`, so it is not
+    // rewritten. It differs only for a referral holding a second, stale
+    // `pending` parcel, which only a move made before moving deleted them can
+    // have — that parcel would be marked `cancelled` on a list the household
+    // is not on, while the referral stays live. `move` carries the same
+    // asymmetry for the same reason, and the harm is a tidier stale row rather
+    // than a lost outcome.
+    //
+    // The stray audit row is the same knowing trade `move` makes and documents.
+    if (cancelled.length === 0) {
+      throw new ConflictError(CANNOT_CANCEL_WITH_OUTCOME);
+    }
 
     logger.info('referral cancelled', { referralId: referral.id });
     // Read back rather than merging the patch onto the referral as it was
@@ -1076,6 +1173,172 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     return getReferral(referral.id);
   }
 
+  /**
+   * Copies a referral that came to nothing onto a later session, so a
+   * household can be given another chance. `INITIAL_SPEC1.txt`,
+   * `#Copying a referral`.
+   *
+   * **The original is not touched.** No status change, no parcel change, no
+   * attendance change — it is the record of what actually happened, and a no
+   * show stays a no show on the day it happened. That is the whole reason this
+   * is a copy rather than a move: moving is refused once an outcome exists,
+   * precisely so the day's record cannot be rewritten.
+   *
+   * **Offered only where the original can no longer come to anything**:
+   * cancelled, rejected, or marked as not having turned up. A referral still
+   * on its way to being fed is *moved*, and the two must never be alternatives
+   * for the same referral. A household who has already collected is refused
+   * too — they were fed, and feeding them again is an ordinary new referral.
+   *
+   * **The copy is `reviewed` with no comment.** The administrator making it has
+   * just decided this household should come, so there is nothing left to accept
+   * and nothing waiting to be read through. This does mean copying a *rejected*
+   * referral lets the household in after all, which is the point of the button;
+   * the rejection and its comment stay on the original where they happened.
+   *
+   * **`reasonId` comes across even if the charity has since retired it**,
+   * unlike `submit` and `applyAmendment`, which both refuse one. Those two are
+   * somebody *choosing* a reason; this is the same crisis being recorded a
+   * second time, and a household is not made to wait because a lookup was
+   * tidied up.
+   *
+   * `referredAt` is **now**, not the original's. The copy is a new referral and
+   * the charity wants it read as one — and `referredAt` is what both the
+   * twelve-month purge and the repeat-referral lookback count from, so reusing
+   * the original's would put a copy of an eleven-month-old referral a month
+   * from being forgotten before the household had been fed.
+   *
+   * **`authorisedReferrerId` is null**, for the reason `authoriseReferrer`
+   * leaves it alone: it records the match the server made when a referral
+   * arrived, and no authorisation decision is made here — the copy is
+   * `reviewed` because an administrator said so.
+   *
+   * The eligibility read and the insert are not atomic, and deliberately so.
+   * An outcome landing in that gap would mean a copy made for a household
+   * marked attended a moment later; that is a second referral for a fed
+   * household, which an administrator can cancel, and not a rule this system
+   * has to defend at the cost of a conditional insert.
+   *
+   * **Nor is this idempotent**: a double-clicked button makes two referrals on
+   * one session, two places held and two parcels picked. That is a guess rather
+   * than a decision — see `OPEN-QUESTIONS.md` Q36 and the `x-assumed` on the
+   * route. Do not add a uniqueness guard before the charity has said which
+   * shape it wants; the middle option (same original, same session) is not the
+   * same rule as refusing every second copy.
+   */
+  async function copy(
+    referral: Referral,
+    sessionId: string,
+    acknowledgeOverCapacity: boolean,
+    actor: Actor,
+  ): Promise<Referral> {
+    // First, and on its own: a forgotten referral has nothing left to copy, so
+    // there is no point asking what became of the household.
+    assertNotPurged(referral);
+
+    const outcome = await outcomeFor(referral.id);
+
+    // **Checked before the status, and not folded into it.** A household who
+    // collected is never copied — `INITIAL_SPEC1.txt`, `#Copying a referral`:
+    // they were fed, and feeding them again is an ordinary new referral. That
+    // is not implied by the status test below, because `status: 'cancelled'`
+    // with an `attended` parcel is a real row: cancelling after an outcome was
+    // allowed until the charity stopped it on 2026-08-15, and it deliberately
+    // kept the recorded outcome. New rows cannot reach that state — `cancel`
+    // now refuses — but the ones already in the database are exactly the
+    // households this must not hand a second parcel to.
+    if (outcome === 'attended') {
+      throw new ConflictError(
+        'That household has already collected, so their referral is not copied',
+      );
+    }
+
+    const finishedWith =
+      referral.status === 'cancelled' || referral.status === 'rejected' || outcome === 'no_show';
+    if (!finishedWith) {
+      throw new ConflictError(
+        'That referral can still be completed, so it is moved rather than copied',
+      );
+    }
+
+    await assertSessionAccepts(sessionId, acknowledgeOverCapacity);
+
+    const now = clock.nowIso();
+    const copyId = crypto.randomUUID();
+    const refereePhone = referral.refereePhone;
+
+    const copied: NewReferral = {
+      id: copyId,
+      sessionId,
+      // Accepted and read in one go — see above.
+      status: 'reviewed',
+      referredAt: now,
+      cancelledAt: null,
+      cancelledReason: null,
+      // Neither comes across: the comment explains a decision made about the
+      // original, and no review has taken place on this one.
+      reviewComment: null,
+      reviewedByUserId: actor.userId,
+      referrerOrganisation: referral.referrerOrganisation,
+      authorisedReferrerId: null,
+      adults: referral.adults,
+      children: referral.children,
+      isDelivery: referral.isDelivery,
+      reasonId: referral.reasonId,
+      needsFuelHelp: referral.needsFuelHelp,
+      referrerName: referral.referrerName,
+      referrerEmail: referral.referrerEmail,
+      referrerPhone: referral.referrerPhone,
+      refereeFirstName: referral.refereeFirstName,
+      refereeSurname: referral.refereeSurname,
+      refereeDateOfBirth: referral.refereeDateOfBirth,
+      refereeAddress: referral.refereeAddress,
+      refereePostcode: referral.refereePostcode,
+      refereePhone,
+      // Recomputed rather than copied, the same way `submit` derives them: a
+      // referral written before migration `0019` backfilled the two columns
+      // carries `null` in them, and copying that forward would make the copy
+      // invisible to repeat-referral matching.
+      refereePostcodeNormalised: normalisePostcode(referral.refereePostcode),
+      refereePhoneNormalised: refereePhone === null ? null : normalisePhone(refereePhone),
+      answersJson: referral.answersJson,
+      // Replaces rather than extends: a copy is a fresh start on what the
+      // office knows about the household, and an administrator who wants the
+      // old note reads the referral it was written on. The date is the
+      // **original's** submission date, in London, which is how somebody
+      // reading this recognises which referral it means.
+      adminInfo: `Copied from referral dated ${instantToLondonWallClock(referral.referredAt).date}`,
+      // The copy has not been texted about its own session, whatever the
+      // original was told about its one.
+      smsReminderSentAt: null,
+      piiPurgedAt: null,
+      createdByUserId: actor.userId,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    // Referral and audit entry in one batch, the same as `submit`: a referral
+    // nobody can account for is worse than no referral.
+    await db.batch([
+      repository.buildInsertReferral(copied),
+      repository.buildAudit({
+        id: crypto.randomUUID(),
+        occurredAt: now,
+        actorKind: 'user',
+        actorUserId: actor.userId,
+        entityType: 'referral',
+        entityId: copyId,
+        action: 'copied',
+        // An id, not a detail about anybody — the same rule the amendment
+        // audit follows.
+        detailJson: JSON.stringify({ copiedFromReferralId: referral.id }),
+      }),
+    ]);
+
+    logger.info('referral copied', { referralId: copyId, sessionId, userId: actor.userId });
+    return getReferral(copyId);
+  }
+
   return {
     submit,
     listenerSheet,
@@ -1088,6 +1351,8 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     applyAmendment,
     cancel,
     move,
+    copy,
+    outcomeFor,
     repeatReferralSummary,
     listRepeatReferralsFor,
     searchReferrals,

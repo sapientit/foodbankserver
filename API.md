@@ -237,9 +237,15 @@ reason — it can name a referrer or record a suspicion about one.
 **`adminInfo` is narrower than admin-only.** It is the administrators' own
 free-text note about the household, and it is on responses that carry **one**
 referral: `GET /referrals/{id}`, `PATCH /referrals/{id}`, and the accept,
-reject, review and cancel routes. It is **absent from the `GET /referrals` list
-rows for an administrator too**, so do not build a list column from it — open
-the referral.
+reject, review, cancel and copy routes. It is **absent from the `GET /referrals`
+list rows for an administrator too**, so do not build a list column from it —
+open the referral.
+
+**`outcome` is optional for a different reason and is not admin-only.** A team
+lead receives it. It is on the same one-referral responses as `adminInfo` and
+absent from the list rows, but because deriving it costs a query rather than
+because anybody is being withheld from — see "A referral now says what became of
+the household".
 
 **`POST /referrals/search` is the single exception**, settled by the charity on
 2026-08-15: a search result row carries `adminInfo`, and it is the only response
@@ -746,6 +752,109 @@ putting there as well as in the field: a corrected address reaches the driver, a
 note saying why reaches the person handing the bag over — the answers surface
 beside the parcel on the picking screen and on the listener sheet.
 
+### A referral now says what became of the household
+
+`Referral` gains `outcome`: `attended` | `no_show` | `booked`. It answers a
+different question from `status`, and the two are not alternatives —
+
+|           | answers                                                                                           |
+| --------- | ------------------------------------------------------------------------------------------------- |
+| `status`  | what became of the **referral**: awaiting review, accepted, read, rejected, withdrawn             |
+| `outcome` | what became of the **household**: they collected, they did not turn up, or they are still to come |
+
+`booked` is "still to come", and covers three ways of getting there: the parcel
+is picked and waiting to be marked, no pick list has been made for the session
+yet, or the referral was cancelled before the day came.
+
+**So a cancelled referral reads `status: "cancelled"` with `outcome: "booked"`,
+and that is not a contradiction.** Nothing happened on the day; the cancellation
+is recorded where cancellations are recorded. Do not derive one field from the
+other, and do not show them as a single combined state.
+
+Three practical notes:
+
+- **Not admin-only.** A team lead gets it, because they already see who turned
+  up on the session screen.
+- **Present on every response carrying one referral** — `GET /referrals/{id}`,
+  `PATCH /referrals/{id}`, and the accept, reject, review, cancel and copy
+  routes. **Absent from the `GET /referrals` list rows**, where deriving it
+  means a second query over the whole session. Treat it as optional in your
+  generated type and read outcomes off the session screen for lists.
+- Same three words and meanings as `RepeatReferralMatch.outcome`, deliberately.
+
+### Copying a referral (admin only)
+
+```
+POST /api/v1/referrals/{id}/copy   { sessionId, acknowledgeOverCapacity? }  → 201 Referral
+```
+
+A household whose referral came to nothing rings the food bank and is given
+another chance. The referral is copied onto a later session and the copy is an
+ordinary new referral from there.
+
+**The original is untouched** — same status, same session, same parcel, same
+attendance. A no-show stays a no-show on the day it happened. Do not follow this
+with a cancel of the original; that would be refused anyway.
+
+**When to offer the button.** Only where the original can no longer come to
+anything: `status` is `cancelled` or `rejected`, **or** `outcome` is `no_show`.
+Anything else is a `409` — a referral still on its way to being fed is _moved_,
+not copied, and the two are never alternatives for the same referral. Gate on
+`status` and `outcome` together and the screen and the server agree. A household
+who has already collected is a `409` too.
+
+**What the copy carries:** the referee's name, date of birth, address, postcode
+and phone; `adults`, `children`, `householdSize`, `isDelivery`, `needsFuelHelp`;
+`reasonId`; `answers` whole; and the referrer's name, organisation, email and
+phone.
+
+**What it does not:** `status`, `sessionId`, `reviewComment`, `adminInfo`, and
+any parcel.
+
+**The copy arrives `status: "reviewed"` with `reviewComment: null`.** The
+administrator making it has just decided this household should come, so there is
+nothing left to accept and nothing waiting to be read. This means copying a
+**rejected** referral lets the household in after all — that is the point of the
+button. The rejection and its comment stay on the original.
+
+**`adminInfo` on the copy is written by the server**: `Copied from referral
+dated YYYY-MM-DD`, the date the **original** was submitted, London. It replaces
+rather than extends — the original's note does not come across.
+
+**`referredAt` is the moment the copy was made**, not the original's, so it
+sorts as a new referral on the search screen and gets its own twelve months
+before the purge.
+
+**`reasonId` comes across even if the charity has since retired it** — unlike
+`PATCH /referrals/{id}`, which refuses a retired reason with a `422`.
+
+**Capacity works exactly like a move.** A full session is warned about, never
+refused: send `acknowledgeOverCapacity: true` to confirm, and offer the same
+session picker you offer for a move. A cancelled or already-confirmed session
+cannot take a copy at all.
+
+**No parcel is created.** The copy holds its place on its new session and is
+picked for in the ordinary way when that session's pick list is generated or
+opened again.
+
+No Turnstile token — this is authenticated, unlike `POST /public/referrals`.
+
+**Guard the button against a double press.** Copying is not idempotent and the
+server does not stop a second copy: two presses make two referrals on the same
+session, two places held and two parcels picked. That is currently a guess
+(`OPEN-QUESTIONS.md` Q36, and `x-assumed` on the operation), so disable the
+button while the request is in flight rather than relying on the server to
+refuse.
+
+### A forgotten referral can no longer be acted on
+
+Once `piiPurgedAt` is set, `PATCH /referrals/{id}` (correcting **or** moving),
+`POST /referrals/{id}/cancel`, `/accept`, `/reject`, `/review` and `/copy` are
+all a `409`. Twelve months on there is no name, no address and no answers left,
+so there is nothing to correct, decide on, read through, move or copy. Hide
+those controls on a purged referral rather than letting the user find out by
+pressing one.
+
 ---
 
 ## 4. Running a session
@@ -857,11 +966,23 @@ The session's `booked` count already excludes it, as do
 pick list retains the row, deliberately, so a team leader holding a printed
 sheet can see why that pick number is not coming.
 
-One case is a guess and is marked `x-assumed` on the cancel operation: a parcel
-whose outcome was **already recorded** keeps it. An `attended` parcel stays
-`attended` when its referral is cancelled afterwards — it moved stock, and the
-repeat-referral count reads it as the household having been fed. Only a
-`pending` parcel becomes `cancelled`. See `OPEN-QUESTIONS.md` Q33.
+**A household whose parcel already has an outcome can no longer be cancelled
+at all**, and this is now settled rather than assumed. Once they have collected,
+been delivered to, or been marked as not having turned up,
+`POST /referrals/{id}/cancel` is a `409` and nothing changes. The food has come
+off the shelves and cannot be un-given, and cancelling afterwards would leave
+the parcel's account of the morning contradicting the referral's. So only a
+`pending` parcel ever becomes `cancelled` — not because a recorded outcome wins
+a race, but because the cancellation never happens.
+
+**Gate the cancel button on `outcome` as well as `status`.** Two things an
+operator might have meant instead:
+
+- the **outcome** was recorded by mistake → take it back through
+  `POST /parcels/{id}/attendance`, which undoes the stock with it;
+- a household who did not turn up should get **another chance** → copy the
+  referral onto a later session with `POST /referrals/{id}/copy`, and leave the
+  no-show where it happened.
 
 ### Divergence
 
@@ -1166,13 +1287,16 @@ one of these is now a `409`:
 The move is the one that used to do real damage: it left the household recorded
 against two sessions and changed the figures of a session already signed off.
 
-**A move has a second `409` that is not about the session at all.** A referral
-whose parcel already carries an attendance outcome cannot be moved, even though
-its session is still open — a session stays open until _every_ household has an
-outcome, so one that has been marked attended or no-show, stock already gone,
-sits on an open session. Moving it would say it is due food on a day it has
-already been dealt with. Giving a no-show another chance is a **new referral**,
-not a move. Disable move on any referral whose parcel has an outcome, not only
+**A move has a second `409` that is not about the session at all, and cancel now
+has the same one.** A referral whose parcel already carries an attendance
+outcome can be neither moved nor cancelled, even though its session is still
+open — a session stays open until _every_ household has an outcome, so one that
+has been marked attended or no-show, stock already gone, sits on an open
+session. Moving it would say it is due food on a day it has already been dealt
+with; cancelling it would leave the parcel's account of the morning
+contradicting the referral's. Giving a no-show another chance is a **copy** onto
+a later session (`POST /referrals/{id}/copy`), not a move and not a cancel.
+Disable both buttons on any referral whose `outcome` is not `booked`, not only
 on a confirmed session.
 
 **What the screen should do:** disable amend, move and cancel for any referral

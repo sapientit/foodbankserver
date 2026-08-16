@@ -48,6 +48,22 @@ export interface ReferralResponse {
   readonly refereePhone: string | null;
   readonly answers: Record<string, unknown>;
   readonly piiPurgedAt: string | null;
+  /**
+   * What became of the household, as against `status` above, which is what
+   * became of the referral. `INITIAL_SPEC1.txt`, `#Referral maintenance`.
+   *
+   * **Not admin-only, unlike everything below it.** It is not personal
+   * information, and a team leader running the session is already told who
+   * turned up and who did not — withholding it here would hide from them
+   * something the session screen has already shown them. It sits in `base`
+   * for that reason.
+   *
+   * Optional only because it costs a query: it is present on every response
+   * carrying **one** referral, and absent from the list, where the client
+   * does not need it and a second query over the whole session would be the
+   * price. See `ReferralResponseOptions.outcome`.
+   */
+  readonly outcome?: ReferralOutcome | undefined;
   /** Present only for an admin. */
   readonly reasonId?: string | undefined;
   readonly referrerEmail?: string | null | undefined;
@@ -74,10 +90,24 @@ export interface ReferralResponse {
 
 /**
  * What a caller has to ask for on top of the fields every referral response
- * carries. Both are admin-only whatever is passed here — this decides whether
- * the field is offered at all, and `actor.role` decides whether it is given.
+ * carries.
+ *
+ * `repeatReferrals` and `includeAdminInfo` are admin-only whatever is passed
+ * here — they decide whether the field is offered at all, and `actor.role`
+ * decides whether it is given. `outcome` is not: see the field.
  */
 export interface ReferralResponseOptions {
+  /**
+   * What became of the household, when the caller has paid for the query.
+   *
+   * **Supplied rather than derived here** because deriving it means reading
+   * the referral's parcels, and a mapper does no I/O. Every route returning a
+   * single referral supplies it; the list route does not.
+   *
+   * **No role gate.** Unlike the two below, this is passed straight through
+   * to a team leader — see `ReferralResponse.outcome`.
+   */
+  readonly outcome?: ReferralOutcome | undefined;
   /**
    * The repeat-referral count, when the caller has paid for the query.
    * `GET /referrals/:id` fetches it for an administrator; nothing else does.
@@ -121,6 +151,10 @@ export function toReferralResponse(
     refereePhone: referral.refereePhone,
     answers: parseAnswers(referral.answersJson),
     piiPurgedAt: referral.piiPurgedAt,
+    // Spread for the same reason `adminInfo` is: a caller that did not pay
+    // for the query gets no field at all, rather than a `null` a client would
+    // have to read as "still to come".
+    ...(options.outcome === undefined ? {} : { outcome: options.outcome }),
   };
 
   if (actor.role !== 'admin') return base;
@@ -237,10 +271,22 @@ export function toListenerSheetHousehold(
 }
 
 /**
+ * What became of the household, as against what became of the referral:
  * `attended` | `no_show` | `booked` — the vocabulary attendance already
  * uses, rather than a second set of words for the same three states.
+ *
+ * `booked` means nothing has happened on the day yet, and covers all three
+ * ways of getting there: the parcel is picked and waiting to be marked, no
+ * picking list has been made for the session, or the referral was cancelled
+ * before the day came. **A cancelled referral reads `booked` deliberately** —
+ * `INITIAL_SPEC1.txt`, `#Referral maintenance`: the referral's own `status` is
+ * where a cancellation is recorded, and the two answers must never contradict
+ * each other.
+ *
+ * Used by `ReferralResponse` and by `RepeatReferralMatchResponse`. One type,
+ * because "what happened to this household on that day" is one question.
  */
-export type RepeatReferralOutcome = 'attended' | 'no_show' | 'booked';
+export type ReferralOutcome = 'attended' | 'no_show' | 'booked';
 
 /** `{ count, mostRecentSessionDate }` — admin-only, embedded in `ReferralResponse`. */
 export interface RepeatReferralSummaryResponse {
@@ -286,7 +332,7 @@ export interface RepeatReferralMatchResponse {
   readonly sessionId: string;
   /** `YYYY-MM-DD`, London. The referral's **own** session, not a parcel's. */
   readonly sessionDate: string;
-  readonly outcome: RepeatReferralOutcome;
+  readonly outcome: ReferralOutcome;
   /** Non-empty: which of date of birth, postcode and phone this referral shares. */
   readonly matchedOn: readonly MatchKind[];
   readonly refereeFirstName: string | null;
@@ -308,7 +354,7 @@ interface RepeatReferralMatchInput {
   readonly id: string;
   readonly sessionId: string;
   readonly sessionDate: string;
-  readonly outcome: RepeatReferralOutcome;
+  readonly outcome: ReferralOutcome;
   readonly matchedOn: readonly MatchKind[];
   readonly refereeFirstName: string | null;
   readonly refereeSurname: string | null;

@@ -27,6 +27,8 @@ Referral:  pending_review → active → reviewed  (an unrecognised referrer sta
            pending_review → rejected           (the decision the address forced)
            active, reviewed → moved(session) | amended(answers) | cancelled
            rejected, cancelled                 (both terminal)
+           rejected | cancelled | no-show → copied onto another session
+                                               (a NEW referral, `reviewed`; the original is untouched)
 Pick list: draft → printed → confirmed        (draft → printed needs every parcel reviewed;
                                                confirmed = picking finished, list locked)
 Message:   reminder | staff_reply           (outbound, read on arrival)
@@ -58,6 +60,26 @@ and `cancelled` release the place.
 **`rejected` and `cancelled` are terminal.** A referral in either state cannot be amended, moved or
 cancelled; `assertOpenToChange` is the shared guard, and `cancel` refuses a rejected one separately
 so a rejection cannot be relabelled as a cancellation.
+
+**A terminal referral is exactly what can be _copied_**, and copying is the only forward path out of
+one. `POST /referrals/{id}/copy` is offered where the original can no longer come to anything —
+`cancelled`, `rejected`, or a household marked `no_show` — and produces a **new** referral,
+`reviewed`, on a session the administrator chooses. The original is not touched: a no-show stays a
+no-show on the day it happened, which is the same reasoning that refuses a move once an outcome
+exists. A referral still on its way to being fed is moved, not copied, and the two must never be
+alternatives for the same referral. `INITIAL_SPEC1.txt`, `#Copying a referral`.
+
+**A purged referral is terminal in a stronger sense**: amend, move, cancel, accept, reject,
+mark-reviewed and copy are all refused once `piiPurgedAt` is set. `assertNotPurged` is the shared
+guard for the paths that read first; `updateIfStatus` carries `pii_purged_at IS NULL` for the two
+that do not. Twelve months on there is nothing left to act on — `INITIAL_SPEC1.txt`,
+`#Referral maintenance`.
+
+**`outcome` is not `status`.** `status` is what became of the referral; `outcome` — `attended` |
+`no_show` | `booked`, derived from the referral's parcels — is what became of the household on the
+day. A cancelled referral reads `status: cancelled` with `outcome: booked`, deliberately: nothing
+happened on the day, and the cancellation is recorded on the status. One vocabulary serves both
+`Referral.outcome` and `RepeatReferralMatch.outcome`.
 
 **The household's own details are amendable; the referrer's are not.** Name, date of birth, address,
 postcode, referee phone, household counts, delivery and fuel flags, reason and answers can all be
@@ -167,11 +189,13 @@ flipped to `attended` and issuing stock for a household nobody expects.
 > taken back, so it must still move `attended` to `no_show` and back.
 
 The write is guarded `WHERE attendance = 'pending'`, in the statement rather than in TypeScript
-because there is no transaction to make read-then-write safe. So **an outcome already recorded
-survives a later cancellation**: an `attended` parcel moved stock, and rewriting it would leave
-`parcel_issued` rows on a parcel that no longer says anyone was fed, and would silently drop the
-household out of the repeat-referral count. That is the server's judgement, not the charity's —
-`OPEN-QUESTIONS.md` Q33.
+because there is no transaction to make read-then-write safe. **An outcome already recorded
+therefore survives** — but as of 2026-08-15 it never has to, because the cancellation itself is
+refused: the charity settled that a household who has collected, been delivered to or been marked as
+not turning up can no longer be cancelled at all (`INITIAL_SPEC1.txt`, `#Referral maintenance`). The
+referral `UPDATE` carries `NOT EXISTS (… attendance <> 'pending')` for the same reason
+`buildMoveReferral` does, so the two conditions cannot disagree if an outcome lands between the
+service's read and the batch. The parcel guard stays as the second half of the same rule.
 
 Because cancellation has to reach `parcels` in the **same** `db.batch()` as the referral update,
 `referrals.service.ts` takes the pick-lists _repository_, not its service: a service cannot hand

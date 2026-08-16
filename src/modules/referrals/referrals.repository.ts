@@ -6,6 +6,7 @@ import {
   eq,
   gte,
   inArray,
+  isNull,
   max,
   ne,
   notInArray,
@@ -329,6 +330,13 @@ export function createReferralsRepository(db: Database) {
      *
      * Returns `undefined` when nothing matched, which the service reads as
      * "somebody else got there first".
+     *
+     * **Also refuses a referral whose details have been forgotten**, which is
+     * the second thing the caller has to tell apart when nothing matches.
+     * There is nothing left to accept, reject or read through twelve months on
+     * — `INITIAL_SPEC1.txt`, `#Referral maintenance` — and the condition rides
+     * here with the status one rather than being read first, for the same
+     * reason.
      */
     async updateIfStatus(
       id: string,
@@ -338,7 +346,7 @@ export function createReferralsRepository(db: Database) {
       const rows = await db
         .update(referrals)
         .set(patch)
-        .where(and(eq(referrals.id, id), eq(referrals.status, from)))
+        .where(and(eq(referrals.id, id), eq(referrals.status, from), isNull(referrals.piiPurgedAt)))
         .returning();
       return expectAtMostOne(rows);
     },
@@ -517,10 +525,6 @@ export function createReferralsRepository(db: Database) {
       return db.insert(referrals).values(value);
     },
 
-    buildUpdateReferral(id: string, patch: Patch<NewReferral>) {
-      return db.update(referrals).set(patch).where(eq(referrals.id, id));
-    },
-
     /**
      * Moves a referral to another session **only if none of its parcels holds
      * an attendance outcome**, and returns the row when it did.
@@ -543,6 +547,40 @@ export function createReferralsRepository(db: Database) {
       return db
         .update(referrals)
         .set({ sessionId, updatedAt: at })
+        .where(
+          and(
+            eq(referrals.id, id),
+            sql`NOT EXISTS (SELECT 1 FROM ${parcels}
+                            WHERE ${parcels.referralId} = ${id}
+                              AND ${parcels.attendance} <> 'pending')`,
+          ),
+        )
+        .returning();
+    },
+
+    /**
+     * Cancels a referral **only if none of its parcels holds an attendance
+     * outcome**, and returns the row when it did.
+     *
+     * The same shape as `buildMoveReferral`, and for the same reason: the
+     * charity settled that a household who has collected, been delivered to or
+     * been marked as not turning up can no longer be cancelled
+     * (`INITIAL_SPEC1.txt`, `#Referral maintenance`), and D1 has no
+     * interactive transaction to make the service's up-front read safe on its
+     * own. Between that read and this batch a team leader can mark the
+     * household as having turned up; without the condition here the
+     * cancellation would land anyway, and the parcel would then say the
+     * household was fed while the referral said they pulled out.
+     *
+     * **`<> 'pending'` deliberately, the same test the service applies**, so
+     * the two cannot drift into disagreeing about what an outcome is. Note
+     * that the parcel `UPDATE` that rides in the same batch is already
+     * conditioned on `pending`, so it cannot rewrite an outcome either.
+     */
+    buildCancelReferralIfNoOutcome(id: string, patch: Patch<NewReferral>) {
+      return db
+        .update(referrals)
+        .set(patch)
         .where(
           and(
             eq(referrals.id, id),

@@ -1969,9 +1969,13 @@ describe('cancelling a referral after its parcel has been picked', () => {
     });
   });
 
-  it("keeps a parcel's recorded 'attended' outcome when its referral is cancelled afterwards", async () => {
-    // The pending guard on `buildCancelParcelsFor`: an outcome already
-    // recorded is left alone, not flipped to cancelled underneath it.
+  it('refuses to cancel a referral whose parcel has already been marked attended', async () => {
+    // The charity settled on 2026-08-15 that a household who has collected can
+    // no longer be cancelled at all — `INITIAL_SPEC1.txt`, `#Referral
+    // maintenance`. This test used to assert the superseded rule, that the
+    // cancellation went through and only the parcel's recorded outcome was left
+    // alone. Now the cancellation itself is refused, so the parcel's `pending`
+    // guard is never reached and the outcome survives for a stronger reason.
     const { testApp, token, world: w } = await world();
     const referral = await submitReferral(testApp, w, { adults: 1, children: 0 });
     const { id: pickListId } = await generatePickList(testApp, token, w.sessionId);
@@ -1989,17 +1993,25 @@ describe('cancelling a referral after its parcel has been picked', () => {
     });
     expect(attendance.status).toBe(200);
 
-    // Cancelling still requires the session be open, so this only works
-    // while it is unconfirmed — which it still is, since only attendance was
-    // recorded above, not confirmation.
+    // The session is still open — only attendance was recorded above, not
+    // confirmation — so the refusal below is the outcome rule and not the
+    // confirmed-session one.
     const cancelled = await testApp.request(`/api/v1/referrals/${referral.id}/cancel`, {
       method: 'POST',
       headers: authHeaders(token),
     });
-    expect(cancelled.status).toBe(200);
+    expect(cancelled.status).toBe(409);
 
+    // Nothing moved: the parcel keeps its outcome and the referral is not
+    // cancelled. The batch is conditioned on the same test, so a partial write
+    // would show up here as one of these two disagreeing with the other.
     const after = await readPickList(testApp, token, pickListId);
     expect(after.parcels[0]?.attendance).toBe('attended');
+
+    const referralAfter = await testApp.request(`/api/v1/referrals/${referral.id}`, {
+      headers: authHeaders(token),
+    });
+    expect(await referralAfter.json()).toMatchObject({ status: 'active', outcome: 'attended' });
   });
 
   it('cancelling twice leaves the parcel cancelled and does not error', async () => {

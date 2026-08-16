@@ -287,74 +287,48 @@ All data associated with the referral will be deleted at the same time
 
 ---
 
-## Q33 — Can a household be cancelled after they have already collected their parcel?
+## Q36 — Should copying a referral twice onto the same session be prevented?
 
-`Status: open` · `Raised by: server` · `Blocks: nothing today — the recorded outcome is kept`
+`Status: open` · `Raised by: server` · `Blocks: nothing — copying is unguarded, which is the guess`
 
-Cancelling a referral now marks its parcel `cancelled`, so a household who pulls out stops reading as
-somebody the session is still waiting for (`INITIAL_SPEC1.txt`, "Referral maintenance"). That settles
-the ordinary case, where the parcel is picked and the household then rings to say they cannot come.
+`POST /referrals/{id}/copy` (`INITIAL_SPEC1.txt`, `#Copying a referral`) inserts a new referral with
+no uniqueness guard of any kind. So an administrator who double-clicks the button, or whose browser
+retries the request, gets **two** referrals for the same household on the same session — two places
+held, two parcels picked, two bags packed.
 
-It does not settle the other one. Nothing stops an administrator cancelling a referral **after** the
-team leader has already marked that household as having turned up and taken their food away. The
-session stays open to change until it is signed off, so there is a window — a whole session morning
-wide — in which both things can have happened.
+The server is guessing that this is acceptable, and the guess is not baseless: public submission has
+the same property and the charity accepted that race knowingly (`assertSessionAccepts` notes it), a
+duplicate is visible on the session's own list rather than silent, and one press of cancel undoes it.
+Nothing about the stock ledger is at risk, because stock moves only on attendance and each duplicate
+would need its own attendance to move any.
 
-The server currently keeps the recorded outcome: a parcel marked as attended stays attended, and only
-a parcel still awaiting an outcome becomes cancelled. That is a guess, made this way because the
-alternative is demonstrably worse rather than because anybody asked for it:
+But copying is not the same shape as submitting. A public submission is one member of the public
+filling in a form once; a copy is a button on an admin screen, pressed while somebody is on the
+phone, and a button is exactly the thing that gets double-clicked. The cost of the two options is
+also asymmetric in a way worth deciding rather than inheriting:
 
-- **The food is gone.** Marking a household as attended is what takes their items off the shelves.
-  Rewriting the parcel to say they cancelled would leave the stock movements belonging to a parcel
-  that no longer says anyone was fed, and the next stock take would not reconcile.
-- **The repeat-referral count would under-report.** That screen counts a household as fed when one of
-  their parcels reads attended (`INITIAL_SPEC1.txt`, "Reviewing a referral"). A household who
-  collected in March and was cancelled in April would silently stop counting, which is the failure
-  that screen exists to prevent.
-- **But the administrator did press cancel**, and gets no warning that it did nothing to the parcel.
-  If what they meant was "this collection was recorded by mistake", the thing they actually want is
-  to take the attendance outcome back — which is a different button, and one they may not know is
-  there.
+- **Leave it unguarded** — the food bank occasionally packs a second bag nobody is coming for, and
+  somebody notices on the picking list and cancels it.
+- **Refuse the second copy** — an administrator who genuinely wants two parcels for one household on
+  one session cannot have them, and gets a refusal that reads like a bug unless the screen explains
+  it.
 
-So the question is really about what cancelling means once a household has been fed. The server's own
-view is that it is a data-entry mistake in one direction or the other, and that being told so is
-better than either silent outcome — but which mistake it is, is the charity's to say.
+There is a middle option the server has not built either: refuse only a copy of the **same original**
+onto the **same session**, which stops the double-click without stopping a deliberate second copy of
+a different referral.
 
-**Question for the charity:** If a household has already been marked as having collected their
-parcel, should an administrator be able to cancel that referral at all? If they should, does the
-record say the household was fed, or that they cancelled — and if the answer is that they should be
-stopped and told to take the collection back first, say so and it becomes a refusal.
+**Question for the charity:** if the same referral is copied onto the same session twice, should the
+food bank end up with two parcels for that household, or should the second attempt be refused? If it
+should be refused, does that refusal apply to any second copy of that original, or only to a second
+copy onto the same session?
 
 **A:**
-No - if they have collected/been delivered to (or even a no show/not-in then they cannot be cancelled. In the no-show event they could possibly be over to a different session, but that would be best done as a clone of the referral - leave the no show where it is. This is a possible future requirement. Currently no cancel after the status has been set.
+We do not need to restrict this. If the admin wants to copy multiple times they can. Leave it
+unguarded — neither the second copy of an original nor a second copy onto the same session is
+refused.
 
----
-
-## Q35 — Can a referral whose details have been forgotten still be moved to another session?
-
-`Status: open` · `Raised by: client` · `Blocks: nothing — the client has stopped offering it, which is the guess`
-
-Pete asked on 2026-08-15 for cancel and move to sit together as two buttons on one line of the
-referral screen (`screenDetails.md`, the referral detail screen). They did not previously live
-together: cancel was inside the block the screen hides once a referral has been purged, and move had
-a section of its own that was shown regardless. Putting them on one line settles that difference by
-accident, and the client has settled it the strict way — **neither is offered on a purged referral**.
-
-The reasoning for that reading, which is the client's and not the charity's: twelve months on, the
-household's name, address and answers are gone, so moving the referral to a future session would put
-a parcel with nobody's name on it onto a pick list, and the printed sheet exists to let a volunteer
-check they are handing the right bag to the right person.
-
-Against it: nothing was actually wrong with the old behaviour, and an administrator who wanted to
-move a purged referral had a reason nobody has asked about.
-
-Mark reviewed is now on that same line and inherits the same rule, so it too has stopped appearing on
-a purged referral — where it used to appear at both ends of the page. That one is easier to argue
-for: there is nothing left to read through, so nothing to mark as read.
-
-**Question for the charity:** should a purged referral still be movable to another session, and
-should it still be markable as reviewed? If either should, that button alone survives the purge while
-the rest of the line does not, which is easy enough to write but needs saying, because it reads like
-an oversight otherwise.
-
-**A:**
+(Answered by Pete on 2026-08-15, recorded here by the client assistant at his instruction. The
+client already disables the copy button while its request is in flight, which is ordinary button
+behaviour rather than a rule, and it keeps that guard either way. **Closing this entry is the
+server's** — the decision belongs in `INITIAL_SPEC1.txt` with the `x-assumed` removed from
+`POST /referrals/{id}/copy`, and this entry deleted in that same change.)
