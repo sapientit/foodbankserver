@@ -86,7 +86,8 @@ export async function materialiseSessions(deps: MaterialiseDeps): Promise<Materi
         durationMinutes: occurrence.durationMinutes,
         location: occurrence.location,
         capacity: occurrence.capacity,
-        deliveryTime: occurrence.deliveryTime,
+        deliveryWindowStart: occurrence.deliveryWindowStart,
+        deliveryWindowEnd: occurrence.deliveryWindowEnd,
         deliveriesAllowed: occurrence.deliveriesAllowed ? 1 : 0,
         status: 'planned',
         cancelledReason: null,
@@ -124,7 +125,8 @@ function toRecurrenceTemplate(row: {
   durationMinutes: number;
   location: string;
   capacity: number;
-  deliveryTime: string | null;
+  deliveryWindowStart: string | null;
+  deliveryWindowEnd: string | null;
   deliveriesAllowed: number;
   activeFrom: string;
   activeUntil: string | null;
@@ -136,7 +138,8 @@ function toRecurrenceTemplate(row: {
     durationMinutes: row.durationMinutes,
     location: row.location,
     capacity: row.capacity,
-    deliveryTime: row.deliveryTime,
+    deliveryWindowStart: row.deliveryWindowStart,
+    deliveryWindowEnd: row.deliveryWindowEnd,
     deliveriesAllowed: row.deliveriesAllowed === 1,
     activeFrom: row.activeFrom,
     activeUntil: row.activeUntil,

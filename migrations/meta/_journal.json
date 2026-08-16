@@ -169,6 +169,13 @@
       "when": 1786645726558,
       "tag": "0023_referral-admin-info",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1786865020149,
+      "tag": "0024_delivery-window",
+      "breakpoints": true
     }
   ]
 }

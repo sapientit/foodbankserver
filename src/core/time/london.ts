@@ -48,6 +48,24 @@ export function isPlainTime(value: string): boolean {
 }
 
 /**
+ * Adds `minutes` to a wall-clock `PlainTime`, wrapping modulo 24 hours.
+ *
+ * This is calendar-day arithmetic on a single wall clock, not an instant — a
+ * session starting 23:00 and lasting 120 minutes ends 01:00 *the same wall
+ * clock*, with no date attached and no BST crossing to account for. Wrapping
+ * is therefore the right answer, not an overflow to reject: the caller who
+ * needs "session start plus duration" as a delivery window fallback wants
+ * exactly this, and a session is never allowed to be more than 24 hours long.
+ */
+export function addMinutesToPlainTime(time: PlainTime, minutes: number): PlainTime {
+  const { hour, minute } = parsePlainTime(time);
+  const totalMinutes = (((hour * 60 + minute + minutes) % (24 * 60)) + 24 * 60) % (24 * 60);
+  const wrappedHour = Math.floor(totalMinutes / 60);
+  const wrappedMinute = totalMinutes % 60;
+  return `${String(wrappedHour).padStart(2, '0')}:${String(wrappedMinute).padStart(2, '0')}`;
+}
+
+/**
  * The wall-clock reading in London at a given instant, expressed as the epoch
  * milliseconds that reading *would* have if it were UTC. The difference
  * between that and the true instant is London's offset at that moment.

@@ -13,7 +13,8 @@ function session(overrides: Partial<Session> = {}): Session {
     durationMinutes: 120,
     location: 'Church Hall',
     capacity: 25,
-    deliveryTime: null,
+    deliveryWindowStart: null,
+    deliveryWindowEnd: null,
     deliveriesAllowed: 1,
     status: 'planned',
     cancelledReason: null,
@@ -40,19 +41,26 @@ describe('composeReminder', () => {
     );
   });
 
-  it('gives a delivered household the date and delivery time and no place at all', () => {
-    const message = composeReminder(session({ deliveryTime: '13:00' }), true);
+  it('gives a delivered household the date and the stored delivery window and no place at all', () => {
+    const message = composeReminder(
+      session({ deliveryWindowStart: '13:00', deliveryWindowEnd: '15:00' }),
+      true,
+    );
 
     expect(message).toBe(
-      'Reminder: your food bank delivery is Fri 14 Aug, around 13:00. Reply to this message if anything has changed.',
+      'Reminder: your food bank delivery is Fri 14 Aug, between 13:00 and 15:00. Reply to this message if anything has changed.',
     );
     expect(message).not.toContain('Church Hall');
   });
 
-  it('falls back to the start time when the session has no delivery time', () => {
-    const message = composeReminder(session({ deliveryTime: null, startTime: '09:30' }), true);
+  it('falls back to the session’s own hours when it has no delivery window set', () => {
+    const message = composeReminder(
+      session({ deliveryWindowStart: null, deliveryWindowEnd: null, startTime: '09:30' }),
+      true,
+    );
 
-    expect(message).toContain('around 09:30');
+    // 09:30 plus the fixture's 120-minute duration.
+    expect(message).toContain('between 09:30 and 11:30');
   });
 
   it('never carries an address on a delivery reminder', () => {
@@ -66,9 +74,10 @@ describe('composeReminder', () => {
 
   it('stays within one SMS segment (160 GSM-7 characters)', () => {
     expect(composeReminder(session(), false).length).toBeLessThanOrEqual(160);
-    expect(composeReminder(session({ deliveryTime: '13:00' }), true).length).toBeLessThanOrEqual(
-      160,
-    );
+    expect(
+      composeReminder(session({ deliveryWindowStart: '13:00', deliveryWindowEnd: '15:00' }), true)
+        .length,
+    ).toBeLessThanOrEqual(160);
   });
 
   it('truncates a long location rather than exceeding one segment', () => {

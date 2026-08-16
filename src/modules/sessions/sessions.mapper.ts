@@ -1,4 +1,5 @@
 import type { RecurringSession, Session } from '../../db/schema/sessions.ts';
+import { effectiveDeliveryWindow } from './delivery-window.ts';
 import type { SessionWithBooked } from './sessions.repository.ts';
 
 /**
@@ -28,8 +29,14 @@ export interface SessionResponse {
   readonly isCustomised: boolean;
   readonly recurringSessionId: string | null;
   readonly occurrenceDate: string | null;
-  /** `HH:MM` London wall clock, or null for "the same as `startTime`". */
-  readonly deliveryTime: string | null;
+  /**
+   * `HH:MM` London wall clock, both or neither, exactly as stored — not the
+   * effective window. An admin screen needs to know whether one is set at
+   * all, to be able to clear it; that distinction is lost by resolving the
+   * fallback here the way the public response does.
+   */
+  readonly deliveryWindowStart: string | null;
+  readonly deliveryWindowEnd: string | null;
   readonly deliveriesAllowed: boolean;
 }
 
@@ -53,7 +60,8 @@ export function toSessionResponse({ session, booked }: SessionWithBooked): Sessi
     isCustomised: session.isCustomised === 1,
     recurringSessionId: session.recurringSessionId,
     occurrenceDate: session.occurrenceDate,
-    deliveryTime: session.deliveryTime,
+    deliveryWindowStart: session.deliveryWindowStart,
+    deliveryWindowEnd: session.deliveryWindowEnd,
     deliveriesAllowed: session.deliveriesAllowed === 1,
   };
 }
@@ -72,15 +80,25 @@ export interface PublicSessionResponse {
   readonly startsAtUtc: string;
   readonly durationMinutes: number;
   readonly location: string;
-  /**
-   * No `deliveryTime` here — it is only worth reading once a delivery has been
-   * arranged. Whether one can be arranged at all is exactly what the referral
-   * form needs before it offers the choice, so that alone is public.
-   */
   readonly deliveriesAllowed: boolean;
+  /**
+   * The **effective** window, never null — this deliberately widens the
+   * narrowest response in the API, on purpose. The referral form now asks
+   * the referrer to confirm the client will be at home for the delivery
+   * window, and it cannot ask that without stating the window. A delivery
+   * window is a fact about a session, not about any household — the same
+   * thing a leaflet saying when the van comes would say. It names nobody.
+   *
+   * Resolved server-side rather than shipping the raw, possibly-null pair:
+   * the client would otherwise have to re-derive the "no window set" ->
+   * "the session's own hours" rule itself.
+   */
+  readonly deliveryWindowStart: string;
+  readonly deliveryWindowEnd: string;
 }
 
 export function toPublicSessionResponse(session: Session): PublicSessionResponse {
+  const window = effectiveDeliveryWindow(session);
   return {
     id: session.id,
     sessionDate: session.sessionDate,
@@ -89,6 +107,8 @@ export function toPublicSessionResponse(session: Session): PublicSessionResponse
     durationMinutes: session.durationMinutes,
     location: session.location,
     deliveriesAllowed: session.deliveriesAllowed === 1,
+    deliveryWindowStart: window.start,
+    deliveryWindowEnd: window.end,
   };
 }
 
@@ -102,7 +122,9 @@ export interface RecurringSessionResponse {
   readonly capacity: number;
   readonly activeFrom: string;
   readonly activeUntil: string | null;
-  readonly deliveryTime: string | null;
+  /** `HH:MM` London wall clock, both or neither, exactly as stored. */
+  readonly deliveryWindowStart: string | null;
+  readonly deliveryWindowEnd: string | null;
   readonly deliveriesAllowed: boolean;
 }
 
@@ -117,7 +139,8 @@ export function toRecurringSessionResponse(row: RecurringSession): RecurringSess
     capacity: row.capacity,
     activeFrom: row.activeFrom,
     activeUntil: row.activeUntil,
-    deliveryTime: row.deliveryTime,
+    deliveryWindowStart: row.deliveryWindowStart,
+    deliveryWindowEnd: row.deliveryWindowEnd,
     deliveriesAllowed: row.deliveriesAllowed === 1,
   };
 }

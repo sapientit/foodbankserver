@@ -430,19 +430,41 @@ Three things that follow, and they matter:
 `Session` and `PublicSession` both carry **`deliveriesAllowed`**. False means
 that session has nobody to drive.
 
-**The server does not enforce it.** A referral with `isDelivery: true` to such a
-session is still accepted today — so until that lands, _the form is the only
-thing stopping it_. Do not offer the delivery option when `deliveriesAllowed` is
-false. The gap is deliberate and recorded in `STATUS.md`; when the server starts
-refusing, it will be a `422`, so a form that already hides the option will not
-notice the change.
+**Neither the server nor the form refuses such a delivery.** A referral with
+`isDelivery: true` to one is accepted at both ends, and an administrator sorts
+it out at review. Settled by Pete on 2026-08-16: the form states that no
+deliveries are available for the session in place of the window and still takes
+the submission, because a delivery option that silently disappears tells the
+referrer nothing about why. Earlier versions of this file and of `STATUS.md`
+said the form was the only thing stopping it — that is no longer true, and
+nothing is.
 
-`Session` also carries **`deliveryTime`** (`HH:MM` London, or null for "the same
-as `startTime`") — the time the food bank tells a household to expect a
-delivery, because the van does not go out when the hall opens. It is a time to
-show and to put in a text message; **nothing is scheduled or routed from it**,
-which is why there is no `deliversAtUtc` beside it. It is absent from
-`PublicSession` deliberately: an unauthenticated caller has no use for it.
+### A session's delivery window
+
+A delivery is promised for a **window**, not a moment. A van cannot arrive at
+13:00, and a household told it would waits at the door and then rings up. So a
+session carries a start and an end, and **the two move together** — sending one
+without the other, or an end at or before the start, is a `400`. A session that
+sets no window of its own delivers across the session's own hours.
+
+The two responses differ on purpose:
+
+- **`Session`** and **`RecurringSession`** carry the **stored** pair,
+  `deliveryWindowStart` and `deliveryWindowEnd`, either both `HH:MM` London or
+  both `null`. Null is what lets a maintenance screen show "not set" and offer
+  to clear it — `PATCH` with explicit `null` on both does that.
+- **`PublicSession`** carries the **effective** window, and **never null**: the
+  fallback to the session's own hours is already resolved server-side, so the
+  referral form has a window to state without re-deriving that rule.
+
+`PublicSession` is the narrowest response in the API and this widened it
+deliberately, because the form now asks the referrer to confirm the client will
+be at home for the window and cannot ask that without saying what it is. A
+window is a fact about a session, not about a household.
+
+**Nothing is scheduled or routed from it**, which is why there is no
+`deliversAtUtc` beside it — it is a window to show and to put in a text message,
+and the driver's round is still made up from the addresses on the referrals.
 
 ### Turnstile
 
@@ -1209,7 +1231,7 @@ failure every time, which is the point: it is the food bank being told.
 Show `failed` prominently. Those are households who do not know when to come.
 
 **You do not compose the message.** Collections get date, time and place;
-deliveries get date and the session's `deliveryTime` and no address. Both are
+deliveries get date and the session's delivery window and no address. Both are
 server-side, because the wording is a data-protection constraint — the provider
 is given a phone number and nothing that identifies whose it is.
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  addMinutesToPlainTime,
   instantToLondonWallClock,
   isBritishSummerTime,
   londonWallClockToInstant,
@@ -48,6 +49,24 @@ describe('London wall clock', () => {
   it('rejects a malformed time rather than guessing', () => {
     expect(() => londonWallClockToInstant('2026-01-13', '25:00')).toThrow(/HH:MM/);
     expect(() => londonWallClockToInstant('2026-02-30', '10:00')).toThrow(/calendar date/);
+  });
+});
+
+describe('addMinutesToPlainTime', () => {
+  it('adds minutes within the same day', () => {
+    expect(addMinutesToPlainTime('10:00', 90)).toBe('11:30');
+  });
+
+  it('wraps past midnight — a session starting 23:00 and lasting 120 minutes ends 01:00', () => {
+    expect(addMinutesToPlainTime('23:00', 120)).toBe('01:00');
+  });
+
+  it('lands exactly on midnight rather than wrapping to 24:00', () => {
+    expect(addMinutesToPlainTime('22:00', 120)).toBe('00:00');
+  });
+
+  it('returns the same time for a zero-minute addition', () => {
+    expect(addMinutesToPlainTime('09:15', 0)).toBe('09:15');
   });
 });
 

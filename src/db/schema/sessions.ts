@@ -28,14 +28,26 @@ export const recurringSessions = sqliteTable(
     location: text('location').notNull(),
     capacity: integer('capacity').notNull().default(25),
     /**
-     * `HH:MM` London wall clock, or null for "the same as `startTime`".
+     * `HH:MM` London wall clock, both or neither. Null on both means "the
+     * session's own hours" — `startTime` to `startTime` plus
+     * `durationMinutes`.
      *
      * The van does not go out when the hall opens, so a household expecting a
-     * delivery is told a different time from one collecting. It is a time to
-     * read out and nothing else — nothing is scheduled or routed from it, which
-     * is why there is no derived instant beside it as there is for `startTime`.
+     * delivery is told a different span from the one collecting. A single
+     * moment was tried and dropped: a van round cannot promise to be at a
+     * door at 13:00 sharp, only that it will be between two times, so the
+     * charity tells households a window, not a moment. It is a window to
+     * read out and nothing else — nothing is scheduled or routed from it,
+     * which is why there is no derived instant beside it as there is for
+     * `startTime`.
+     *
+     * No `CHECK` for "both or neither" or "end after start": SQLite cannot
+     * add a table-level constraint to an existing table, and both of these
+     * are foreign-key parents — see the note on `deliveriesAllowed` below.
+     * Zod enforces both rules at the only place a value enters.
      */
-    deliveryTime: text('delivery_time'),
+    deliveryWindowStart: text('delivery_window_start'),
+    deliveryWindowEnd: text('delivery_window_end'),
     /**
      * Whether this session takes deliveries at all.
      *
@@ -93,11 +105,12 @@ export const sessions = sqliteTable(
     location: text('location').notNull(),
     capacity: integer('capacity').notNull(),
     /**
-     * `HH:MM` London wall clock, or null for "the same as `startTime`". Copied
-     * from the template at materialisation and overridable per occurrence.
-     * See the note on `recurringSessions.deliveryTime`.
+     * `HH:MM` London wall clock, both or neither. Copied from the template at
+     * materialisation and overridable per occurrence. See the note on
+     * `recurringSessions.deliveryWindowStart`.
      */
-    deliveryTime: text('delivery_time'),
+    deliveryWindowStart: text('delivery_window_start'),
+    deliveryWindowEnd: text('delivery_window_end'),
     /** See the note on `recurringSessions.deliveriesAllowed` — no `CHECK`, deliberately. */
     deliveriesAllowed: integer('deliveries_allowed').notNull().default(1),
     status: text('status').$type<SessionStatus>().notNull().default('planned'),
