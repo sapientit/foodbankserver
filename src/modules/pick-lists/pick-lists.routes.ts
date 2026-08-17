@@ -3,12 +3,13 @@ import { z } from 'zod';
 import type { Actor } from '../../core/actor.ts';
 import { UnauthorizedError } from '../../core/errors.ts';
 import { requireAuth, requireRole } from '../../http/middleware/require-auth.ts';
-import { parseJsonBody, parseOptionalJsonBody } from '../../http/validate.ts';
+import { parseJsonBody, parseOptionalJsonBody, parseOrThrow } from '../../http/validate.ts';
 import type { AppEnv } from '../../http/types.ts';
 import { createReferralsRepository } from '../referrals/referrals.repository.ts';
 import { createRulesRepository } from '../rules/rules.repository.ts';
 import { createSessionsRepository } from '../sessions/sessions.repository.ts';
 import { createStockRepository } from '../stock/stock.repository.ts';
+import { stockOrderSchema } from '../stock/stock.schema.ts';
 import { createPickListsRepository } from './pick-lists.repository.ts';
 import { generatePickListSchema, parcelNotesSchema } from './pick-lists.schema.ts';
 import { createPickListsService } from './pick-lists.service.ts';
@@ -17,8 +18,10 @@ import {
   toParcelResponse,
   toPickListResponse,
   toPrintParcelResponse,
+  toStockRequirementResponse,
   type ParcelResponse,
   type PrintParcelResponse,
+  type StockRequirementResponse,
 } from './pick-lists.mapper.ts';
 
 const lineSchema = z.object({
@@ -129,6 +132,27 @@ export function pickListRoutes(): Hono<AppEnv> {
       parcels: parcels.map((entry) =>
         toPrintParcelResponse(entry, byId.get(entry.parcel.referralId)),
       ),
+    });
+  });
+
+  /**
+   * What the session needs off the shelves, against what is on them.
+   *
+   * Only the items its parcels call for. Shelf order by default: the person
+   * asking is usually about to go and look. A `409` while any parcel is still
+   * unreviewed, the same gate as printing — see the service.
+   */
+  routes.get('/sessions/:sessionId/stock-requirement', ...staff, async (c) => {
+    const requested = c.req.query('order');
+    const order = requested === undefined ? 'shelf' : parseOrThrow(stockOrderSchema, requested);
+    const { pickList, lines } = await serviceFor(c).stockRequirement(
+      c.req.param('sessionId'),
+      order,
+    );
+
+    return c.json<{ pickListId: string; items: StockRequirementResponse[] }>({
+      pickListId: pickList.id,
+      items: lines.map(toStockRequirementResponse),
     });
   });
 

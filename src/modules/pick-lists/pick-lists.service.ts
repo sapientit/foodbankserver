@@ -15,6 +15,8 @@ import {
 } from './generation.service.ts';
 import type { ParcelWithLines, PickListsRepository } from './pick-lists.repository.ts';
 import type { PickListInformationSet, PreferenceLineSet } from './pick-lists.schema.ts';
+import type { StockOrder } from '../stock/stock.schema.ts';
+import { stockRequirementLines, type StockRequirementLine } from './stock-requirement.ts';
 
 export interface PickListsServiceDeps extends GenerationDeps {
   readonly repository: PickListsRepository;
@@ -50,7 +52,7 @@ export interface PickListDivergence {
 const UNREVIEWED_PARCEL = 'Review every parcel on this pick list before printing it';
 
 export function createPickListsService(deps: PickListsServiceDeps) {
-  const { repository, referrals, sessions, clock, logger } = deps;
+  const { repository, referrals, sessions, stock, clock, logger } = deps;
 
   async function getPickList(id: string): Promise<PickList> {
     const pickList = await repository.findById(id);
@@ -288,6 +290,71 @@ export function createPickListsService(deps: PickListsServiceDeps) {
     return updated;
   }
 
+  /**
+   * What the session will take off the shelves, item by item, against what is
+   * on them.
+   *
+   * Only the items the session's parcels actually call for: the whole
+   * catalogue with a hundred blank lines in it is the stock-take screen, not
+   * this one.
+   *
+   * **Every parcel must have been reviewed**, and the list need not be
+   * confirmed — the same point printing waits for, and for the same reason. A
+   * reviewed parcel is one a team leader has settled, so the quantities on it
+   * are decided; an unreviewed one may still be carrying a line saying
+   * somebody has to choose, and there is no honest total to add that up into.
+   * Waiting for confirmation instead would put the answer *after* the work it
+   * is meant to inform.
+   *
+   * `quantityOnHand` is the level *now*, so a parcel already marked attended
+   * has come off it while still counting towards the requirement — the figure
+   * is what the session as a whole asks for, not what is left to pick.
+   *
+   * Four queries: the pick list, its parcels, the totals, and the catalogue.
+   */
+  async function stockRequirement(
+    sessionId: string,
+    order: StockOrder,
+  ): Promise<{ pickList: PickList; lines: StockRequirementLine[] }> {
+    const pickList = await getPickListForSession(sessionId);
+
+    // Cancelled parcels are neither reviewed nor counted — the household is
+    // not coming, so waiting on a review for one would hold the whole session's
+    // figure for a parcel nobody will ever pick. Same rule as printing.
+    const parcelRows = await repository.listParcels(pickList.id);
+    if (
+      parcelRows.some((parcel) => parcel.reviewedAt === null && parcel.attendance !== 'cancelled')
+    ) {
+      throw new ConflictError(
+        'Review every parcel on this pick list before comparing it against stock',
+      );
+    }
+
+    const required = await repository.sumRequiredByItem(pickList.id);
+    // A backstop rather than the main gate: reviewing a parcel already refuses
+    // while it holds a `-1`, and nothing can put one back afterwards. It stays
+    // because it costs one column of a query that was being run anyway, and
+    // because a `-1` reaching this sum does not fail — it quietly takes one off
+    // what the warehouse is told to find, which nobody would notice.
+    if (required.some((entry) => entry.lowestQuantity === NEEDS_ATTENTION_QUANTITY)) {
+      throw new ConflictError(
+        'Settle every item needing attention before comparing this pick list against stock',
+      );
+    }
+
+    // The whole catalogue, inactive items included: an item deactivated after
+    // generation is still in parcels and still has to be found on a shelf.
+    const levels = await stock.listLevels(false, order);
+
+    return {
+      pickList,
+      lines: stockRequirementLines(
+        levels,
+        new Map(required.map((entry) => [entry.stockItemId, entry.requiredQuantity])),
+      ),
+    };
+  }
+
   /** Compares the list against the referrals as they stand now. */
   async function divergence(pickList: PickList): Promise<PickListDivergence> {
     const [parcelRows, current] = await Promise.all([
@@ -341,6 +408,7 @@ export function createPickListsService(deps: PickListsServiceDeps) {
     markParcelReviewed,
     markPrinted,
     confirm,
+    stockRequirement,
     divergence,
     requireEditable,
   };

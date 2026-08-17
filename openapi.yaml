@@ -2503,6 +2503,61 @@ paths:
             session (`details.offSessionReferralIds`). Nothing is created in
             any of those cases.
 
+  /api/v1/sessions/{sessionId}/stock-requirement:
+    parameters: [{ $ref: '#/components/parameters/SessionId' }]
+    get:
+      tags: [Pick lists]
+      summary: What the session needs off the shelves, against what is on them
+      description: |
+        One line per stock item the session's parcels between them call for —
+        **not the whole catalogue.** An item nothing on that morning needs is
+        left out rather than returned as a nought, so the list is only as long
+        as the work is.
+
+        `requiredQuantity` is the total across the session's parcels;
+        `quantityOnHand` is the level as `GET /stock/levels` reports it, summed
+        from the ledger and possibly negative; `shortfall` is what is missing,
+        floored at zero, so a surplus reads as `0` rather than a negative
+        number a screen has to interpret.
+
+        **Cancelled parcels are left out of the total**, on the same grounds as
+        they are left off the printed sheets: nothing is picked for a household
+        that is not coming. **A parcel already marked attended is still
+        counted**, while the stock it issued has already left `quantityOnHand`
+        — the figure is what the session as a whole asks for, not what is left
+        to pick. Read it before the session starts and the two agree.
+
+        **Available once every parcel has been reviewed** — the same point
+        `GET /pick-lists/{id}/print` waits for, and not a moment later. The
+        list does **not** need to be confirmed; waiting for that would put the
+        answer after the work it is meant to inform.
+
+        Defaults to shelf order, because the person asking is usually about to
+        go and look.
+      parameters:
+        - { $ref: '#/components/parameters/StockOrder' }
+      responses:
+        '200':
+          description: The requirement, one line per item the session needs
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [pickListId, items]
+                properties:
+                  pickListId: { type: string, format: uuid }
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/StockRequirementLine' }
+        '400': { description: Unrecognised `order` }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: >-
+            A parcel on the list has not been reviewed, so its quantities are
+            not settled yet (a cancelled parcel is not waited for); or a line
+            still says an item needs attention, which is not a quantity and
+            cannot be added up.
+
   /api/v1/pick-lists/{id}:
     parameters: [{ $ref: '#/components/parameters/Id' }]
     get:
@@ -4125,6 +4180,26 @@ components:
                 Derived by summing the ledger. **May be negative** — parcels go
                 out between counts, and nothing stops an item going below what
                 the last count said was there.
+
+    StockRequirementLine:
+      allOf:
+        - $ref: '#/components/schemas/StockLevel'
+        - type: object
+          required: [requiredQuantity, shortfall]
+          properties:
+            requiredQuantity:
+              type: integer
+              minimum: 1
+              description: >-
+                How many of this item the session's parcels ask for in total,
+                cancelled parcels excluded. Always positive — an item nothing
+                needs has no line.
+            shortfall:
+              type: integer
+              minimum: 0
+              description: >-
+                `requiredQuantity - quantityOnHand`, floored at zero. Non-zero
+                means the warehouse cannot cover the session as it stands.
 
     ListenerSheetHousehold:
       type: object

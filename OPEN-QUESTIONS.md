@@ -104,7 +104,7 @@ The list that would settle all of it is the stock item list — these are all th
 either has on a shelf or does not.
 
 **A:**
-These questions have been answered by setting up a spreadsheet to maintain the config.
+These questions have been answered by setting up a spreadsheet to maintain the config. Close the question.
 
 ---
 
@@ -159,7 +159,7 @@ referral at all, and delete the referral. That preserves reporting and holds not
 at the cost of a second table and the work to maintain it.
 
 **A:**
-All data will be deleted not anonymised.
+All data will be deleted not anonymised. Close this question.
 
 ---
 
@@ -189,7 +189,7 @@ needs reviewing again before the list is printed? If so, does the same apply to 
 printing, before attendance is recorded?
 
 **A:**
-No - the review and the change would be done by the same team lead. No separate "review again" step is necessary
+No - the review and the change would be done by the same team lead. No separate "review again" step is necessary. Close this question.
 
 ---
 
@@ -234,7 +234,7 @@ be added to the spreadsheet extract as four more fixed columns, alongside the de
 the four raw bands?
 
 **A:**
-This has been answered separately - the household composition will mean all columns are extracted individually.
+This has been answered separately - the household composition will mean all columns are extracted individually.  Close this question
 
 ---
 
@@ -283,7 +283,7 @@ pick-list information be cleared along with the referral's own answers? Or is a 
 past occasion rather than of a household, and its note something the food bank means to keep?
 
 **A:**
-All data associated with the referral will be deleted at the same time
+All data associated with the referral will be deleted at the same time.  Record this and close the question.
 
 ---
 
@@ -332,6 +332,7 @@ client already disables the copy button while its request is in flight, which is
 behaviour rather than a rule, and it keeps that guard either way. **Closing this entry is the
 server's** — the decision belongs in `INITIAL_SPEC1.txt` with the `x-assumed` removed from
 `POST /referrals/{id}/copy`, and this entry deleted in that same change.)
+This question can now be closed.
 
 ---
 
@@ -362,6 +363,7 @@ reason still be named, which would mean the server sending the words for the sec
 already does for the main one, or opening the retired labels to a team lead?
 
 **A:**
+No longer listed is fine - this is a very niche case, so this is fine. Close question
 
 ---
 
@@ -421,7 +423,7 @@ nothing on screen saying that is what pressing it means. `screenDetails.md` says
 confirmation belongs on the session rather than on each household, and `.claude/rules/printing.md`
 repeats it — but neither says what that weight looks like, and today it amounts to nothing at all.
 
-The regrouping made the gap visible rather than creating it. Every *unavailable* state on that row
+The regrouping made the gap visible rather than creating it. Every _unavailable_ state on that row
 now says why it cannot be used — `Review every pick list before printing.`, `Record an outcome for
 every client first.` — so the only control that says nothing is the only one with a permanent
 consequence.
@@ -445,3 +447,82 @@ What the charity should know before deciding:
 so, as a sentence a team lead reads, or as a confirmation they must answer?
 
 **A:**
+No - all pick lists have been created, all outcomes recorded.  There is really nothing else to do. No confirmation is necessary.  Close this question
+
+---
+
+## Q40 — Should confirming a pick list require every parcel to have been reviewed?
+
+Raised by the server repo, 2026-08-17, while building the session's stock requirement.
+
+`POST /pick-lists/{id}/confirm` locks the list, and it checks nothing before it does. Printing
+refuses while any parcel is unreviewed, and so does recording an attendance outcome — but
+confirming, which is the step that ends editing altogether, does not. So a list can be locked with
+a parcel still carrying a line that says an item needs attention and nobody has decided how much of
+it the household gets. That line can then never be settled, because the list is locked.
+
+In practice a team leader prints before they confirm, and printing forces every review, so the
+state is hard to reach on the day. It is reachable through the API, and it is a dead end when it
+happens: the parcel cannot be reviewed, so no outcome can be recorded for that household, and the
+line saying somebody must decide stays on the list unanswerable.
+
+What the charity should know before deciding:
+
+- **The guard costs nothing to add.** Confirming would refuse, naming the parcels still to be
+  reviewed, exactly as printing already does.
+- **It would make one route stricter than it is today.** A client that confirms without printing —
+  a session where every household was a delivery, say — would start seeing a refusal it has never
+  seen before.
+- **The alternative is that the state stays reachable and each reader guards itself.** That is
+  where the system is now, and it is how the same mistake gets made again somewhere the guard was
+  forgotten.
+
+**Question for the charity:** should confirming a pick list refuse while any parcel on it is still
+unreviewed, the way printing does — or is confirming deliberately the one step that takes the list
+as it stands?
+
+**A:**
+This is not used by the client. We should remove the route and the flag.  Record this into outstanding work and close the question
+
+
+---
+
+## Q41 — When is the session's stock check meant to be read?
+
+Raised by the client repo, 2026-08-17, putting the stock check onto the Run a session screen.
+
+`GET /sessions/{sessionId}/stock-requirement` is a `409` until the session's pick list is
+`confirmed`. **Nothing in the client confirms a pick list.** The screen a team leader runs a session
+from goes: open the session, review each household's pick list, print, pick, record attendance,
+Complete Session. `POST /pick-lists/{id}/confirm` is not called anywhere, so the list reaches
+`confirmed` only when the whole session is closed — at which point the session is read-only, the
+stock an attended household took has already left `quantityOnHand`, and the comparison answers a
+question nobody is asking any more.
+
+Pete settled on 2026-08-17 that the control is offered once every pick list on the session has been
+reviewed — the same gate as printing, and the point at which the quantities stop moving. Against
+today's server that means the button is offered, pressed, and answers with the refusal. The client
+shows the server's sentence and does not pretend otherwise, which is the honest behaviour but not a
+useful screen.
+
+What the charity should know before deciding:
+
+- **The reason the endpoint waits for `confirmed` is that picking is not finished before it**, and a
+  total somebody walks to a shelf on should not move under them. Review is the earlier point where
+  every quantity has been decided and every "needs attention" line settled — the same guarantee
+  printing relies on.
+- **The alternative is that the client confirms the pick list itself**, which locks every parcel's
+  lines. That is the step that stops a picker correcting a quantity at the shelf when they find the
+  tin is not there, which is exactly what the list staying editable after printing is for.
+- **There is a second, smaller question in the same shape:** should the check be offered at all on a
+  session that has already been run? The client currently does not offer it, on the grounds that an
+  attended household's stock has gone while its parcel still counts towards what is needed, so the
+  screen would show a shortage that never happened. That is the client's reading of "read it before
+  the session starts", not a decision anybody has made.
+
+**Question for the charity:** when does a team leader want to read "can the warehouse cover this
+session" — once every pick list is reviewed, before anyone starts picking, or only once picking is
+finished and the list is locked? And is it of any use once the session has been run?
+
+**A:**
+The stock check button should be removed once a session is completed.  The server has updated the API.  This should be written into the spec and this question closed.

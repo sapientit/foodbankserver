@@ -1106,6 +1106,43 @@ Two things worth knowing when you build a report:
   That is the charity's decision, not an omission — do not build a report that
   needs it.
 
+### Can the warehouse cover this session?
+
+```
+GET /sessions/{sessionId}/stock-requirement?order=shelf|category
+  → { pickListId, items: [{ …StockLevel, requiredQuantity, shortfall }] }
+```
+
+**Only the items the session actually needs.** Each line is a stock item one or
+more parcels call for, carrying the same fields `GET /stock/levels` returns plus
+the two numbers this screen exists for. An item nothing on that morning needs is
+absent, not a nought — the list is as long as the work is, and no longer.
+
+- `requiredQuantity` — the total across the session's parcels.
+- `quantityOnHand` — the level now, summed from the ledger. **May be negative.**
+- `shortfall` — `requiredQuantity - quantityOnHand` floored at zero, so a
+  surplus is `0` and anything above zero is the number you cannot find.
+
+**`409` until every parcel has been reviewed** — the same gate as
+`GET /pick-lists/{id}/print`, and a cancelled parcel is not waited for. An
+unreviewed parcel may still carry a line saying an item needs attention
+(`quantity: -1`, see **5g**), which is not a quantity and cannot be added up.
+**The list does not need to be confirmed.** Confirmation comes after picking; if
+you waited for it, the answer would arrive after the work it is meant to inform.
+A second `409` guards the `-1` itself, which reviewing already rules out. `404`
+if the session has no pick list at all.
+
+**Cancelled parcels are excluded; every other parcel counts.** A household that
+is not coming is not picked for, the same rule that keeps them off the printed
+sheets. A household already marked attended — or marked as a no-show, whose
+parcel was still packed — counts towards `requiredQuantity` even though an
+attended one's stock has already left `quantityOnHand` —
+the figure answers "what does this session ask for", not "what is left to pick".
+Read it before the session starts, which is when it is useful, and the
+distinction never arises.
+
+Team leads and admins both. Defaults to shelf order.
+
 ---
 
 ## 5. Printing

@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, min, ne, sql, sum } from 'drizzle-orm';
 import type { Database } from '../../db/client.ts';
 import { expectAtMostOne } from '../../db/expect.ts';
 import {
@@ -13,6 +13,14 @@ import {
 } from '../../db/schema/pick-lists.ts';
 import { stockItems, type StockItem } from '../../db/schema/stock.ts';
 import type { Patch } from '../../core/types.ts';
+
+/** One stock item's total across a pick list — see `sumRequiredByItem`. */
+export interface RequiredQuantity {
+  readonly stockItemId: string;
+  readonly requiredQuantity: number;
+  /** The smallest quantity in the group; `-1` if any line still needs attention. */
+  readonly lowestQuantity: number;
+}
 
 export interface ParcelWithLines {
   readonly parcel: Parcel;
@@ -82,6 +90,42 @@ export function createPickListsRepository(db: Database) {
       return parcelRows.map((parcel) => ({
         parcel,
         lines: byParcel.get(parcel.id) ?? [],
+      }));
+    },
+
+    /**
+     * What a whole pick list asks for, per stock item, **in one query**.
+     *
+     * Aggregated in SQLite rather than by summing `listParcelsWithLines` in
+     * TypeScript: the totals are all this screen wants, and the other method
+     * carries every parcel and a stock item row per line back to get them.
+     *
+     * **Cancelled parcels are left out**, on the same grounds as printing
+     * leaves them off: the household is not coming, so nothing is picked for
+     * them and nothing they were going to get is owed by the warehouse.
+     *
+     * `lowestQuantity` travels with the total so the caller can refuse a list
+     * that still holds a `NEEDS_ATTENTION_QUANTITY`. `-1` is not a quantity,
+     * and inside a `SUM` it does not look like one either — it quietly takes
+     * one off the figure the warehouse is being told to expect.
+     */
+    async sumRequiredByItem(pickListId: string): Promise<RequiredQuantity[]> {
+      const rows = await db
+        .select({
+          stockItemId: parcelLines.stockItemId,
+          required: sum(parcelLines.quantity),
+          lowest: min(parcelLines.quantity),
+        })
+        .from(parcelLines)
+        .innerJoin(parcels, eq(parcels.id, parcelLines.parcelId))
+        .where(and(eq(parcels.pickListId, pickListId), ne(parcels.attendance, 'cancelled')))
+        .groupBy(parcelLines.stockItemId);
+
+      return rows.map((row) => ({
+        stockItemId: row.stockItemId,
+        // `SUM` comes back as a string from D1; `MIN` keeps the column's type.
+        requiredQuantity: Number(row.required ?? 0),
+        lowestQuantity: row.lowest ?? 0,
       }));
     },
 

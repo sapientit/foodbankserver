@@ -3,6 +3,7 @@ import { parseAnswers } from '../../core/answers.ts';
 import type { PickList } from '../../db/schema/pick-lists.ts';
 import type { Referral } from '../../db/schema/referrals.ts';
 import type { ParcelWithLines } from './pick-lists.repository.ts';
+import type { StockRequirementLine } from './stock-requirement.ts';
 
 /** Response mappers are the output allowlist. See CLAUDE.md. */
 
@@ -168,6 +169,41 @@ export function toPrintParcelResponse(
     deliveryPhone: delivery?.refereePhone ?? null,
     notes: entry.parcel.notes,
     lines: toParcelResponse(entry, undefined).lines,
+  };
+}
+
+/**
+ * One line of the session's stock requirement.
+ *
+ * Deliberately the same shape as `GET /stock/levels` returns for an item, plus
+ * the two numbers this screen exists for, so a client can render both lists
+ * through the same row component. No parcel and no household reaches it: what
+ * the warehouse needs to know is how much of a thing to find, not who it is
+ * for.
+ */
+export interface StockRequirementResponse {
+  readonly id: string;
+  readonly name: string;
+  readonly category: string;
+  readonly description: string | null;
+  readonly shelfNumber: string;
+  readonly isActive: boolean;
+  readonly requiredQuantity: number;
+  readonly quantityOnHand: number;
+  readonly shortfall: number;
+}
+
+export function toStockRequirementResponse(line: StockRequirementLine): StockRequirementResponse {
+  return {
+    id: line.item.id,
+    name: line.item.name,
+    category: line.item.category,
+    description: line.item.description,
+    shelfNumber: line.item.shelfNumber,
+    isActive: line.item.isActive === 1,
+    requiredQuantity: line.requiredQuantity,
+    quantityOnHand: line.quantityOnHand,
+    shortfall: line.shortfall,
   };
 }
 
