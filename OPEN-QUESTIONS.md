@@ -332,3 +332,116 @@ client already disables the copy button while its request is in flight, which is
 behaviour rather than a rule, and it keeps that guard either way. **Closing this entry is the
 server's** — the decision belongs in `INITIAL_SPEC1.txt` with the `x-assumed` removed from
 `POST /referrals/{id}/copy`, and this entry deleted in that same change.)
+
+---
+
+## Q37 — What should a secondary cause of crisis say once that reason has been retired?
+
+`Status: open` · `Raised by: client` · `Blocks: nothing — every screen shows "No longer listed", which is the guess`
+
+The main cause of crisis is always resolved for the client: `GET /sessions/{id}/listener-sheet` sends
+`reason` as the words, whatever the reason's state today. The **secondary** cause is an ordinary
+answer, so it arrives as the reason's id wherever it appears — the referral, the listener sheet, the
+run-a-session screens, the spreadsheet extract — and the client resolves it against the reason
+lookup. An administrator reads the admin lookup, which includes retired reasons. **A team lead is
+refused that endpoint**, so the only list they can read is `GET /public/referral-reasons` — active
+reasons only.
+
+So a household referred in June for a reason an administrator retired in July has a secondary cause
+that a team lead's screens cannot name. The client shows `No longer listed`, which is the guess. The
+two alternatives it rejected are showing the raw id, which is meaningless to somebody reading a sheet
+aloud and worse still in a spreadsheet, and showing "not answered", which is a lie about a question
+that was answered.
+
+None of this is reachable for the main cause, and none of it is reachable for an administrator; it is
+the combination of a retired reason and a team lead's screen.
+
+**Question for the charity:** where a team lead's screen or sheet carries a secondary cause of crisis
+whose reason has since been retired, is "No longer listed" what they should see — or should a retired
+reason still be named, which would mean the server sending the words for the secondary cause as it
+already does for the main one, or opening the retired labels to a team lead?
+
+**A:**
+
+---
+
+## Q38 — How far back should a team leader be able to open a completed session?
+
+`Status: open` · `Raised by: client` · `Blocks: nothing — the date box reaches as far back as somebody types, which is the guess`
+
+The Run a session list now offers completed sessions behind a `Show completed` checkbox, so a team
+leader can look back at one: who attended, what each household was given, and — through the link
+that has always been on that screen — the session's listener sheet, which is the one printed page in
+the system that may carry a reason for referral.
+
+Nothing about the permissions changed, and that is the point. `GET /sessions/{id}` and every
+pick-list route are deliberately uncapped for a team lead (`API.md`, "Not capped, and settled that
+way"), and `GET /sessions` caps only the far end — a team lead has always been able to list the
+sessions just gone, with no lower bound at all. What changed is that there is now a screen that
+walks somebody there. Before this, a completed session was not on any list a team leader could see,
+so reaching one meant already holding its id.
+
+The client bounds its own default at a fortnight back, which is a guess about what somebody
+plausibly needs, not a rule. The date box is a plain date box: typing 2024 in it lists 2024.
+
+What the charity should know before deciding:
+
+- **The horizon that exists is about planning, not about privacy.** Six days ahead stops a team lead
+  reading next month's rota; it was never meant to say anything about the past, and it does not.
+- **The sensitive page is the listener sheet.** Attendance and parcel contents are operational. A
+  reason for referral can mean domestic abuse or immigration status, and it is on that sheet for the
+  session's trained listeners on the day — which is not obviously the same thing as being on it for
+  anybody running a session two years later.
+- **There is a real reason to look back.** Outcomes are recorded after the event, a query about a
+  household's last parcel is ordinary, and a session that was signed off wrongly is worth being able
+  to examine. A short window would cut those off too.
+- **Three shapes of answer.** No limit, which is what the code does now. A limit on the whole
+  screen, so a completed session older than some period is simply not listed and not openable. Or a
+  limit on the listener sheet alone, leaving attendance and pick lists readable indefinitely while
+  the reasons stop being reachable — which would need the server to refuse
+  `GET /sessions/{id}/listener-sheet` past that age for a team lead, since a client-side rule is not
+  a control.
+
+**Question for the charity:** how far back should a team leader be able to open a completed session
+and read its listener sheet — indefinitely, or only for some period after the session? And if there
+is a limit, does it apply to the whole session or only to the reasons for referral?
+
+**A:**
+
+---
+
+## Q39 — Should Complete Session state what it does before it is pressed?
+
+Raised by the client repo, 2026-08-17, while regrouping the Run a session screen's actions.
+
+`POST /sessions/{id}/confirm` is the one action in this application that cannot be taken back. After
+it, every write behind the session is a `409`: no outcome can be corrected, no pick list altered,
+no reminder sent. The screen currently offers it as a plain button reading `Complete session`, with
+nothing on screen saying that is what pressing it means. `screenDetails.md` says the weight of the
+confirmation belongs on the session rather than on each household, and `.claude/rules/printing.md`
+repeats it — but neither says what that weight looks like, and today it amounts to nothing at all.
+
+The regrouping made the gap visible rather than creating it. Every *unavailable* state on that row
+now says why it cannot be used — `Review every pick list before printing.`, `Record an outcome for
+every client first.` — so the only control that says nothing is the only one with a permanent
+consequence.
+
+What the charity should know before deciding:
+
+- **A team lead is holding a phone in a hall.** The button sits a thumb's width from three links
+  that only navigate, and it is pressed at the end of a shift, in a hurry.
+- **Every guard before it is already in place.** The button does not become live until every client
+  has an outcome, so the mis-tap this would catch is a session finished a few minutes early — a
+  household still to correct, a late referral about to arrive — rather than a session finished by
+  accident.
+- **A dialogue in front of a reversible tap teaches people to dismiss dialogues.** That is why
+  attendance deliberately has none. Putting one here is only worth it if this tap is genuinely a
+  different kind of thing, which is the actual question.
+- **Three shapes of answer.** Nothing, as today. A sentence beside the live button stating the
+  consequence, costing no tap. Or a confirmation dialogue naming what will be closed, costing one
+  tap on every session the food bank ever runs.
+
+**Question for the charity:** should Complete Session say what it does before it is pressed — and if
+so, as a sentence a team lead reads, or as a confirmation they must answer?
+
+**A:**

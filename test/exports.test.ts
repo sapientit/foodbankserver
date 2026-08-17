@@ -509,6 +509,77 @@ describe('the spreadsheet extract', () => {
     });
   });
 
+  /**
+   * `INITIAL_SPEC1.txt`, `#Sending referrals to the spreadsheet`: "A batch
+   * running out of sessions to hand out is not the same thing as the work
+   * being finished, and the administrator is never told the one when the
+   * other is true."
+   *
+   * A browser whose Google write fails stops without completing, and a
+   * reservation is given back only by expiring. So the session it held is
+   * skipped by the next claim, and once everything unextracted is reserved
+   * the queue hands out nothing at all — while every one of those sessions is
+   * still outstanding. `remaining` is the only thing separating that from a
+   * finished batch, which is why the contract leans on it so hard.
+   *
+   * Nothing is lost here and nothing is sent twice; the danger is a screen
+   * reading `claim: null` as "the spreadsheet is up to date", after which
+   * nobody has any reason to look again.
+   */
+  describe('a failed write leaves its session reserved, and a null claim is not "done"', () => {
+    it('does not mark the session extracted when the browser never completes', async () => {
+      const testApp = configuredApp();
+      const { accessToken: token } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+      const sessionId = await seedSession({ sessionDate: '2026-08-01' });
+
+      const claimed = await claimNext(testApp, token);
+      expect(claimed.body.claim?.sessionId).toBe(sessionId);
+
+      // The Google write fails. The browser stops. No completion call.
+      const [row] = await db.select().from(sessions).where(eq(sessions.id, sessionId));
+
+      expect(row?.extractedAt).toBeNull();
+      // But the reservation the claim wrote is still on the row — that write
+      // is what makes the claim exclusive, and it is not undone by failure.
+      expect(row?.extractClaimId).not.toBeNull();
+      expect(claimed.body.remaining).toBe(1);
+      expect(claimed.body.extracted).toBe(0);
+    });
+
+    it('skips the reserved session on the next claim and hands out the one below it', async () => {
+      const testApp = configuredApp();
+      const { accessToken: token } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+      const first = await seedSession({ sessionDate: '2026-08-01' });
+      const second = await seedSession({ sessionDate: '2026-08-02' });
+
+      const failed = await claimNext(testApp, token);
+      expect(failed.body.claim?.sessionId).toBe(first);
+
+      // The administrator presses extract again straight away.
+      const retry = await claimNext(testApp, token);
+      expect(retry.body.claim?.sessionId).toBe(second);
+    });
+
+    it('returns claim: null with remaining still counting every reserved session — the exact shape a screen must not call "complete"', async () => {
+      const testApp = configuredApp();
+      const { accessToken: token } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+      await seedSession({ sessionDate: '2026-08-01' });
+      await seedSession({ sessionDate: '2026-08-02' });
+
+      await claimNext(testApp, token);
+      await claimNext(testApp, token);
+
+      const exhausted = await claimNext(testApp, token);
+
+      expect(exhausted.status).toBe(200);
+      expect(exhausted.body.claim).toBeNull();
+      // Two sessions reserved, none written. A null claim beside a non-zero
+      // `remaining` is "the rest are reserved", never "finished".
+      expect(exhausted.body.remaining).toBe(2);
+      expect(exhausted.body.extracted).toBe(0);
+    });
+  });
+
   describe('expiry and recovery', () => {
     const T0 = '2026-08-04T09:00:00.000Z';
     // Just past the 10-minute TTL.

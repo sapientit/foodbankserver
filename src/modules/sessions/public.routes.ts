@@ -1,10 +1,8 @@
 import { Hono } from 'hono';
-import { PUBLIC_SESSION_WINDOW_DAYS } from '../../config/constants.ts';
-import { addDays } from '../../core/time/plain-date.ts';
-import { instantToLondonWallClock, londonWallClockToInstant } from '../../core/time/london.ts';
 import type { AppEnv } from '../../http/types.ts';
 import { rateLimit } from '../../http/middleware/rate-limit.ts';
 import { createSessionsRepository } from './sessions.repository.ts';
+import { publicSessionWindow } from './public-window.ts';
 import { toPublicSessionResponse, type PublicSessionResponse } from './sessions.mapper.ts';
 
 /**
@@ -14,18 +12,15 @@ import { toPublicSessionResponse, type PublicSessionResponse } from './sessions.
  * Everything here must therefore be safe for the open internet: no personal
  * data, no operational detail, one query, and a fixed window that cannot be
  * widened by a parameter.
+ *
+ * The window's near end is the 16:00-the-day-before booking cutoff, which this
+ * list is the only place that applies — see `public-window.ts`.
  */
 export function publicSessionRoutes(): Hono<AppEnv> {
   const routes = new Hono<AppEnv>();
 
   routes.get('/sessions', rateLimit('PUBLIC_LIMITER'), async (c) => {
-    const clock = c.get('clock');
-    const today = instantToLondonWallClock(clock.nowIso()).date;
-
-    // Window boundaries as instants, since that is what the rows are indexed
-    // on. From the start of today, to the end of the last day in the window.
-    const fromUtc = londonWallClockToInstant(today, '00:00');
-    const toUtc = londonWallClockToInstant(addDays(today, PUBLIC_SESSION_WINDOW_DAYS), '23:59');
+    const { fromUtc, toUtc } = publicSessionWindow(c.get('clock').nowIso());
 
     const sessions = await createSessionsRepository(c.get('db')).listPubliclyAvailable(
       fromUtc,

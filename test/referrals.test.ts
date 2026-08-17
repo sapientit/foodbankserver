@@ -145,6 +145,20 @@ describe('public referral submission', () => {
     expect((await submitReferral(testApp, w)).status).toBe(409);
   });
 
+  it('takes a referral for a session whose four o’clock cutoff has passed', async () => {
+    // 16:30 BST on 10 August, half an hour after the 11 August session closed
+    // to new referrals. The referrer had it in front of them at five to four.
+    const { testApp, world: w } = await world({ now: '2026-08-10T15:30:00.000Z' });
+
+    const listed = await testApp.request('/api/v1/public/sessions');
+    const body: { sessions: { id: string }[] } = await listed.json();
+    expect(body.sessions.map((s) => s.id)).not.toContain(w.sessionId);
+
+    // The list stopped offering it; the submission is still accepted, and only
+    // the list applies the cutoff.
+    expect((await submitReferral(testApp, w)).status).toBe(201);
+  });
+
   it('refuses a retired reason for referral', async () => {
     const { testApp, token, world: w } = await world();
     await testApp.request(`/api/v1/referral-reasons/${w.reasonId}`, {

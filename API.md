@@ -271,14 +271,25 @@ the team lead is the person in the hall when they do.
 
 `GET /api/v1/sessions` returns a different window depending on who asks:
 
-| Caller                      | Window                                            |
-| --------------------------- | ------------------------------------------------- |
-| `admin`                     | everything materialised — six weeks               |
-| `team_lead`                 | today → today + 6 days, inclusive                 |
-| nobody (`/public/sessions`) | today → today + 14 days, and only if it has space |
+| Caller                      | Window                                           |
+| --------------------------- | ------------------------------------------------ |
+| `admin`                     | everything materialised — six weeks              |
+| `team_lead`                 | today → today + 6 days, inclusive                |
+| nobody (`/public/sessions`) | the booking cutoff → today + 14 days, with space |
 
 Counted in `Europe/London`, so the window turns over at London midnight, not at
 `00:00Z`.
+
+**The booking cutoff is 16:00 the day before a session.** So the public list's
+near end is tomorrow up to and including 16:00 today, and the day after tomorrow
+from 16:01; 16:00 itself still makes the deadline, and today's sessions are
+never offered. The far end stays 14 days from today, so the list shortens over
+the afternoon rather than sliding forward.
+
+The cutoff is applied **only** on that list. `POST /public/referrals` accepts a
+referral for a session whose cutoff has passed, so a referrer who loaded the
+form at 15:55 does not lose it at 16:05. Submit whatever session the referrer
+chose; do not re-check the clock or filter the list further.
 
 The cap comes off the access token, so **`from` and `to` cannot widen it.** A
 `to` past a team lead's horizon is clamped back to it — you get a shorter list,
@@ -1767,8 +1778,11 @@ All four are admin only.
    consent with the `googleClientId` it returns. Do not ask on page load.
 3. Read the spreadsheet's **hidden metadata sheet** for the `answerKey → column`
    mapping (see below).
-4. `POST /extracts/claims`. `claim: null` means you are done — that is how a
-   batch ends, not an error.
+4. `POST /extracts/claims`. `claim: null` means nothing could be handed out —
+   that is how a batch ends, not an error. **It does not mean you are done:
+   check `remaining` before saying so.** See "A batch ending is not the work
+   finishing" below; getting this wrong is the one bug here that loses data
+   silently.
 5. Write `claim.rows` to the spreadsheet yourself.
 6. Only once that write has **actually succeeded**, `POST
 /extracts/claims/{claimId}/complete`.
@@ -1784,6 +1798,35 @@ working the queue at once get different sessions, never the same one twice.
 **A claim lasts 10 minutes and is not extended by activity.** If the browser
 closes, reloads, or the machine sleeps, it lapses and the session returns to the
 queue; without that, one abandoned extract would block the queue forever.
+
+**Expiry is the only way a reservation comes back.** There is no route to
+release one early, deliberately — so a browser that stops on a failed Google
+write leaves that session reserved for the full 10 minutes.
+
+### A batch ending is not the work finishing
+
+`POST /extracts/claims` writes the reservation before it returns the rows. That
+is what makes it exclusive, and it is also why a failed write has an
+after-effect on the server even though you never called `complete`.
+
+Walk through what an operator sees after a Google write fails:
+
+1. Your write fails. You stop, correctly — you do **not** call `complete`.
+2. The session is **not** marked extracted. `extractedAt` stays null,
+   `extracted` stays put, `remaining` still counts it. Nothing is lost.
+3. But it stays reserved. Press extract again and the server **skips it** and
+   hands you the next session down.
+4. Once everything unextracted is reserved, you get `claim: null`.
+
+If step 4 is reported as "extract complete", the administrator is told the
+spreadsheet is up to date when several sessions are missing from it — and they
+have no reason to look again. **`remaining` is what distinguishes the two
+states.** `remaining: 0` with a null claim is genuinely finished. `remaining >
+0` with a null claim means those sessions are reserved and still to be written;
+say so, and that they return to the queue within 10 minutes.
+
+Nothing here is a server bug to wait on: no session is lost and none is written
+twice. It is a reporting trap, and the fix is on the screen.
 
 Completion fails in three distinguishable ways, and they are not the same event:
 

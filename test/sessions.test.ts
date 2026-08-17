@@ -215,6 +215,85 @@ describe('public session list', () => {
     expect(body.sessions.map((s) => s.sessionDate)).toEqual(['2026-07-28', '2026-08-04']);
   });
 
+  // Referrals close at 16:00 London the day before a session. NOW is 09:00 on
+  // Monday 27 July, so tomorrow's Tuesday session is still inside its deadline
+  // — which is why the fourteen-day test above still sees it.
+  it('still offers tomorrow just before four the day before', async () => {
+    const { testApp, token } = await adminApp('2026-07-27T14:59:00.000Z'); // 15:59 BST
+    await createTuesdayTemplate(testApp, token);
+    await runMaterialisation(testApp, token);
+
+    const response = await testApp.request('/api/v1/public/sessions');
+    const body: { sessions: { sessionDate: string }[] } = await response.json();
+
+    expect(body.sessions.map((s) => s.sessionDate)).toContain('2026-07-28');
+  });
+
+  it('stops offering tomorrow once four the day before has passed', async () => {
+    const { testApp, token } = await adminApp('2026-07-27T15:01:00.000Z'); // 16:01 BST
+    await createTuesdayTemplate(testApp, token);
+    await runMaterialisation(testApp, token);
+
+    const response = await testApp.request('/api/v1/public/sessions');
+    const body: { sessions: { sessionDate: string }[] } = await response.json();
+
+    // The far end does not move with the cutoff, so this is the same window as
+    // at nine that morning minus its first day, not one shifted forward.
+    expect(body.sessions.map((s) => s.sessionDate)).toEqual(['2026-08-04']);
+  });
+
+  it('counts four o’clock itself as making the deadline', async () => {
+    const { testApp, token } = await adminApp('2026-07-27T15:00:00.000Z'); // 16:00 BST
+    await createTuesdayTemplate(testApp, token);
+    await runMaterialisation(testApp, token);
+
+    const response = await testApp.request('/api/v1/public/sessions');
+    const body: { sessions: { sessionDate: string }[] } = await response.json();
+
+    // Four o'clock is the time a referrer is asked to be in by, so the 16:00
+    // minute still makes it. 16:01 is where it stops — the test above.
+    expect(body.sessions.map((s) => s.sessionDate)).toContain('2026-07-28');
+  });
+
+  it('reads four o’clock off the London clock in winter too', async () => {
+    // 15:59 on Monday 7 December, and London is on GMT — so the instant and
+    // the wall clock agree. Code that assumed the BST offset would read this
+    // as 16:59 and drop Tuesday's session an hour early, on half the year.
+    const { testApp, token } = await adminApp('2026-12-07T15:59:00.000Z');
+    await createTuesdayTemplate(testApp, token);
+    await runMaterialisation(testApp, token);
+
+    const response = await testApp.request('/api/v1/public/sessions');
+    const body: { sessions: { sessionDate: string }[] } = await response.json();
+
+    expect(body.sessions.map((s) => s.sessionDate)).toEqual(['2026-12-08', '2026-12-15']);
+  });
+
+  it('never offers a session on its own day', async () => {
+    // Tuesday morning, before the 10:00 session it would otherwise offer.
+    const { testApp, token } = await adminApp('2026-07-28T07:00:00.000Z');
+    await createTuesdayTemplate(testApp, token);
+    await runMaterialisation(testApp, token);
+
+    const response = await testApp.request('/api/v1/public/sessions');
+    const body: { sessions: { sessionDate: string }[] } = await response.json();
+
+    expect(body.sessions.map((s) => s.sessionDate)).toEqual(['2026-08-04', '2026-08-11']);
+  });
+
+  it('counts the cutoff on the London date, not the UTC one', async () => {
+    // 00:30 on Tuesday 28 July in London, still 27 July in UTC. Reading the
+    // date off the instant would offer Tuesday's session on Tuesday morning.
+    const { testApp, token } = await adminApp('2026-07-27T23:30:00.000Z');
+    await createTuesdayTemplate(testApp, token);
+    await runMaterialisation(testApp, token);
+
+    const response = await testApp.request('/api/v1/public/sessions');
+    const body: { sessions: { sessionDate: string }[] } = await response.json();
+
+    expect(body.sessions.map((s) => s.sessionDate)).not.toContain('2026-07-28');
+  });
+
   it('excludes cancelled sessions', async () => {
     const { testApp, token } = await adminApp();
     await createTuesdayTemplate(testApp, token);
@@ -595,8 +674,11 @@ describe('staff session horizon', () => {
     // Fourteen days from 22 October reaches 5 November: past the team lead's
     // horizon and short of the admin's. A referrer booking a slot and a team
     // lead running a shift are different jobs with different windows.
+    //
+    // TODAY is absent because referrals for it closed at four yesterday
+    // afternoon — the near end is the cutoff, the far end is still fourteen
+    // days from today.
     expect(body.sessions.map((s) => s.sessionDate)).toEqual([
-      TODAY,
       TOMORROW,
       SIX_DAYS_OUT,
       SEVEN_DAYS_OUT,

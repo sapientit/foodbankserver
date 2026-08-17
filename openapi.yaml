@@ -296,6 +296,20 @@ paths:
         The next 14 days, excluding cancelled sessions and any that are full.
         The window is fixed and cannot be widened by a parameter.
 
+        **Referrals close at 16:00 `Europe/London` the day before a session**,
+        and this list stops offering it once 16:00 has gone by. So the soonest
+        session listed is tomorrow's up to and including 16:00 today, and the
+        day after tomorrow's from 16:01; a session is never listed on its own
+        day. 16:00 itself still makes the deadline. The far
+        end stays 14 days from today, so the list shortens over the afternoon
+        rather than sliding forward.
+
+        **`POST /api/v1/public/referrals` does not enforce the cutoff.** It is
+        applied here and nowhere else, deliberately: a referrer who loaded the
+        form at 15:55 can still submit at 16:05, and the referral is taken.
+        Do not re-check the clock in the client and do not filter this list
+        further — submit whatever session the referrer chose.
+
         Deliberately narrow: no capacity, no remaining places, no status.
         Anything listed can be referred to.
       security: []
@@ -1019,9 +1033,25 @@ paths:
         administrators working the queue at the same time get different
         sessions; neither can be handed one the other is already writing.
 
-        `claim: null` means nothing is waiting — the queue is empty, or
-        everything in it is claimed by somebody still working. **This is how a
-        batch ends and is not an error.**
+        `claim: null` means nothing could be handed out — the queue is empty,
+        **or everything left in it is currently reserved.** This is how a batch
+        ends and is not an error.
+
+        **`claim: null` does not mean the work is done. Check `remaining`
+        before telling the administrator the spreadsheet is up to date.** The
+        two are different states and the response distinguishes them only by
+        that number: `remaining: 0` is finished, `remaining > 0` with a null
+        claim means those sessions are reserved and not yet written.
+
+        This is not a rare edge. A browser whose Google write fails stops
+        without completing, and **there is no way to hand a reservation back
+        early** — the session stays reserved for the full 10 minutes. So the
+        very next `POST /extracts/claims` skips it, and once everything
+        unextracted is reserved this returns `claim: null` while `remaining`
+        still counts every one of them. Reporting that as "extract complete"
+        tells an administrator the spreadsheet is up to date when it is not,
+        and they will have no reason to look again. Say that sessions are
+        reserved and will return to the queue shortly.
 
         The referrals come back with the claim rather than behind a second
         call: the browser can do nothing with one without the other, and a
@@ -3716,9 +3746,12 @@ components:
                 - $ref: '#/components/schemas/ExtractClaim'
                 - type: 'null'
               description: >-
-                `null` when nothing is waiting, or everything waiting is
-                claimed by somebody still working. That is how a batch ends,
-                not an error.
+                `null` when nothing could be handed out — the queue is empty,
+                or everything left in it is currently reserved. That is how a
+                batch ends, not an error. **It does not mean the work is
+                done:** read `remaining` to tell "finished" from "the rest are
+                reserved", including by an extract of your own that failed and
+                cannot give its reservation back before it expires.
 
     ExtractCompleteResponse:
       allOf:

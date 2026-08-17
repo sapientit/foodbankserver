@@ -280,7 +280,15 @@ A frequent source of confusion, so it is written out once:
 | **6 weeks** | Materialisation cron            | `materialise-sessions.ts`       |
 | **6 weeks** | `GET /sessions` for an admin    | `sessions.service.listSessions` |
 | **6 days**  | `GET /sessions` for a team lead | `sessions.service.listSessions` |
-| **14 days** | Unauthenticated public list     | `sessions/public.routes.ts`     |
+| **14 days** | Unauthenticated public list     | `sessions/public-window.ts`     |
+
+The public list is the one with a **near** end as well as a far one: referrals for a session close
+at 16:00 `Europe/London` the day before it runs, so the soonest session offered is tomorrow's up to
+and including 16:00 today and the day after tomorrow's from 16:01 — 16:00 itself still makes the
+deadline. The far end stays 14 days from today, so the
+list shortens over the afternoon rather than sliding forward. **Only the list applies the cutoff** —
+`POST /public/referrals` accepts a referral for a session that has closed, so a referrer who is
+still typing at five past four does not lose the form.
 
 The horizon is applied from the `Actor`, never from the request — a `to` beyond it is **clamped**,
 so no query parameter widens it. It caps looking forward only; past sessions are untouched. It

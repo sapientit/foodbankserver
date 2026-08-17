@@ -53,6 +53,23 @@ export const DEFAULT_SESSION_CAPACITY = 25;
 export const PUBLIC_SESSION_WINDOW_DAYS = 14;
 
 /**
+ * The London wall-clock time, on the day before a session, **after** which the
+ * public list stops offering that session — this minute itself still makes the
+ * deadline, and 16:01 is where the session goes.
+ *
+ * Four in the afternoon: the food bank shops and picks for a session the day
+ * before it runs, so a referral arriving that evening is one nobody has bought
+ * food for. See `INITIAL_SPEC1.txt`, "#Sessions".
+ *
+ * **The list stops offering; the submission is not refused.** A referrer who
+ * had the session in front of them at five to four is still filling the form in
+ * at five past, and losing what they typed to a rule they never saw is worse
+ * than the odd late referral an administrator can move. So this is applied when
+ * sessions are listed and nowhere else.
+ */
+export const PUBLIC_SESSION_BOOKING_CUTOFF = '16:00';
+
+/**
  * Bounds on a referral's dynamic answers.
  *
  * The referral form lives in the client, so the server has nothing to validate
