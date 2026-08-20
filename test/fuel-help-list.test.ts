@@ -10,6 +10,8 @@ import { recurringSessions, sessions } from '../src/db/schema/sessions.ts';
 import { stockItems, stockLedger } from '../src/db/schema/stock.ts';
 import { refreshTokens, users } from '../src/db/schema/users.ts';
 import { fixedClock } from '../src/core/clock.ts';
+import { londonWallClockToInstant } from '../src/core/time/london.ts';
+import { addDays } from '../src/core/time/plain-date.ts';
 import { authHeaders, buildTestApp, devLogin, type TestApp } from './helpers/app.ts';
 import { submitReferral } from './helpers/referral-fixtures.ts';
 import {
@@ -90,12 +92,23 @@ async function fedAtSession(
       durationMinutes: 120,
       location: 'Church Hall',
       capacity: 25,
+      deliveryCapacity: 25,
     }),
   });
   const { id: sessionId }: { id: string } = await created.json();
 
+  // `submit()` now refuses a session whose booking cutoff has passed, and
+  // every session here is dated in the past relative to the report's own
+  // clock — that is the report's whole premise. Submitted instead through a
+  // second app instance clocked two days before the session (safely inside
+  // the booking window) and sharing the same database, then driven onward
+  // with the caller's own app and clock: admin actions were never subject to
+  // the cutoff, only this one unauthenticated submission was.
+  const submittingApp = buildTestApp({
+    clock: fixedClock(londonWallClockToInstant(addDays(sessionDate, -2), '09:00')),
+  });
   const { id: referralId } = await submitReferral(
-    testApp,
+    submittingApp,
     w,
     { sessionId, needsFuelHelp: true, ...overrides },
     { clientIp: options.clientIp ?? nextClientIp() },
@@ -135,6 +148,7 @@ interface FuelHousehold {
   refereeAddress: string | null;
   refereePostcode: string | null;
   refereePhone: string | null;
+  needsFuelHelp: boolean;
   answers: Record<string, unknown>;
 }
 
@@ -185,7 +199,50 @@ describe('the fuel help list', () => {
         refereeAddress: '12 Bramble Cottages',
         refereePostcode: 'GU1 4AA',
         refereePhone: '07700 900123',
+        needsFuelHelp: true,
         answers: { Dietary: 'no pork' },
+      },
+    ]);
+  });
+
+  it('nulls the personal fields but keeps needsFuelHelp true on a purged referral', async () => {
+    // The retention window (twelve months) is far longer than this list's
+    // fourteen days, so this state cannot arise through the purge job itself
+    // in the time this list looks back over — it is produced by hand to prove
+    // the mapper's own behaviour rather than the job's reach. needsFuelHelp is
+    // outside the PII block and a real column, not something inferred from
+    // the row's presence on the list.
+    const { testApp, token, world } = await adminWorld();
+    const { referralId } = await fedAtSession(testApp, token, world, '2026-08-18');
+
+    await db
+      .update(referrals)
+      .set({
+        refereeFirstName: null,
+        refereeSurname: null,
+        refereeDateOfBirth: null,
+        refereeAddress: null,
+        refereePostcode: null,
+        refereePhone: null,
+        answersJson: null,
+        piiPurgedAt: NOW,
+      })
+      .where(eq(referrals.id, referralId));
+
+    const { households } = await readList(testApp, token);
+
+    expect(households).toEqual([
+      {
+        referralId,
+        sessionDate: '2026-08-18',
+        refereeFirstName: null,
+        refereeSurname: null,
+        refereeDateOfBirth: null,
+        refereeAddress: null,
+        refereePostcode: null,
+        refereePhone: null,
+        needsFuelHelp: true,
+        answers: {},
       },
     ]);
   });
@@ -228,7 +285,6 @@ describe('the fuel help list', () => {
       'children',
       'householdSize',
       'isDelivery',
-      'needsFuelHelp',
       'referrerName',
       'referrerEmail',
       'referrerPhone',
@@ -336,6 +392,7 @@ describe('the fuel help list', () => {
         durationMinutes: 120,
         location: 'Church Hall',
         capacity: 25,
+        deliveryCapacity: 25,
       }),
     });
     const { id: laterSessionId }: { id: string } = await later.json();

@@ -238,9 +238,17 @@ export function toReceiptResponse(referral: Referral): ReferralReceiptResponse {
  * client's to know: it owns the form definition and the server holds none.
  * Picking the key out here would be the same guess that four hard-coded
  * dietary keys turned out to be.
+ *
+ * `pickNumber` is required, not optional: a listener sheet and the picking
+ * sheets are carried round the same hall, and a listener has to be able to
+ * match a household between the two. `listenerSheet` in the service refuses
+ * the whole sheet with `NewClientsAssignedError` rather than call this mapper
+ * for a household with no parcel yet, so there is no household to map that
+ * lacks a number.
  */
 export interface ListenerSheetHousehold {
   readonly referralId: string;
+  readonly pickNumber: number;
   readonly refereeFirstName: string | null;
   readonly refereeSurname: string | null;
   /**
@@ -259,9 +267,11 @@ export interface ListenerSheetHousehold {
 export function toListenerSheetHousehold(
   referral: Referral,
   reasonLabel: string | undefined,
+  pickNumber: number,
 ): ListenerSheetHousehold {
   return {
     referralId: referral.id,
+    pickNumber,
     refereeFirstName: referral.refereeFirstName,
     refereeSurname: referral.refereeSurname,
     reason: reasonLabel ?? null,

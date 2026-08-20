@@ -286,10 +286,14 @@ from 16:01; 16:00 itself still makes the deadline, and today's sessions are
 never offered. The far end stays 14 days from today, so the list shortens over
 the afternoon rather than sliding forward.
 
-The cutoff is applied **only** on that list. `POST /public/referrals` accepts a
-referral for a session whose cutoff has passed, so a referrer who loaded the
-form at 15:55 does not lose it at 16:05. Submit whatever session the referrer
-chose; do not re-check the clock or filter the list further.
+**`POST /public/referrals` now enforces the same cutoff**, refusing a session
+that has closed for booking with `409` — reversing the earlier position that
+only the list applied it. The clock is read at the moment of submission, not
+when the form was loaded, so a session still listed here when the referrer
+opened the form can still be refused if they submit after 16:00. Do not
+re-check the clock in the client and do not filter the list further; submit
+whatever session the referrer chose and let the server decide. Settled by
+Pete on 2026-08-19.
 
 The cap comes off the access token, so **`from` and `to` cannot widen it.** A
 `to` past a team lead's horizon is clamped back to it — you get a shorter list,
@@ -436,19 +440,23 @@ Three things that follow, and they matter:
   number has no settled form and is not matched on. Nothing is asked of your
   form here; the number is stored as typed either way.
 
-### Deliveries can be switched off per session
+### A session has a numeric delivery capacity
 
-`Session` and `PublicSession` both carry **`deliveriesAllowed`**. False means
-that session has nobody to drive.
+`Session` and `RecurringSession` carry **`deliveryCapacity`**: how many of the
+session's overall `capacity` may be deliveries. Zero means that session has
+nobody to drive, and it can never exceed `capacity` — the API rejects a create
+or patch that would let it. `PublicSession` does not carry the number itself;
+it carries **`deliveryAvailability`**, one of `not_offered`, `full` or
+`available`, so the unauthenticated list never leaks a raw capacity or booked
+count.
 
-**Neither the server nor the form refuses such a delivery.** A referral with
-`isDelivery: true` to one is accepted at both ends, and an administrator sorts
-it out at review. Settled by Pete on 2026-08-16: the form states that no
-deliveries are available for the session in place of the window and still takes
-the submission, because a delivery option that silently disappears tells the
-referrer nothing about why. Earlier versions of this file and of `STATUS.md`
-said the form was the only thing stopping it — that is no longer true, and
-nothing is.
+**`POST /public/referrals` refuses a delivery outright once a session's
+`deliveryAvailability` is anything other than `available`** — a `409`, the
+same hard stop as a session at its overall capacity. A collection is never
+affected, however full delivery is. This replaces the boolean
+`deliveriesAllowed` this file used to describe here, which the form and
+server both left unenforced; that is no longer the case. Settled by Pete on
+2026-08-19.
 
 ### A session's delivery window
 
@@ -1201,9 +1209,10 @@ purged.
 
 ```
 GET /api/v1/sessions/{sessionId}/listener-sheet
-  → 200 { sessionId, households: [ { referralId, refereeFirstName,
+  → 200 { sessionId, households: [ { referralId, pickNumber, refereeFirstName,
                                      refereeSurname, reason, needsFuelHelp,
                                      answers } ] }
+  → 409 NEW_CLIENTS_ASSIGNED { error: { details: { missingParcels: [referralId] } } }
 ```
 
 **One sheet for the whole session**, not one per household. A listener is handed
@@ -1244,6 +1253,19 @@ list because of it**:
   conversation. This changed — deliveries used to appear — so a screen that
   reconciles this sheet against the session's households will now find fewer
   rows here, and that is correct.
+
+**Every household on the sheet carries a required `pickNumber`.** The sheet
+and the picking sheets are carried round the same hall, and a listener has to
+be able to match a household between the two. **This changed too** — producing
+the sheet used to be independent of picking, available whether or not a pick
+list had been made. It no longer is: a household referred since the pick list
+was generated, or before one has ever been generated, has no parcel and so no
+number, and `GET /listener-sheet` now refuses the **whole** request with a
+`409` and the stable code `NEW_CLIENTS_ASSIGNED` rather than print a sheet
+with gaps in it or numbers that do not line up with the picking sheets.
+`error.details.missingParcels` names the referrals with no parcel yet — the
+same shape `GET /pick-lists/{id}/divergence` already uses for the same idea.
+Generate or reconcile the session's pick list first, then ask again.
 
 ---
 
@@ -1457,7 +1479,8 @@ outcome is a `409`. Disable the control there rather than letting someone try.
 GET /api/v1/fuel-help-list
   → 200 { households: [ { referralId, sessionDate, refereeFirstName,
                           refereeSurname, refereeDateOfBirth, refereeAddress,
-                          refereePostcode, refereePhone, answers } ] }
+                          refereePostcode, refereePhone, needsFuelHelp,
+                          answers } ] }
 ```
 
 **This is the whole of a `fuel_admin`'s application.** That role reaches this
@@ -1508,6 +1531,13 @@ whoever follows the bill up. It is typed nullable like every personal field here
 but unlike `refereePhone` it is always given on a referral — the only way it
 comes back `null` is a purged one, and the retention window is far longer than
 this list's fourteen days, so in practice you will not see it.
+
+**`needsFuelHelp` is new too, and on this list it is always `true`** — the
+repository already filters on it, so the field is not telling you anything the
+row's presence doesn't. It is here anyway, as a plain boolean rather than
+something to infer, because it is the same fixed field the client form shows
+everywhere else it appears. Unlike the rest of the row it is not personal data
+and does not go on the twelve-month purge.
 
 ---
 

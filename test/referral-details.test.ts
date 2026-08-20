@@ -73,10 +73,12 @@ interface ReferralDetailsResponseBody {
   readonly referrals: ReferralDetailsHouseholdBody[];
 }
 
-async function adminWorld(): Promise<{ testApp: TestApp; token: string; world: ReferralWorld }> {
+async function adminWorld(
+  options: { deliveryCapacity?: number } = {},
+): Promise<{ testApp: TestApp; token: string; world: ReferralWorld }> {
   const testApp = buildTestApp({ clock: fixedClock(NOW) });
   const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
-  const world = await setUpReferralWorld(testApp, accessToken);
+  const world = await setUpReferralWorld(testApp, accessToken, options);
   return { testApp, token: accessToken, world };
 }
 
@@ -247,7 +249,9 @@ describe('who is included', () => {
   });
 
   it('includes a delivery household — the deliberate difference from the listener sheet, which drops it', async () => {
-    const { testApp, token, world } = await adminWorld();
+    const testApp = buildTestApp({ clock: fixedClock(NOW) });
+    const { accessToken: token } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world: PickingWorld = await setUpPickingWorld(testApp, token, { deliveryCapacity: 1 });
     const collecting = await submitReferral(testApp, world, {}, { clientIp: nextClientIp() });
     const delivery = await submitReferral(
       testApp,
@@ -255,6 +259,9 @@ describe('who is included', () => {
       { isDelivery: true },
       { clientIp: nextClientIp() },
     );
+    // Both households need a pick number before the listener sheet will
+    // produce anything at all.
+    await generatePickList(testApp, token, world.sessionId);
 
     const details = await readDetails(testApp, token, world.sessionId);
     expect(details.body.referrals?.map((referral) => referral.referralId).sort()).toEqual(

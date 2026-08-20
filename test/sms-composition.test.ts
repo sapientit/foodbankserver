@@ -15,7 +15,7 @@ function session(overrides: Partial<Session> = {}): Session {
     capacity: 25,
     deliveryWindowStart: null,
     deliveryWindowEnd: null,
-    deliveriesAllowed: 1,
+    deliveryCapacity: 25,
     status: 'planned',
     cancelledReason: null,
     isCustomised: 0,

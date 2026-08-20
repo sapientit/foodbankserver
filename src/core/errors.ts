@@ -13,7 +13,8 @@ export type ErrorCode =
   | 'FORBIDDEN'
   | 'NOT_FOUND'
   | 'CONFLICT'
-  | 'UNPROCESSABLE';
+  | 'UNPROCESSABLE'
+  | 'NEW_CLIENTS_ASSIGNED';
 
 export interface AppErrorOptions {
   readonly cause?: unknown;
@@ -76,6 +77,18 @@ export class ConflictError extends AppError {
 export class UnprocessableError extends AppError {
   constructor(message: string, options?: AppErrorOptions) {
     super('UNPROCESSABLE', 422, message, options);
+  }
+}
+
+/**
+ * A household is on the session but has not been picked for, so it has no
+ * pick number to print. A `CONFLICT`, but a client needs to tell this apart
+ * from every other 409 to explain *why* the listener sheet is refused rather
+ * than just that it is — hence its own code instead of `ConflictError`.
+ */
+export class NewClientsAssignedError extends AppError {
+  constructor(message: string, options?: AppErrorOptions) {
+    super('NEW_CLIENTS_ASSIGNED', 409, message, options);
   }
 }
 

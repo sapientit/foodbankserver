@@ -19,6 +19,21 @@ const deliveryWindowStart = plainTime.nullable();
 const deliveryWindowEnd = plainTime.nullable();
 
 /**
+ * Rule for a **create** schema, where both `capacity` and `deliveryCapacity`
+ * are always present: `deliveryCapacity` may not exceed the overall
+ * `capacity`. No DB `CHECK` — see the comment on `recurringSessions.deliveryCapacity`
+ * in the schema — so this is the only place the rule is enforced for a create.
+ */
+function refineCreateDeliveryCapacity<T extends { capacity: number; deliveryCapacity: number }>(
+  schema: z.ZodType<T>,
+) {
+  return schema.refine((value) => value.deliveryCapacity <= value.capacity, {
+    message: 'deliveryCapacity must not exceed capacity',
+    path: ['deliveryCapacity'],
+  });
+}
+
+/**
  * Comparing two zero-padded `HH:MM` strings lexicographically is the same as
  * comparing them chronologically — `"09:00" < "13:00" < "13:05"` — so string
  * comparison is used rather than parsing into minutes.
@@ -109,21 +124,22 @@ const recurringSessionFields = z.object({
     .max(24 * 60),
   location: z.string().min(1).max(200),
   capacity,
+  deliveryCapacity: capacity,
   deliveryWindowStart,
   deliveryWindowEnd,
-  deliveriesAllowed: z.boolean(),
   activeFrom: plainDate,
   activeUntil,
 });
 
-export const recurringSessionInputSchema = refineCreateDeliveryWindow(
-  recurringSessionFields.extend({
-    capacity: capacity.default(DEFAULT_SESSION_CAPACITY),
-    deliveryWindowStart: deliveryWindowStart.default(null),
-    deliveryWindowEnd: deliveryWindowEnd.default(null),
-    deliveriesAllowed: z.boolean().default(true),
-    activeUntil: activeUntil.default(null),
-  }),
+export const recurringSessionInputSchema = refineCreateDeliveryCapacity(
+  refineCreateDeliveryWindow(
+    recurringSessionFields.extend({
+      capacity: capacity.default(DEFAULT_SESSION_CAPACITY),
+      deliveryWindowStart: deliveryWindowStart.default(null),
+      deliveryWindowEnd: deliveryWindowEnd.default(null),
+      activeUntil: activeUntil.default(null),
+    }),
+  ),
 );
 
 // The empty patch is refused rather than treated as a no-op: the service stamps
@@ -134,21 +150,23 @@ export const recurringSessionPatchSchema = refinePatchDeliveryWindow(
 ).refine((value) => Object.keys(value).length > 0, 'at least one field must be supplied');
 
 /** An ad hoc session, belonging to no template. */
-export const adHocSessionSchema = refineCreateDeliveryWindow(
-  z.object({
-    sessionDate: plainDate,
-    startTime: plainTime,
-    durationMinutes: z
-      .number()
-      .int()
-      .positive()
-      .max(24 * 60),
-    location: z.string().min(1).max(200),
-    capacity: z.number().int().min(0).max(1000).default(DEFAULT_SESSION_CAPACITY),
-    deliveryWindowStart: deliveryWindowStart.default(null),
-    deliveryWindowEnd: deliveryWindowEnd.default(null),
-    deliveriesAllowed: z.boolean().default(true),
-  }),
+export const adHocSessionSchema = refineCreateDeliveryCapacity(
+  refineCreateDeliveryWindow(
+    z.object({
+      sessionDate: plainDate,
+      startTime: plainTime,
+      durationMinutes: z
+        .number()
+        .int()
+        .positive()
+        .max(24 * 60),
+      location: z.string().min(1).max(200),
+      capacity: z.number().int().min(0).max(1000).default(DEFAULT_SESSION_CAPACITY),
+      deliveryCapacity: capacity,
+      deliveryWindowStart: deliveryWindowStart.default(null),
+      deliveryWindowEnd: deliveryWindowEnd.default(null),
+    }),
+  ),
 );
 
 export const sessionPatchSchema = refinePatchDeliveryWindow(
@@ -163,9 +181,9 @@ export const sessionPatchSchema = refinePatchDeliveryWindow(
         .max(24 * 60),
       location: z.string().min(1).max(200),
       capacity: z.number().int().min(0).max(1000),
+      deliveryCapacity: capacity,
       deliveryWindowStart,
       deliveryWindowEnd,
-      deliveriesAllowed: z.boolean(),
     })
     .partial(),
 ).refine((value) => Object.keys(value).length > 0, 'at least one field must be supplied');

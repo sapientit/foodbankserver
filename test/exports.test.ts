@@ -94,7 +94,7 @@ async function seedSession(overrides: Partial<NewSession> = {}): Promise<string>
     capacity: 25,
     deliveryWindowStart: null,
     deliveryWindowEnd: null,
-    deliveriesAllowed: 1,
+    deliveryCapacity: 25,
     status: 'confirmed',
     cancelledReason: null,
     isCustomised: 0,
@@ -753,7 +753,7 @@ describe('the spreadsheet extract', () => {
     it('carries exactly the agreed fields, with answers as an object, isDelivery/needsFuelHelp as booleans, reason as the label (including a retired one), and reviewComment present', async () => {
       const testApp = configuredApp();
       const { accessToken: token } = await devLogin(testApp, { email: 'admin@foodbank.org' });
-      const world = await setUpReferralWorld(testApp, token);
+      const world = await setUpReferralWorld(testApp, token, { deliveryCapacity: 5 });
 
       const reasonResponse = await testApp.request('/api/v1/referral-reasons', {
         method: 'POST',

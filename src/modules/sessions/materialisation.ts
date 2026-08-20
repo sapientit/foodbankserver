@@ -29,7 +29,7 @@ export interface RecurrenceTemplate {
   /** `HH:MM` London wall clock, both or neither. */
   readonly deliveryWindowStart: string | null;
   readonly deliveryWindowEnd: string | null;
-  readonly deliveriesAllowed: boolean;
+  readonly deliveryCapacity: number;
   readonly activeFrom: PlainDate;
   readonly activeUntil: PlainDate | null;
 }
@@ -45,7 +45,7 @@ export interface PlannedOccurrence {
   readonly capacity: number;
   readonly deliveryWindowStart: string | null;
   readonly deliveryWindowEnd: string | null;
-  readonly deliveriesAllowed: boolean;
+  readonly deliveryCapacity: number;
 }
 
 export interface PlanWindow {
@@ -97,7 +97,7 @@ export function planOccurrences(
         capacity: template.capacity,
         deliveryWindowStart: template.deliveryWindowStart,
         deliveryWindowEnd: template.deliveryWindowEnd,
-        deliveriesAllowed: template.deliveriesAllowed,
+        deliveryCapacity: template.deliveryCapacity,
       });
     }
   }

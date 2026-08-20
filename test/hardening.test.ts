@@ -109,7 +109,13 @@ describe('the bot check on referral submission', () => {
       }),
     );
 
-    const testApp = buildTestApp({ bindings: { TURNSTILE_SECRET_KEY: 'test-secret' } });
+    // A fixed clock ahead of `setUpReferralWorld`'s hardcoded 2026-08-11
+    // session so the submission below lands inside the public booking
+    // cutoff, not after the session has already been and gone.
+    const testApp = buildTestApp({
+      bindings: { TURNSTILE_SECRET_KEY: 'test-secret' },
+      clock: fixedClock('2026-08-04T09:00:00.000Z'),
+    });
     const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
     const world = await setUpReferralWorld(testApp, accessToken);
 
@@ -168,7 +174,9 @@ describe('the bot check on referral submission', () => {
   });
 
   it('is skipped when no secret is configured, so development still works', async () => {
-    const testApp = buildTestApp();
+    // Fixed clock, same reason as above: inside the booking cutoff for
+    // `setUpReferralWorld`'s hardcoded session date.
+    const testApp = buildTestApp({ clock: fixedClock('2026-08-04T09:00:00.000Z') });
     const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
     const world = await setUpReferralWorld(testApp, accessToken);
 
@@ -384,8 +392,13 @@ describe('security headers', () => {
 describe('rate limiting the open endpoints', () => {
   it('cuts off a flood of referrals from one address', async () => {
     // The limiter is 5 a minute for submissions. A real referrer submits once;
-    // anything near this from a single address is a bot or a bug.
-    const testApp = buildTestApp({ clientIp: '203.0.113.9' });
+    // anything near this from a single address is a bot or a bug. Fixed
+    // clock so the submissions land inside the booking cutoff for
+    // `setUpReferralWorld`'s hardcoded session date.
+    const testApp = buildTestApp({
+      clientIp: '203.0.113.9',
+      clock: fixedClock('2026-08-04T09:00:00.000Z'),
+    });
     const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
     const world = await setUpReferralWorld(testApp, accessToken);
 
@@ -401,14 +414,22 @@ describe('rate limiting the open endpoints', () => {
   });
 
   it('keys on the client address, so one flooder cannot block everyone', async () => {
-    const flooder = buildTestApp({ clientIp: '203.0.113.10' });
+    // Fixed clock, same reason as above: inside the booking cutoff for
+    // `setUpReferralWorld`'s hardcoded session date.
+    const flooder = buildTestApp({
+      clientIp: '203.0.113.10',
+      clock: fixedClock('2026-08-04T09:00:00.000Z'),
+    });
     const { accessToken } = await devLogin(flooder, { email: 'admin@foodbank.org' });
     const world = await setUpReferralWorld(flooder, accessToken);
 
     for (let i = 0; i < 8; i++) await submitReferral(flooder, world);
 
     // A different address, same moment, unaffected.
-    const other = buildTestApp({ clientIp: '203.0.113.11' });
+    const other = buildTestApp({
+      clientIp: '203.0.113.11',
+      clock: fixedClock('2026-08-04T09:00:00.000Z'),
+    });
     expect((await submitReferral(other, world)).status).toBe(201);
   });
 

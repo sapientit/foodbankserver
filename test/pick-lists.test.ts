@@ -33,7 +33,7 @@ const db = createDatabase(env.DB);
 const NOW = '2026-08-04T09:00:00.000Z';
 
 async function world(
-  options: { capacity?: number } = {},
+  options: { capacity?: number; deliveryCapacity?: number } = {},
 ): Promise<{ testApp: TestApp; token: string; world: PickingWorld }> {
   const testApp = buildTestApp({ clock: fixedClock(NOW) });
   const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
@@ -292,6 +292,7 @@ describe('generating a pick list', () => {
         startTime: '10:00',
         durationMinutes: 120,
         location: 'Hall',
+        deliveryCapacity: 25,
       }),
     });
     const { id: sessionId }: { id: string } = await session.json();
@@ -374,6 +375,7 @@ describe('copying the contents', () => {
         startTime: '10:00',
         durationMinutes: 120,
         location: 'Hall',
+        deliveryCapacity: 25,
       }),
     });
     const { id: laterSession }: { id: string } = await created.json();
@@ -793,7 +795,7 @@ describe('the printed sheet', () => {
   });
 
   it("gives the driver the referee's own address, postcode and phone for a delivery", async () => {
-    const { testApp, token, world: w } = await world();
+    const { testApp, token, world: w } = await world({ deliveryCapacity: 5 });
     await submitReferral(testApp, w, { adults: 1, children: 0, isDelivery: true });
     const { id } = await generatePickList(testApp, token, w.sessionId);
     await reviewEveryParcel(testApp, token, id);
@@ -823,7 +825,7 @@ describe('the printed sheet', () => {
   });
 
   it('ignores a delivery address a client sends, rather than driving there', async () => {
-    const { testApp, token, world: w } = await world();
+    const { testApp, token, world: w } = await world({ deliveryCapacity: 5 });
     await submitReferral(testApp, w, {
       adults: 1,
       children: 0,
@@ -1155,6 +1157,7 @@ describe('preference lines at generation', () => {
         startTime: '10:00',
         durationMinutes: 120,
         location: 'Hall',
+        deliveryCapacity: 25,
       }),
     });
     const { id: otherSessionId }: { id: string } = await otherSession.json();
@@ -1475,6 +1478,7 @@ describe('pick-list information at generation', () => {
         startTime: '10:00',
         durationMinutes: 120,
         location: 'Hall',
+        deliveryCapacity: 25,
       }),
     });
     const { id: otherSessionId }: { id: string } = await otherSession.json();
@@ -2058,6 +2062,7 @@ describe('moving a referral to another session', () => {
         durationMinutes: 120,
         location: 'Annexe',
         capacity: 25,
+        deliveryCapacity: 25,
       }),
     });
     const { id }: { id: string } = await response.json();

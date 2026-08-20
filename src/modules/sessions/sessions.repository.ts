@@ -164,10 +164,20 @@ export function createSessionsRepository(db: Database) {
      * Capacity counts referrals (households), not people — cancelled and
      * rejected ones do not occupy a place, and one awaiting review does, hence
      * the status condition inside the join.
+     *
+     * `deliveryBooked` is the same join split further by `isDelivery`, not a
+     * second join — the rows are already being joined for `booked`.
      */
-    async listPubliclyAvailable(fromUtc: string, toUtc: string): Promise<Session[]> {
+    async listPubliclyAvailable(
+      fromUtc: string,
+      toUtc: string,
+    ): Promise<{ session: Session; deliveryBooked: number }[]> {
       const rows = await db
-        .select({ session: sessions, booked: count(referrals.id) })
+        .select({
+          session: sessions,
+          booked: count(referrals.id),
+          deliveryBooked: sql<number>`sum(case when ${referrals.isDelivery} = 1 then 1 else 0 end)`,
+        })
         .from(sessions)
         .leftJoin(referrals, and(eq(referrals.sessionId, sessions.id), holdsAPlace))
         .where(
@@ -181,7 +191,7 @@ export function createSessionsRepository(db: Database) {
         .having(lt(count(referrals.id), sessions.capacity))
         .orderBy(asc(sessions.startsAtUtc));
 
-      return rows.map((row) => row.session);
+      return rows.map((row) => ({ session: row.session, deliveryBooked: row.deliveryBooked }));
     },
 
     /** Template slots already materialised in a date range. */

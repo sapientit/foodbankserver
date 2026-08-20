@@ -304,6 +304,21 @@ export function createReferralsRepository(db: Database) {
       return rows[0]?.booked ?? 0;
     },
 
+    /** Same shape as {@link countHoldingAPlace}, narrowed to deliveries. */
+    async countDeliveriesHoldingAPlace(sessionId: string): Promise<number> {
+      const rows = await db
+        .select({ booked: count() })
+        .from(referrals)
+        .where(
+          and(
+            eq(referrals.sessionId, sessionId),
+            inArray(referrals.status, [...REFERRAL_STATUSES_HOLDING_A_PLACE]),
+            eq(referrals.isDelivery, 1),
+          ),
+        );
+      return rows[0]?.booked ?? 0;
+    },
+
     async insert(value: NewReferral): Promise<Referral> {
       const rows = await db.insert(referrals).values(value).returning();
       const inserted = rows[0];

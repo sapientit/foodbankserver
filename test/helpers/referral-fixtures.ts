@@ -19,7 +19,7 @@ function json(token: string): Record<string, string> {
 export async function setUpReferralWorld(
   testApp: TestApp,
   token: string,
-  options: { capacity?: number } = {},
+  options: { capacity?: number; deliveryCapacity?: number } = {},
 ): Promise<ReferralWorld> {
   const session = await testApp.request('/api/v1/sessions', {
     method: 'POST',
@@ -30,6 +30,9 @@ export async function setUpReferralWorld(
       durationMinutes: 120,
       location: 'Church Hall',
       capacity: options.capacity ?? 25,
+      // `deliveryCapacity` has no schema default on the ad hoc create route
+      // (unlike `capacity`), so it must always be sent explicitly here.
+      deliveryCapacity: options.deliveryCapacity ?? 0,
     }),
   });
   expect(session.status).toBe(201);

@@ -67,6 +67,7 @@ async function createSession(
       durationMinutes: 120,
       location: 'Church Hall',
       capacity: 25,
+      deliveryCapacity: 25,
       ...overrides,
     }),
   });
@@ -589,8 +590,13 @@ describe('the inbound webhook', () => {
 
     const pastSessionId = await createSession(testApp, accessToken, { sessionDate: '2026-07-20' });
     const world = await setUpReferralWorld(testApp, accessToken);
+    // The public submission cutoff now refuses a session that has already
+    // passed — which this one deliberately has, relative to `testApp`'s own
+    // `NOW`. Submitted instead through a second app instance, clocked while
+    // the session was still in the future, sharing the same database.
+    const submittingApp = buildTestApp({ clock: fixedClock('2026-07-15T09:00:00.000Z') });
     await submitReferral(
-      testApp,
+      submittingApp,
       { ...world, sessionId: pastSessionId },
       { refereePhone: '07700 900111' },
     );

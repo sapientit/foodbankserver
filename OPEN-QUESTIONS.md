@@ -234,7 +234,7 @@ be added to the spreadsheet extract as four more fixed columns, alongside the de
 the four raw bands?
 
 **A:**
-This has been answered separately - the household composition will mean all columns are extracted individually.  Close this question
+This has been answered separately - the household composition will mean all columns are extracted individually. Close this question
 
 ---
 
@@ -283,7 +283,7 @@ pick-list information be cleared along with the referral's own answers? Or is a 
 past occasion rather than of a household, and its note something the food bank means to keep?
 
 **A:**
-All data associated with the referral will be deleted at the same time.  Record this and close the question.
+All data associated with the referral will be deleted at the same time. Record this and close the question.
 
 ---
 
@@ -447,7 +447,7 @@ What the charity should know before deciding:
 so, as a sentence a team lead reads, or as a confirmation they must answer?
 
 **A:**
-No - all pick lists have been created, all outcomes recorded.  There is really nothing else to do. No confirmation is necessary.  Close this question
+No - all pick lists have been created, all outcomes recorded. There is really nothing else to do. No confirmation is necessary. Close this question
 
 ---
 
@@ -482,8 +482,7 @@ unreviewed, the way printing does — or is confirming deliberately the one step
 as it stands?
 
 **A:**
-This is not used by the client. We should remove the route and the flag.  Record this into outstanding work and close the question
-
+This is not used by the client. We should remove the route and the flag. Record this into outstanding work and close the question
 
 ---
 
@@ -525,4 +524,4 @@ session" — once every pick list is reviewed, before anyone starts picking, or 
 finished and the list is locked? And is it of any use once the session has been run?
 
 **A:**
-The stock check button should be removed once a session is completed.  The server has updated the API.  This should be written into the spec and this question closed.
+The stock check button should be removed once a session is completed. The server has updated the API. This should be written into the spec and this question closed.

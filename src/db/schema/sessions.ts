@@ -43,22 +43,25 @@ export const recurringSessions = sqliteTable(
      *
      * No `CHECK` for "both or neither" or "end after start": SQLite cannot
      * add a table-level constraint to an existing table, and both of these
-     * are foreign-key parents — see the note on `deliveriesAllowed` below.
+     * are foreign-key parents — see the note on `deliveryCapacity` below.
      * Zod enforces both rules at the only place a value enters.
      */
     deliveryWindowStart: text('delivery_window_start'),
     deliveryWindowEnd: text('delivery_window_end'),
     /**
-     * Whether this session takes deliveries at all.
+     * How many of `capacity`'s places may be deliveries. Zero means the
+     * session takes no deliveries at all — there is no separate flag.
      *
-     * **No `CHECK (0, 1)`, unlike every other boolean here**, and deliberately.
-     * SQLite cannot add a table-level constraint to an existing table, so the
-     * convention would have cost a rebuild of this table and `sessions` — both
-     * foreign-key parents — to gain a constraint Zod already enforces at the
-     * only place a value enters. Left off the Drizzle schema too, so this file
-     * and the database agree and `db:generate` does not propose that rebuild.
+     * **No `CHECK` for `>= 0` or `<= capacity`, unlike every other bounded
+     * integer here**, and deliberately. SQLite cannot add a table-level
+     * constraint to an existing table, so the convention would have cost a
+     * rebuild of this table and `sessions` — both foreign-key parents — to
+     * gain a constraint Zod already enforces at the only place a value
+     * enters. The `.default(0)` below is only so `db:generate` sees the
+     * schema and the database agree; the application layer never relies on
+     * it — session creation requires the field explicitly.
      */
-    deliveriesAllowed: integer('deliveries_allowed').notNull().default(1),
+    deliveryCapacity: integer('delivery_capacity').notNull().default(0),
     /** `YYYY-MM-DD`. */
     activeFrom: text('active_from').notNull(),
     /** `YYYY-MM-DD`, or null for open-ended. */
@@ -111,8 +114,8 @@ export const sessions = sqliteTable(
      */
     deliveryWindowStart: text('delivery_window_start'),
     deliveryWindowEnd: text('delivery_window_end'),
-    /** See the note on `recurringSessions.deliveriesAllowed` — no `CHECK`, deliberately. */
-    deliveriesAllowed: integer('deliveries_allowed').notNull().default(1),
+    /** See the note on `recurringSessions.deliveryCapacity` — no `CHECK`, deliberately. */
+    deliveryCapacity: integer('delivery_capacity').notNull().default(0),
     status: text('status').$type<SessionStatus>().notNull().default('planned'),
     cancelledReason: text('cancelled_reason'),
     /**

@@ -446,9 +446,10 @@ describe('absent from every list, export and print-oriented payload', () => {
   });
 
   it('is absent from GET /sessions/{id}/listener-sheet', async () => {
-    const { testApp, token, world: w } = await adminWorld();
+    const { testApp, token, world: w } = await pickingWorld();
     const { id } = await submitReferral(testApp, w, {}, { clientIp: nextClientIp() });
     await patchReferral(testApp, token, id, { adminInfo: NOTE });
+    await generatePickList(testApp, token, w.sessionId);
 
     const response = await testApp.request(`/api/v1/sessions/${w.sessionId}/listener-sheet`, {
       headers: authHeaders(token),
@@ -498,6 +499,7 @@ describe('absent from every list, export and print-oriented payload', () => {
         durationMinutes: 120,
         location: 'Church Hall',
         capacity: 25,
+        deliveryCapacity: 25,
       }),
     });
     const { id: sessionId }: { id: string } = await created.json();

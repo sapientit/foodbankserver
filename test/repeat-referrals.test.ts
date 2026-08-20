@@ -97,6 +97,7 @@ async function createSession(
       durationMinutes: 120,
       location: 'Church Hall',
       capacity,
+      deliveryCapacity: capacity,
     }),
   });
   const { id }: { id: string } = await response.json();
@@ -681,20 +682,28 @@ describe('repeat-referral detection at review', () => {
     it('includes a referral referred exactly at the cutoff and excludes one referred a minute earlier', async () => {
       const { testApp, token, world: w } = await referralWorld(NOW_STRADDLING_BST);
 
+      // `testApp`'s own clock is `NOW_STRADDLING_BST`, over a year after the
+      // session's 2026-08-11 date — the public submission cutoff would now
+      // refuse all three of these. Submitted instead through a second app
+      // instance clocked safely before the session, sharing the same
+      // database; `referredAt` is overwritten explicitly below anyway, and
+      // the twelve-month window itself is read out through `testApp`'s own
+      // clock via `getRepeatReferrals`.
+      const submittingApp = buildTestApp({ clock: fixedClock('2026-08-09T09:00:00.000Z') });
       const inside = await submitReferral(
-        testApp,
+        submittingApp,
         w,
         { refereePostcode: 'GU9 7ZZ' },
         { clientIp: nextClientIp() },
       );
       const outside = await submitReferral(
-        testApp,
+        submittingApp,
         w,
         { refereePostcode: 'GU9 7ZZ' },
         { clientIp: nextClientIp() },
       );
       const self = await submitReferral(
-        testApp,
+        submittingApp,
         w,
         { refereePostcode: 'GU9 7ZZ' },
         { clientIp: nextClientIp() },

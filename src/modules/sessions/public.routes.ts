@@ -22,13 +22,13 @@ export function publicSessionRoutes(): Hono<AppEnv> {
   routes.get('/sessions', rateLimit('PUBLIC_LIMITER'), async (c) => {
     const { fromUtc, toUtc } = publicSessionWindow(c.get('clock').nowIso());
 
-    const sessions = await createSessionsRepository(c.get('db')).listPubliclyAvailable(
+    const availableSessions = await createSessionsRepository(c.get('db')).listPubliclyAvailable(
       fromUtc,
       toUtc,
     );
 
     return c.json<{ sessions: PublicSessionResponse[] }>({
-      sessions: sessions.map(toPublicSessionResponse),
+      sessions: availableSessions.map(toPublicSessionResponse),
     });
   });
 

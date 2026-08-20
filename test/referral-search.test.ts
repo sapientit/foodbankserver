@@ -72,6 +72,7 @@ async function createSession(
       durationMinutes: 120,
       location: 'Church Hall',
       capacity,
+      deliveryCapacity: capacity,
     }),
   });
   const { id }: { id: string } = await response.json();

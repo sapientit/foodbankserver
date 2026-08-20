@@ -17,7 +17,7 @@ const tuesday: RecurrenceTemplate = {
   capacity: 25,
   deliveryWindowStart: null,
   deliveryWindowEnd: null,
-  deliveriesAllowed: true,
+  deliveryCapacity: 25,
   activeFrom: '2026-01-01',
   activeUntil: null,
 };
@@ -89,7 +89,7 @@ describe('occurrence planning', () => {
       id: 'tpl-delivery',
       deliveryWindowStart: '09:00',
       deliveryWindowEnd: '09:30',
-      deliveriesAllowed: false,
+      deliveryCapacity: 4,
     };
 
     const planned = planOccurrences([withDelivery], { from: '2026-07-27', horizonWeeks: 1 });
@@ -97,7 +97,7 @@ describe('occurrence planning', () => {
     expect(planned).toHaveLength(1);
     expect(planned[0]?.deliveryWindowStart).toBe('09:00');
     expect(planned[0]?.deliveryWindowEnd).toBe('09:30');
-    expect(planned[0]?.deliveriesAllowed).toBe(false);
+    expect(planned[0]?.deliveryCapacity).toBe(4);
   });
 
   it('produces occurrences with both window ends null from a template that sets no window — the stored pair, not the resolved fallback', () => {

@@ -33,6 +33,9 @@ async function createTuesdayTemplate(testApp: TestApp, token: string): Promise<s
       durationMinutes: 120,
       location: 'Church Hall',
       activeFrom: '2026-01-01',
+      // `deliveryCapacity` has no schema default (unlike `capacity`), so it
+      // must always be sent explicitly here.
+      deliveryCapacity: 25,
     }),
   });
   expect(response.status).toBe(201);
@@ -173,6 +176,7 @@ describe('session materialisation', () => {
         durationMinutes: 90,
         location: 'Community Centre',
         capacity: 10,
+        deliveryCapacity: 10,
       }),
     });
     expect(created.status).toBe(201);
@@ -319,12 +323,13 @@ describe('public session list', () => {
     const response = await testApp.request('/api/v1/public/sessions');
     const body: { sessions: Record<string, unknown>[] } = await response.json();
 
-    // No capacity, no remaining places, no status, no internal flags. The
-    // referral form needs `deliveriesAllowed` to know not to offer delivery,
-    // and the effective `deliveryWindowStart`/`deliveryWindowEnd` so it can
-    // ask the referrer to confirm the client will be at home for it.
+    // No capacity, no remaining places, no raw booked count, no internal
+    // flags. The referral form needs `deliveryAvailability` to know whether
+    // it can offer delivery at all, and the effective
+    // `deliveryWindowStart`/`deliveryWindowEnd` so it can ask the referrer to
+    // confirm the client will be at home for it.
     expect(Object.keys(body.sessions[0] ?? {}).sort()).toEqual([
-      'deliveriesAllowed',
+      'deliveryAvailability',
       'deliveryWindowEnd',
       'deliveryWindowStart',
       'durationMinutes',
@@ -454,6 +459,7 @@ describe('session occupancy', () => {
           startTime: '10:00',
           durationMinutes: 120,
           location: 'Church Hall',
+          deliveryCapacity: 25,
         }),
       });
     }
@@ -534,6 +540,7 @@ describe('staff session horizon', () => {
           startTime: '10:00',
           durationMinutes: 120,
           location: 'Church Hall',
+          deliveryCapacity: 25,
         }),
       });
       expect(created.status).toBe(201);
@@ -687,9 +694,11 @@ describe('staff session horizon', () => {
 });
 
 /**
- * The delivery window and the delivery flag: read-out fields with no
- * scheduling effect (see `INITIAL_SPEC1.txt`, "Session maintenance"). Nothing
- * here enforces the flag against a referral — that is a known, recorded gap.
+ * The delivery window and the delivery capacity: read-out fields with no
+ * scheduling effect on the session itself (see `INITIAL_SPEC1.txt`, "Session
+ * maintenance"). `deliveryCapacity` is enforced against a delivery referral
+ * at submission — see `referrals.service.ts#assertDeliveryCapacityAvailable`
+ * — but nothing here enforces the window itself.
  */
 describe('delivery fields', () => {
   beforeEach(async () => {
@@ -711,6 +720,7 @@ describe('delivery fields', () => {
         startTime: '18:00',
         durationMinutes: 90,
         location: 'Community Centre',
+        deliveryCapacity: 25,
         deliveryWindowStart: '17:00',
         deliveryWindowEnd: '17:30',
       }),
@@ -744,17 +754,16 @@ describe('delivery fields', () => {
         startTime: '18:00',
         durationMinutes: 90,
         location: 'Community Centre',
+        deliveryCapacity: 25,
       }),
     });
     expect(created.status).toBe(201);
     const body: {
       deliveryWindowStart: string | null;
       deliveryWindowEnd: string | null;
-      deliveriesAllowed: boolean;
     } = await created.json();
     expect(body.deliveryWindowStart).toBeNull();
     expect(body.deliveryWindowEnd).toBeNull();
-    expect(body.deliveriesAllowed).toBe(true); // default
   });
 
   it('patches a delivery window, and clears it back to null explicitly', async () => {
@@ -768,6 +777,7 @@ describe('delivery fields', () => {
         startTime: '18:00',
         durationMinutes: 90,
         location: 'Community Centre',
+        deliveryCapacity: 25,
       }),
     });
     const { id }: { id: string } = await created.json();
@@ -795,7 +805,7 @@ describe('delivery fields', () => {
     expect(clearedBody.deliveryWindowEnd).toBeNull();
   });
 
-  it('can set deliveriesAllowed false at creation and patch it back', async () => {
+  it('can set deliveryCapacity at creation and patch it to a different value', async () => {
     const { testApp, token } = await adminApp();
 
     const created = await testApp.request('/api/v1/sessions', {
@@ -806,22 +816,79 @@ describe('delivery fields', () => {
         startTime: '18:00',
         durationMinutes: 90,
         location: 'Community Centre',
-        deliveriesAllowed: false,
+        capacity: 25,
+        deliveryCapacity: 0,
       }),
     });
     expect(created.status).toBe(201);
-    const { id, deliveriesAllowed }: { id: string; deliveriesAllowed: boolean } =
-      await created.json();
-    expect(deliveriesAllowed).toBe(false);
+    const { id, deliveryCapacity }: { id: string; deliveryCapacity: number } = await created.json();
+    expect(deliveryCapacity).toBe(0);
 
     const patched = await testApp.request(`/api/v1/sessions/${id}`, {
       method: 'PATCH',
       headers: { ...authHeaders(token), 'content-type': 'application/json' },
-      body: JSON.stringify({ deliveriesAllowed: true }),
+      body: JSON.stringify({ deliveryCapacity: 8 }),
     });
     expect(patched.status).toBe(200);
-    const patchedBody: { deliveriesAllowed: boolean } = await patched.json();
-    expect(patchedBody.deliveriesAllowed).toBe(true);
+    const patchedBody: { deliveryCapacity: number } = await patched.json();
+    expect(patchedBody.deliveryCapacity).toBe(8);
+  });
+
+  it('refuses a create where deliveryCapacity exceeds capacity', async () => {
+    const { testApp, token } = await adminApp();
+
+    const response = await testApp.request('/api/v1/sessions', {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sessionDate: '2026-08-06',
+        startTime: '18:00',
+        durationMinutes: 90,
+        location: 'Community Centre',
+        capacity: 10,
+        deliveryCapacity: 11,
+      }),
+    });
+
+    // A Zod refinement on the create schema — `refineCreateDeliveryCapacity`
+    // in `sessions.schema.ts` — so a schema-validation 400, not the
+    // service-layer 422 a patch gets below.
+    expect(response.status).toBe(400);
+  });
+
+  it('refuses a patch that would leave deliveryCapacity exceeding capacity', async () => {
+    const { testApp, token } = await adminApp();
+
+    const created = await testApp.request('/api/v1/sessions', {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sessionDate: '2026-08-06',
+        startTime: '18:00',
+        durationMinutes: 90,
+        location: 'Community Centre',
+        capacity: 10,
+        deliveryCapacity: 5,
+      }),
+    });
+    const { id }: { id: string } = await created.json();
+
+    // Patch schemas validate `capacity` and `deliveryCapacity` in isolation —
+    // see the comment on `updateSession` in `sessions.service.ts` — so this
+    // is a service-layer check against the existing row, reported as 422.
+    const patched = await testApp.request(`/api/v1/sessions/${id}`, {
+      method: 'PATCH',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({ capacity: 4 }),
+    });
+    expect(patched.status).toBe(422);
+
+    const unchanged = await testApp.request(`/api/v1/sessions/${id}`, {
+      headers: authHeaders(token),
+    });
+    const unchangedBody: { capacity: number; deliveryCapacity: number } = await unchanged.json();
+    expect(unchangedBody.capacity).toBe(10);
+    expect(unchangedBody.deliveryCapacity).toBe(5);
   });
 
   it('carries both fields on a recurring template and can amend them', async () => {
@@ -839,7 +906,7 @@ describe('delivery fields', () => {
         activeFrom: '2026-01-01',
         deliveryWindowStart: '09:00',
         deliveryWindowEnd: '09:30',
-        deliveriesAllowed: false,
+        deliveryCapacity: 3,
       }),
     });
     expect(created.status).toBe(201);
@@ -847,11 +914,11 @@ describe('delivery fields', () => {
       id: string;
       deliveryWindowStart: string | null;
       deliveryWindowEnd: string | null;
-      deliveriesAllowed: boolean;
+      deliveryCapacity: number;
     } = await created.json();
     expect(template.deliveryWindowStart).toBe('09:00');
     expect(template.deliveryWindowEnd).toBe('09:30');
-    expect(template.deliveriesAllowed).toBe(false);
+    expect(template.deliveryCapacity).toBe(3);
 
     const patched = await testApp.request(`/api/v1/recurring-sessions/${template.id}`, {
       method: 'PATCH',
@@ -859,21 +926,21 @@ describe('delivery fields', () => {
       body: JSON.stringify({
         deliveryWindowStart: null,
         deliveryWindowEnd: null,
-        deliveriesAllowed: true,
+        deliveryCapacity: 9,
       }),
     });
     expect(patched.status).toBe(200);
     const patchedBody: {
       deliveryWindowStart: string | null;
       deliveryWindowEnd: string | null;
-      deliveriesAllowed: boolean;
+      deliveryCapacity: number;
     } = await patched.json();
     expect(patchedBody.deliveryWindowStart).toBeNull();
     expect(patchedBody.deliveryWindowEnd).toBeNull();
-    expect(patchedBody.deliveriesAllowed).toBe(true);
+    expect(patchedBody.deliveryCapacity).toBe(9);
   });
 
-  it('materialises an occurrence carrying the template’s delivery window', async () => {
+  it('materialises an occurrence carrying the template’s delivery window and capacity', async () => {
     const { testApp, token } = await adminApp();
 
     const created = await testApp.request('/api/v1/recurring-sessions', {
@@ -888,7 +955,7 @@ describe('delivery fields', () => {
         activeFrom: '2026-01-01',
         deliveryWindowStart: '09:00',
         deliveryWindowEnd: '09:30',
-        deliveriesAllowed: false,
+        deliveryCapacity: 6,
       }),
     });
     expect(created.status).toBe(201);
@@ -898,7 +965,7 @@ describe('delivery fields', () => {
     const [occurrence] = await db.select().from(sessions).orderBy(sessions.startsAtUtc);
     expect(occurrence?.deliveryWindowStart).toBe('09:00');
     expect(occurrence?.deliveryWindowEnd).toBe('09:30');
-    expect(occurrence?.deliveriesAllowed).toBe(0);
+    expect(occurrence?.deliveryCapacity).toBe(6);
   });
 
   it('reports the session’s own hours as the effective window on the public list when none is set', async () => {
@@ -910,7 +977,7 @@ describe('delivery fields', () => {
     const response = await testApp.request('/api/v1/public/sessions');
     const body: {
       sessions: {
-        deliveriesAllowed: boolean;
+        deliveryAvailability: 'not_offered' | 'full' | 'available';
         deliveryWindowStart: string | null;
         deliveryWindowEnd: string | null;
       }[];
@@ -918,7 +985,9 @@ describe('delivery fields', () => {
 
     const first = body.sessions[0];
     expect(first).toBeDefined();
-    expect(first?.deliveriesAllowed).toBe(true);
+    // `createTuesdayTemplate` sets `deliveryCapacity: 25` and nobody has
+    // booked a delivery yet.
+    expect(first?.deliveryAvailability).toBe('available');
     expect(first?.deliveryWindowStart).toBe('10:00');
     expect(first?.deliveryWindowEnd).toBe('12:00');
   });
@@ -938,6 +1007,7 @@ describe('delivery fields', () => {
         activeFrom: '2026-01-01',
         deliveryWindowStart: '13:00',
         deliveryWindowEnd: '15:00',
+        deliveryCapacity: 25,
       }),
     });
     expect(created.status).toBe(201);
@@ -977,6 +1047,9 @@ describe('delivery window validation', () => {
       startTime: '18:00',
       durationMinutes: 90,
       location: 'Community Centre',
+      // `deliveryCapacity` has no schema default (unlike `capacity`), so it
+      // must always be sent explicitly here.
+      deliveryCapacity: 25,
       ...overrides,
     });
   }
@@ -1341,6 +1414,7 @@ describe('session route authorisation', () => {
         durationMinutes: 120,
         location: 'Hall',
         activeFrom: 'not-a-date',
+        deliveryCapacity: 25,
       }),
     });
 

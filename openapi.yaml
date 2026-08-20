@@ -304,11 +304,14 @@ paths:
         end stays 14 days from today, so the list shortens over the afternoon
         rather than sliding forward.
 
-        **`POST /api/v1/public/referrals` does not enforce the cutoff.** It is
-        applied here and nowhere else, deliberately: a referrer who loaded the
-        form at 15:55 can still submit at 16:05, and the referral is taken.
-        Do not re-check the clock in the client and do not filter this list
-        further — submit whatever session the referrer chose.
+        **`POST /api/v1/public/referrals` enforces the same cutoff**, refusing
+        a session that has closed for booking with `409`. The clock is read at
+        the moment of submission, not when the form was loaded, so a session
+        still listed here when the referrer opened the form can still be
+        refused if they submit after 16:00 — the same gap that used to let a
+        late submission through now closes it instead. Do not re-check the
+        clock in the client and do not filter this list further — submit
+        whatever session the referrer chose and let the server decide.
 
         Deliberately narrow: no capacity, no remaining places, no status.
         Anything listed can be referred to.
@@ -429,10 +432,94 @@ paths:
               schema: { $ref: '#/components/schemas/ReferralReceipt' }
         '400':
           description: Validation failed, or the bot check was missing or stale
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              examples:
+                validationFailed:
+                  summary: A field failed validation
+                  value:
+                    error:
+                      code: BAD_REQUEST
+                      message: Request validation failed
+                      details:
+                        issues: [{ path: adults, message: Expected number, received string }]
+                      requestId: 8f14e45f-0c1e-4a3b-9f2a-2d6b7e1a9c3d
+                botCheckMissing:
+                  summary: No Turnstile token was sent
+                  value:
+                    error:
+                      code: BAD_REQUEST
+                      message: This form needs its bot check completed before it can be sent
+                      requestId: 8f14e45f-0c1e-4a3b-9f2a-2d6b7e1a9c3d
+                botCheckStale:
+                  summary: The Turnstile token had already been used or had expired
+                  value:
+                    error:
+                      code: BAD_REQUEST
+                      message: That bot check has expired. Please refresh the page and try again.
+                      requestId: 8f14e45f-0c1e-4a3b-9f2a-2d6b7e1a9c3d
         '409':
-          description: The session is full, cancelled, or already confirmed
+          description: >-
+            The session is full, cancelled, or already confirmed; the session
+            has closed for booking (16:00 `Europe/London` the day before); or
+            it is a delivery and the session's delivery places are full. Five
+            distinct causes share this status; read `error.message` (and
+            `error.details` where present) to tell them apart — do not match
+            on status code alone.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              examples:
+                sessionFull:
+                  summary: The session has reached its overall capacity
+                  value:
+                    error:
+                      code: CONFLICT
+                      message: That session is full
+                      details: { capacity: 25, booked: 25 }
+                      requestId: 8f14e45f-0c1e-4a3b-9f2a-2d6b7e1a9c3d
+                sessionCancelled:
+                  summary: The session has been cancelled
+                  value:
+                    error:
+                      code: CONFLICT
+                      message: That session has been cancelled
+                      requestId: 8f14e45f-0c1e-4a3b-9f2a-2d6b7e1a9c3d
+                sessionConfirmed:
+                  summary: The session has already been signed off
+                  value:
+                    error:
+                      code: CONFLICT
+                      message: That session has already been confirmed
+                      requestId: 8f14e45f-0c1e-4a3b-9f2a-2d6b7e1a9c3d
+                cutoffPassed:
+                  summary: Submitted after 16:00 the day before the session
+                  value:
+                    error:
+                      code: CONFLICT
+                      message: Referrals for that session have closed
+                      requestId: 8f14e45f-0c1e-4a3b-9f2a-2d6b7e1a9c3d
+                deliveryCapacityFull:
+                  summary: A delivery, and the session's delivery places are gone (this includes a session that takes no deliveries at all — deliveryCapacity 0)
+                  value:
+                    error:
+                      code: CONFLICT
+                      message: Delivery places for that session are full
+                      details: { deliveryCapacity: 8, booked: 8 }
+                      requestId: 8f14e45f-0c1e-4a3b-9f2a-2d6b7e1a9c3d
         '422':
           description: The chosen reason is no longer offered
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              examples:
+                reasonRetired:
+                  value:
+                    error:
+                      code: UNPROCESSABLE
+                      message: That reason for referral is no longer offered
+                      requestId: 8f14e45f-0c1e-4a3b-9f2a-2d6b7e1a9c3d
         '429': { $ref: '#/components/responses/RateLimited' }
 
   /api/v1/public/organisations:
@@ -527,7 +614,7 @@ paths:
           application/json:
             schema:
               type: object
-              required: [sessionDate, startTime, durationMinutes, location]
+              required: [sessionDate, startTime, durationMinutes, location, deliveryCapacity]
               properties:
                 sessionDate: { type: string, format: date }
                 startTime: { $ref: '#/components/schemas/LocalTime' }
@@ -547,14 +634,15 @@ paths:
                     neither is** — a half-set window is a `400`, and so is an
                     end at or before the start. Absent on both means the
                     session delivers across its own hours.
-                deliveriesAllowed:
-                  type: boolean
-                  default: true
+                deliveryCapacity:
+                  type: integer
+                  minimum: 0
+                  maximum: 1000
                   description: >-
-                    False means this session has nobody to drive. **Not
-                    enforced server-side** — a delivery referral to such a
-                    session is still accepted and an administrator sorts it out
-                    at review. See `Session.deliveriesAllowed`.
+                    How many of `capacity`'s places may be deliveries. Zero
+                    means this session takes no deliveries at all. Must not
+                    exceed `capacity` — a `400` otherwise. See
+                    `Session.deliveryCapacity`.
       responses:
         '201':
           description: Created
@@ -612,7 +700,14 @@ paths:
 
                     Explicit `null` on **both** clears the window, putting
                     deliveries back across the session's own hours.
-                deliveriesAllowed: { type: boolean }
+                deliveryCapacity:
+                  type: integer
+                  minimum: 0
+                  maximum: 1000
+                  description: >-
+                    Must not exceed the resulting `capacity` — a `422`
+                    otherwise, checked against whichever of the two this patch
+                    does not touch.
       responses:
         '200':
           description: Updated
@@ -717,7 +812,8 @@ paths:
           application/json:
             schema:
               type: object
-              required: [name, weekday, startTime, durationMinutes, location, activeFrom]
+              required:
+                [name, weekday, startTime, durationMinutes, location, activeFrom, deliveryCapacity]
               properties:
                 name: { type: string, maxLength: 120 }
                 weekday:
@@ -738,7 +834,14 @@ paths:
                     neither** — a half-set window is a `400`, and so is an end
                     at or before the start. Absent on both means every
                     occurrence delivers across its own hours.
-                deliveriesAllowed: { type: boolean, default: true }
+                deliveryCapacity:
+                  type: integer
+                  minimum: 0
+                  maximum: 1000
+                  description: >-
+                    Copied onto every occurrence. How many of `capacity`'s
+                    places may be deliveries; zero means no occurrence takes
+                    them. Must not exceed `capacity` — a `400` otherwise.
                 capacity: { type: integer, default: 25 }
                 activeFrom: { type: string, format: date }
                 activeUntil: { type: [string, 'null'], format: date }
@@ -790,7 +893,14 @@ paths:
                     `400`, as is an end at or before the start. Explicit `null`
                     on **both** puts deliveries back across the session's own
                     hours.
-                deliveriesAllowed: { type: boolean }
+                deliveryCapacity:
+                  type: integer
+                  minimum: 0
+                  maximum: 1000
+                  description: >-
+                    Must not exceed the resulting `capacity` — a `422`
+                    otherwise, checked against whichever of the two this patch
+                    does not touch.
                 capacity: { type: integer }
                 activeFrom: { type: string, format: date }
                 activeUntil: { type: [string, 'null'], format: date }
@@ -834,6 +944,15 @@ paths:
         because they are not coming, and **deliveries are left off** because
         nobody walks in for one, so a listener will never have that
         conversation.
+
+        **Every household on the sheet carries a `pickNumber`.** This used to
+        be available whether or not a pick list had been made — the listener
+        conversation was independent of picking — and that is no longer so:
+        the sheet and the picking sheets are carried round the same hall, and
+        a listener has to be able to match a household between the two. A
+        household referred since the pick list was made, or before one has
+        ever been generated, has no parcel and so no number, and the whole
+        sheet is refused rather than printed with gaps in it.
       responses:
         '200':
           description: The sheet
@@ -848,6 +967,28 @@ paths:
                     type: array
                     items: { $ref: '#/components/schemas/ListenerSheetHousehold' }
         '404': { description: No such session }
+        '409':
+          description: >-
+            `NEW_CLIENTS_ASSIGNED` — one or more households coming to the
+            session have not been picked for yet, so they have no pick number
+            to print. `details.missingParcels` names the referrals; generate
+            or reconcile the session's pick list first.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Error'
+                  - type: object
+                    properties:
+                      error:
+                        type: object
+                        properties:
+                          details:
+                            type: object
+                            properties:
+                              missingParcels:
+                                type: array
+                                items: { type: string, format: uuid }
 
   /api/v1/sessions/{sessionId}/referral-details:
     parameters: [{ $ref: '#/components/parameters/SessionId' }]
@@ -3135,6 +3276,7 @@ components:
                   NOT_FOUND,
                   CONFLICT,
                   UNPROCESSABLE,
+                  NEW_CLIENTS_ASSIGNED,
                   INTERNAL_ERROR,
                 ]
             message:
@@ -3210,7 +3352,7 @@ components:
           location,
           deliveryWindowStart,
           deliveryWindowEnd,
-          deliveriesAllowed,
+          deliveryAvailability,
         ]
       properties:
         id: { type: string, format: uuid }
@@ -3238,18 +3380,22 @@ components:
             A delivery window is a fact about a session, not about a
             household — it names nobody, and says no more than a leaflet
             saying when the van comes round.
-        deliveriesAllowed:
-          type: boolean
+        deliveryAvailability:
+          type: string
+          enum: [not_offered, full, available]
           description: >
-            False means this session takes no deliveries — nobody is driving.
+            Whether a delivery referral can still be made for this session.
+            `not_offered` means nobody is driving (`deliveryCapacity` is
+            zero); `full` means every delivery place is taken but collection
+            may still have room. Never the raw capacity or booked count,
+            which would leak operational detail.
 
-            **Neither the form nor the server refuses such a delivery.** The
-            form states that no deliveries are available for the session in
-            place of the window, still offers delivery and still accepts the
-            submission; an administrator sorts it out at review. Settled by
-            Pete on 2026-08-16 — a delivery option that silently disappears
-            tells the referrer nothing about why. Do not read this as a gap
-            the form is covering; it is not.
+            **`POST /public/referrals` refuses a delivery outright once this
+            reads anything other than `available`** — a `409`, the same hard
+            stop as a session at its overall capacity. A collection is never
+            affected, however full delivery is. Settled by Pete on
+            2026-08-19, reversing the earlier position that only an
+            administrator sorted this out at review.
 
     Session:
       type: object
@@ -3267,7 +3413,7 @@ components:
           location,
           deliveryWindowStart,
           deliveryWindowEnd,
-          deliveriesAllowed,
+          deliveryCapacity,
           capacity,
           booked,
           status,
@@ -3300,16 +3446,18 @@ components:
             window rather than the collection time — and that is all this is.
             **Nothing is scheduled or routed from it**, which is why there is
             no `deliversAtUtc` beside it. The SMS reminder is what reads it.
-        deliveriesAllowed:
-          type: boolean
+        deliveryCapacity:
+          type: integer
           description: >
-            False means this session takes no deliveries — nobody is driving.
+            How many of `capacity`'s places may be deliveries. Zero means
+            this session takes no deliveries at all — nobody is driving.
 
-            **The server does not enforce it, and nor does the referral form.**
-            A referral with `isDelivery: true` to such a session is still
-            accepted at both ends; an administrator sees it at review and sorts
-            it out. Settled by Pete on 2026-08-16; see `STATUS.md`. This is not
-            a gap the form is covering.
+            **`POST /public/referrals` refuses a delivery outright once this
+            is reached** — a `409`, the same hard stop as a session at its
+            overall capacity. A collection is never affected by this figure,
+            however full it is. This check applies to public submission
+            only; an admin move or copy is unaffected by delivery capacity,
+            same as before.
         capacity:
           type: integer
           description: >-
@@ -3346,7 +3494,7 @@ components:
           location,
           deliveryWindowStart,
           deliveryWindowEnd,
-          deliveriesAllowed,
+          deliveryCapacity,
           capacity,
           activeFrom,
           activeUntil,
@@ -3366,9 +3514,9 @@ components:
           description: >-
             Copied onto every occurrence, and overridable there. Both null
             means each occurrence delivers across its own hours.
-        deliveriesAllowed:
-          type: boolean
-          description: 'Copied onto every occurrence.'
+        deliveryCapacity:
+          type: integer
+          description: 'Copied onto every occurrence, and overridable there.'
         capacity: { type: integer }
         activeFrom: { type: string, format: date }
         activeUntil: { type: [string, 'null'], format: date }
@@ -4206,9 +4354,17 @@ components:
       description: >-
         One household on the listener sheet. The narrowest response in the API,
         and the only one carrying the reason for referral to a team leader.
-      required: [referralId, refereeFirstName, refereeSurname, reason, needsFuelHelp, answers]
+      required:
+        [referralId, pickNumber, refereeFirstName, refereeSurname, reason, needsFuelHelp, answers]
       properties:
         referralId: { type: string, format: uuid }
+        pickNumber:
+          type: integer
+          description: >-
+            So the sheet and the picking sheets carried round the same hall
+            can be matched against each other. Always present — a household
+            with no parcel yet is never on this list; see `409` on
+            `GET /sessions/{sessionId}/listener-sheet`.
         refereeFirstName: { type: [string, 'null'] }
         refereeSurname: { type: [string, 'null'] }
         reason:
@@ -4441,6 +4597,7 @@ components:
           refereeAddress,
           refereePostcode,
           refereePhone,
+          needsFuelHelp,
           answers,
         ]
       properties:
@@ -4476,6 +4633,14 @@ components:
             referrer typed it — it is **not** normalised on the way in, so
             format it for display rather than assuming a shape. Null when the
             referral gave no number.
+        needsFuelHelp:
+          type: boolean
+          description: >-
+            Always `true` on this list — the repository filters on it — but a
+            real column read off the referral rather than an implied constant,
+            because the client form shows this question as a fixed field
+            everywhere else it appears. Survives the PII purge, unlike the
+            other fields on this row.
         answers:
           type: object
           additionalProperties: true

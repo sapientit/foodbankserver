@@ -21,7 +21,7 @@ const db = createDatabase(env.DB);
 const NOW = '2026-08-04T09:00:00.000Z';
 
 async function world(
-  options: { capacity?: number; now?: string } = {},
+  options: { capacity?: number; deliveryCapacity?: number; now?: string } = {},
 ): Promise<{ testApp: TestApp; token: string; world: ReferralWorld }> {
   const testApp = buildTestApp({ clock: fixedClock(options.now ?? NOW) });
   const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
@@ -135,6 +135,34 @@ describe('public referral submission', () => {
     expect((await submitReferral(testApp, w)).status).toBe(201);
   });
 
+  it('refuses a delivery referral once a session’s delivery capacity is reached', async () => {
+    const { testApp, world: w } = await world({ deliveryCapacity: 1 });
+
+    expect((await submitReferral(testApp, w, { isDelivery: true })).status).toBe(201);
+
+    const second = await submitReferral(testApp, w, { isDelivery: true });
+    expect(second.status).toBe(409);
+    expect(second.body).toMatchObject({
+      error: { code: 'CONFLICT', details: { deliveryCapacity: 1, booked: 1 } },
+    });
+  });
+
+  it('refuses a delivery referral against a session with no delivery capacity', async () => {
+    const { testApp, world: w } = await world({ deliveryCapacity: 0 });
+
+    const response = await submitReferral(testApp, w, { isDelivery: true });
+    expect(response.status).toBe(409);
+    expect(response.body).toMatchObject({
+      error: { code: 'CONFLICT', details: { deliveryCapacity: 0, booked: 0 } },
+    });
+  });
+
+  it('still accepts a collection referral against a session whose delivery capacity is full or zero', async () => {
+    const { testApp, world: w } = await world({ deliveryCapacity: 0 });
+
+    expect((await submitReferral(testApp, w, { isDelivery: false })).status).toBe(201);
+  });
+
   it('rejects a referral to a cancelled session', async () => {
     const { testApp, token, world: w } = await world();
     await testApp.request(`/api/v1/sessions/${w.sessionId}/cancel`, {
@@ -145,7 +173,7 @@ describe('public referral submission', () => {
     expect((await submitReferral(testApp, w)).status).toBe(409);
   });
 
-  it('takes a referral for a session whose four o’clock cutoff has passed', async () => {
+  it('refuses a referral for a session whose four o’clock cutoff has passed', async () => {
     // 16:30 BST on 10 August, half an hour after the 11 August session closed
     // to new referrals. The referrer had it in front of them at five to four.
     const { testApp, world: w } = await world({ now: '2026-08-10T15:30:00.000Z' });
@@ -154,9 +182,8 @@ describe('public referral submission', () => {
     const body: { sessions: { id: string }[] } = await listed.json();
     expect(body.sessions.map((s) => s.id)).not.toContain(w.sessionId);
 
-    // The list stopped offering it; the submission is still accepted, and only
-    // the list applies the cutoff.
-    expect((await submitReferral(testApp, w)).status).toBe(201);
+    // The list stopped offering it, and submission now refuses it too.
+    expect((await submitReferral(testApp, w)).status).toBe(409);
   });
 
   it('refuses a retired reason for referral', async () => {
@@ -296,7 +323,7 @@ describe('public referral submission', () => {
   });
 
   it('does not persist a delivery address, because a delivery goes to the referee', async () => {
-    const { testApp, token, world: w } = await world();
+    const { testApp, token, world: w } = await world({ deliveryCapacity: 1 });
 
     // A client built against the old contract, or an attempt to have a parcel
     // delivered somewhere the charity never agreed to. Either way it is dropped.
@@ -941,6 +968,7 @@ describe('admin referral management', () => {
         durationMinutes: 120,
         location: 'Annexe',
         capacity: 0,
+        deliveryCapacity: 0,
       }),
     });
     const { id: fullSessionId }: { id: string } = await full.json();
@@ -1164,6 +1192,7 @@ describe('admin referral management', () => {
         startTime: '10:00',
         durationMinutes: 120,
         location: 'Annexe',
+        deliveryCapacity: 0,
       }),
     });
     const { id: otherSessionId }: { id: string } = await elsewhere.json();
@@ -1240,5 +1269,38 @@ describe('public session availability with referrals', () => {
     const after = await testApp.request('/api/v1/public/sessions');
     const body: { sessions: { id: string }[] } = await after.json();
     expect(body.sessions.map((s) => s.id)).toContain(w.sessionId);
+  });
+
+  it('reports deliveryAvailability as not_offered for a session with no delivery capacity', async () => {
+    const { testApp, world: w } = await world({ deliveryCapacity: 0 });
+
+    const response = await testApp.request('/api/v1/public/sessions');
+    const body: { sessions: { id: string; deliveryAvailability: string }[] } =
+      await response.json();
+    expect(body.sessions.find((s) => s.id === w.sessionId)?.deliveryAvailability).toBe(
+      'not_offered',
+    );
+  });
+
+  it('reports deliveryAvailability as available when delivery places remain', async () => {
+    const { testApp, world: w } = await world({ deliveryCapacity: 2 });
+
+    const response = await testApp.request('/api/v1/public/sessions');
+    const body: { sessions: { id: string; deliveryAvailability: string }[] } =
+      await response.json();
+    expect(body.sessions.find((s) => s.id === w.sessionId)?.deliveryAvailability).toBe('available');
+  });
+
+  it('reports deliveryAvailability as full once delivery capacity is reached, while the session stays listed for collection', async () => {
+    const { testApp, world: w } = await world({ capacity: 5, deliveryCapacity: 1 });
+
+    await submitReferral(testApp, w, { isDelivery: true });
+
+    const response = await testApp.request('/api/v1/public/sessions');
+    const body: { sessions: { id: string; deliveryAvailability: string }[] } =
+      await response.json();
+    const listed = body.sessions.find((s) => s.id === w.sessionId);
+    expect(listed).toBeDefined();
+    expect(listed?.deliveryAvailability).toBe('full');
   });
 });

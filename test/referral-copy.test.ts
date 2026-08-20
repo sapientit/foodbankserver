@@ -32,10 +32,12 @@ function json(token: string): Record<string, string> {
   return { ...authHeaders(token), 'content-type': 'application/json' };
 }
 
-async function world(): Promise<{ testApp: TestApp; token: string; world: PickingWorld }> {
+async function world(
+  options: { deliveryCapacity?: number } = {},
+): Promise<{ testApp: TestApp; token: string; world: PickingWorld }> {
   const testApp = buildTestApp({ clock: fixedClock(NOW) });
   const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
-  const built = await setUpPickingWorld(testApp, accessToken);
+  const built = await setUpPickingWorld(testApp, accessToken, options);
   return { testApp, token: accessToken, world: built };
 }
 
@@ -98,6 +100,7 @@ async function createSession(
       durationMinutes: 120,
       location: 'Annexe',
       capacity: 25,
+      deliveryCapacity: 25,
       ...overrides,
     }),
   });
@@ -291,7 +294,7 @@ describe('eligibility — offered only where the original can no longer come to 
 
 describe('what the copy carries', () => {
   it('carries the household, the referrer and the answers, but not the review comment', async () => {
-    const { testApp, token, world: w } = await world();
+    const { testApp, token, world: w } = await world({ deliveryCapacity: 5 });
     const comment = 'Not a referring organisation';
     const id = await rejectedOriginal(
       testApp,
@@ -490,7 +493,7 @@ describe('the target session — the same rules as a move', () => {
   it('refuses a full target session without acknowledgement, and accepts it with', async () => {
     const { testApp, token, world: w } = await world();
     const id = await rejectedOriginal(testApp, token, w);
-    const target = await createSession(testApp, token, { capacity: 0 });
+    const target = await createSession(testApp, token, { capacity: 0, deliveryCapacity: 0 });
 
     const refused = await copyReferral(testApp, token, id, { sessionId: target });
     expect(refused.status).toBe(409);

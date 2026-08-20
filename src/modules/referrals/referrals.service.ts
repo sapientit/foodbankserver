@@ -1,10 +1,15 @@
 import type { Actor } from '../../core/actor.ts';
 import type { Clock } from '../../core/clock.ts';
-import { ConflictError, NotFoundError, UnprocessableError } from '../../core/errors.ts';
+import {
+  ConflictError,
+  NewClientsAssignedError,
+  NotFoundError,
+  UnprocessableError,
+} from '../../core/errors.ts';
 import type { Logger } from '../../core/log.ts';
 import { normalisePhone } from '../../core/phone.ts';
 import { instantToLondonWallClock, londonWallClockToInstant } from '../../core/time/london.ts';
-import { addDays } from '../../core/time/plain-date.ts';
+import { addDays, comparePlainDates } from '../../core/time/plain-date.ts';
 import type { Patch } from '../../core/types.ts';
 import { REPEAT_REFERRAL_LOOKBACK_DAYS } from '../../config/constants.ts';
 import type { Database } from '../../db/client.ts';
@@ -19,6 +24,7 @@ import type { ReferrersRepository } from '../referrers/referrers.repository.ts';
 import type { ReferrersService } from '../referrers/referrers.service.ts';
 import type { PickListsRepository } from '../pick-lists/pick-lists.repository.ts';
 import type { SessionsRepository } from '../sessions/sessions.repository.ts';
+import { firstOfferableDate } from '../sessions/public-window.ts';
 import {
   hasAnythingToMatchOn,
   matchKinds,
@@ -49,7 +55,8 @@ export interface ReferralsServiceDeps {
    * Cancelling a referral has to reach the parcel already picked for it, and
    * has to do so in the *same* batch as the referral update — so this is the
    * repository rather than the pick-lists service, which cannot hand back an
-   * unexecuted statement. Nothing else here touches it.
+   * unexecuted statement. `listenerSheet` also reads it directly, for the
+   * pick number against each household.
    */
   readonly pickLists: PickListsRepository;
   readonly clock: Clock;
@@ -462,6 +469,15 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
    * sheet is for the conversation that happens when somebody walks in, and
    * nobody walks in for a delivery. Their name and their crisis on a sheet in
    * the hall would be somebody who was never going to be there.
+   *
+   * **Every household on the sheet needs a pick number**, so the sheet and
+   * the picking sheets carried round the same hall can be matched against
+   * each other. A household referred since the pick list was made — or
+   * before one has ever been generated — has no parcel and so no number, and
+   * this refuses the *whole* sheet with `NewClientsAssignedError` rather than
+   * print one with gaps in it or numbers that do not line up. This is new:
+   * the listener sheet used to be available whether or not pick lists had
+   * been made at all.
    */
   async function listenerSheet(sessionId: string): Promise<ListenerSheetHousehold[]> {
     const session = await sessions.findById(sessionId);
@@ -469,25 +485,54 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
       throw new NotFoundError('Session not found');
     }
 
-    const [households, reasons] = await Promise.all([
+    const [households, reasons, pickList] = await Promise.all([
       repository.list({ sessionId }),
       referrers.listReasons(false),
+      pickLists.findBySession(sessionId),
     ]);
 
     const labelById = new Map(reasons.map((reason) => [reason.id, reason.label]));
 
-    return households
-      .filter(
-        (referral) =>
-          REFERRAL_STATUSES_HOLDING_A_PLACE.some((status) => status === referral.status) &&
-          referral.isDelivery !== 1,
-      )
-      .sort(bySurnameThenFirstName)
-      .map((referral) => toListenerSheetHousehold(referral, labelById.get(referral.reasonId)));
+    const coming = households.filter(
+      (referral) =>
+        REFERRAL_STATUSES_HOLDING_A_PLACE.some((status) => status === referral.status) &&
+        referral.isDelivery !== 1,
+    );
+
+    const parcels = pickList === undefined ? [] : await pickLists.listParcels(pickList.id);
+    const pickNumberByReferral = new Map(
+      parcels.map((parcel) => [parcel.referralId, parcel.pickNumber]),
+    );
+
+    const picked: { referral: Referral; pickNumber: number }[] = [];
+    const notYetPicked: string[] = [];
+    for (const referral of coming) {
+      const pickNumber = pickNumberByReferral.get(referral.id);
+      if (pickNumber === undefined) {
+        notYetPicked.push(referral.id);
+      } else {
+        picked.push({ referral, pickNumber });
+      }
+    }
+
+    if (notYetPicked.length > 0) {
+      throw new NewClientsAssignedError(
+        'Households on this session have not been picked for yet, so the listener sheet cannot be produced',
+        { details: { missingParcels: notYetPicked } },
+      );
+    }
+
+    return picked
+      .sort((left, right) => bySurnameThenFirstName(left.referral, right.referral))
+      .map(({ referral, pickNumber }) =>
+        toListenerSheetHousehold(referral, labelById.get(referral.reasonId), pickNumber),
+      );
   }
 
   /**
-   * A session that can still take a referral.
+   * A session that can still take a referral. Returns the session it fetched,
+   * so a caller that needs it — `submit`, for the two gates below — is not
+   * made to fetch it a second time.
    *
    * `allowOverCapacity` exists because an admin may deliberately overfill a
    * session when moving someone — the spec's "even if that exceeds capacity,
@@ -503,7 +548,7 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
   async function assertSessionAccepts(
     sessionId: string,
     allowOverCapacity: boolean,
-  ): Promise<void> {
+  ): Promise<Session> {
     const session = await sessions.findById(sessionId);
     if (session === undefined) {
       throw new NotFoundError('Session not found');
@@ -514,13 +559,62 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     if (session.status === 'confirmed') {
       throw new ConflictError('That session has already been confirmed');
     }
-    if (allowOverCapacity) return;
+    if (allowOverCapacity) return session;
 
     const booked = await repository.countHoldingAPlace(sessionId);
     if (booked >= session.capacity) {
       throw new ConflictError('That session is full', {
         details: { capacity: session.capacity, booked },
       });
+    }
+
+    return session;
+  }
+
+  /**
+   * A delivery referral's own capacity gate. **`submit()` only** — `move` and
+   * `copy` are admin-initiated relocations of a referral that already holds a
+   * place, and neither changes whether it is a delivery, so neither is
+   * subject to this.
+   *
+   * A collection referral returns immediately: it is never affected by
+   * delivery capacity, however full deliveries are on that session.
+   *
+   * `deliveryCapacity: 0` is not a separate "not offered" branch — a session
+   * offering no delivery places is a session for which `booked` is always
+   * `>= 0`, so the same `>=` comparison already refuses it. See
+   * `deliveryAvailabilityFor` in `sessions.mapper.ts`, which the public
+   * session list uses for the same comparison in the other direction.
+   */
+  async function assertDeliveryCapacityAvailable(
+    session: Session,
+    isDelivery: boolean,
+  ): Promise<void> {
+    if (!isDelivery) return;
+
+    const booked = await repository.countDeliveriesHoldingAPlace(session.id);
+    if (booked >= session.deliveryCapacity) {
+      throw new ConflictError('Delivery places for that session are full', {
+        details: { deliveryCapacity: session.deliveryCapacity, booked },
+      });
+    }
+  }
+
+  /**
+   * The public booking cutoff. **`submit()` only** — `move` and `copy` are
+   * admin actions and have never been subject to it; only the unauthenticated
+   * flow closes at 16:00 the day before.
+   *
+   * Pure and synchronous: `firstOfferableDate` is the same rule
+   * `GET /public/sessions` already applies to decide what it lists, so a
+   * session whose date falls before the first date currently offered has
+   * closed for booking here too — closing the gap the public list's own
+   * description used to describe: the list stopped offering a session at
+   * 16:00, but submission itself still took it.
+   */
+  function assertBookingCutoffNotPassed(session: Session, nowIso: string): void {
+    if (comparePlainDates(session.sessionDate, firstOfferableDate(nowIso)) < 0) {
+      throw new ConflictError('Referrals for that session have closed');
     }
   }
 
@@ -534,18 +628,26 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
    * The charity would rather look at a referral it did not expect than turn
    * away a household that needs feeding.
    *
-   * Two gates remain, cheapest first: the session must be open and not full,
-   * and the reason must still be offered. Both apply to a pending referral too,
-   * because a pending referral holds its place on the session.
+   * Four gates remain, cheapest first: the session must be open and not full,
+   * the 16:00-the-day-before cutoff must not have passed, a delivery must
+   * still have a delivery place free, and the reason must still be offered.
+   * All apply to a pending referral too, because a pending referral holds its
+   * place on the session.
    *
-   * The dynamic answers are **not** a third gate. The referral form is client
+   * The cutoff and delivery-capacity checks are **`submit()` only** — see
+   * `assertBookingCutoffNotPassed` and `assertDeliveryCapacityAvailable`.
+   * `move` and `copy` share only `assertSessionAccepts` with this.
+   *
+   * The dynamic answers are **not** a fifth gate. The referral form is client
    * configuration, so the server holds no definition to check them against and
    * stores what it is given.
    */
   async function submit(input: ReferralSubmission): Promise<Referral> {
     const authorisation = await referrersService.checkAuthorisation(input.referrerEmail);
 
-    await assertSessionAccepts(input.sessionId, false);
+    const session = await assertSessionAccepts(input.sessionId, false);
+    assertBookingCutoffNotPassed(session, clock.nowIso());
+    await assertDeliveryCapacityAvailable(session, input.isDelivery);
 
     const reason = await referrers.findActiveReasonById(input.reasonId);
     if (reason === undefined) {

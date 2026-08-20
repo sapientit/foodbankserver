@@ -23,6 +23,12 @@ import type { Session } from '../../db/schema/sessions.ts';
  * row already holds enough to identify somebody; that was the rule and is not
  * any more.
  *
+ * `needsFuelHelp` **is** here too, and it is always `true` — every row on this
+ * list passed the repository's own filter on it. It is still a real column
+ * read off the referral rather than a literal, because the client form shows
+ * this question as a fixed field everywhere else it appears and this row
+ * should not be the one place that makes the reader infer it from context.
+ *
  * `answers` is handed over **whole**, exactly as the listener sheet does it.
  * The pre-payment-meter and permission-to-ring questions are ordinary
  * questions on a form the client owns, so which keys they are is the client's
@@ -45,6 +51,7 @@ export interface FuelHelpHousehold {
   readonly refereeAddress: string | null;
   readonly refereePostcode: string | null;
   readonly refereePhone: string | null;
+  readonly needsFuelHelp: boolean;
   readonly answers: Record<string, unknown>;
 }
 
@@ -58,6 +65,7 @@ export function toFuelHelpHousehold(referral: Referral, session: Session): FuelH
     refereeAddress: referral.refereeAddress,
     refereePostcode: referral.refereePostcode,
     refereePhone: referral.refereePhone,
+    needsFuelHelp: referral.needsFuelHelp === 1,
     answers: parseAnswers(referral.answersJson),
   };
 }

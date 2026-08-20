@@ -2,7 +2,7 @@ import { TEAM_LEAD_SESSION_HORIZON_DAYS } from '../../config/constants.ts';
 import { isAdmin, type Actor } from '../../core/actor.ts';
 import type { Clock } from '../../core/clock.ts';
 import type { Patch } from '../../core/types.ts';
-import { ConflictError, NotFoundError } from '../../core/errors.ts';
+import { ConflictError, NotFoundError, UnprocessableError } from '../../core/errors.ts';
 import { instantToLondonWallClock, londonWallClockToInstant } from '../../core/time/london.ts';
 import { addDays, comparePlainDates, type PlainDate } from '../../core/time/plain-date.ts';
 import type { RecurringSession, Session } from '../../db/schema/sessions.ts';
@@ -41,21 +41,36 @@ export function createSessionsService({ repository, clock }: SessionsServiceDeps
     const now = clock.nowIso();
     return repository.insertRecurring({
       ...input,
-      deliveriesAllowed: input.deliveriesAllowed ? 1 : 0,
       id: crypto.randomUUID(),
       createdAt: now,
       updatedAt: now,
     });
   }
 
+  /**
+   * Patch schemas validate `capacity` and `deliveryCapacity` in isolation, so
+   * a patch touching only one of them cannot check it against the other from
+   * Zod alone. The existing row is fetched first — impossible to avoid, since
+   * D1 has no interactive transactions to check-then-write atomically anyway
+   * — and the merged values are what gets compared.
+   */
   async function updateRecurring(
     id: string,
     patch: Patch<RecurringSessionInput>,
   ): Promise<RecurringSession> {
-    const { deliveriesAllowed, ...rest } = patch;
+    const existing = await repository.findRecurringById(id);
+    if (existing === undefined) {
+      throw new NotFoundError('Recurring session not found');
+    }
+
+    const deliveryCapacity = patch.deliveryCapacity ?? existing.deliveryCapacity;
+    const capacity = patch.capacity ?? existing.capacity;
+    if (deliveryCapacity > capacity) {
+      throw new UnprocessableError('deliveryCapacity must not exceed capacity');
+    }
+
     const updated = await repository.updateRecurring(id, {
-      ...rest,
-      ...(deliveriesAllowed === undefined ? {} : { deliveriesAllowed: deliveriesAllowed ? 1 : 0 }),
+      ...patch,
       updatedAt: clock.nowIso(),
     });
     if (updated === undefined) {
@@ -79,7 +94,7 @@ export function createSessionsService({ repository, clock }: SessionsServiceDeps
       capacity: input.capacity,
       deliveryWindowStart: input.deliveryWindowStart,
       deliveryWindowEnd: input.deliveryWindowEnd,
-      deliveriesAllowed: input.deliveriesAllowed ? 1 : 0,
+      deliveryCapacity: input.deliveryCapacity,
       status: 'planned',
       cancelledReason: null,
       isCustomised: 1,
@@ -106,15 +121,19 @@ export function createSessionsService({ repository, clock }: SessionsServiceDeps
 
     const sessionDate = patch.sessionDate ?? existing.sessionDate;
     const startTime = patch.startTime ?? existing.startTime;
-    const { deliveriesAllowed, ...rest } = patch;
+
+    const deliveryCapacity = patch.deliveryCapacity ?? existing.deliveryCapacity;
+    const capacity = patch.capacity ?? existing.capacity;
+    if (deliveryCapacity > capacity) {
+      throw new UnprocessableError('deliveryCapacity must not exceed capacity');
+    }
 
     const updated = await repository.updateSession(id, {
-      ...rest,
+      ...patch,
       sessionDate,
       startTime,
       // Always re-derive: changing either half changes the instant.
       startsAtUtc: londonWallClockToInstant(sessionDate, startTime),
-      ...(deliveriesAllowed === undefined ? {} : { deliveriesAllowed: deliveriesAllowed ? 1 : 0 }),
       isCustomised: 1,
       updatedAt: clock.nowIso(),
     });

@@ -70,6 +70,9 @@ export function referralRoutes(): Hono<AppEnv> {
    * leader, and **the only place a team leader is given the reason for
    * referral** — see `toListenerSheetHousehold` for what that costs and why it
    * is narrow.
+   *
+   * Refused with `409 NEW_CLIENTS_ASSIGNED` if any household coming to the
+   * session has not been picked for yet — see `listenerSheet` in the service.
    */
   routes.get('/sessions/:sessionId/listener-sheet', ...readers, async (c) => {
     const sessionId = c.req.param('sessionId');

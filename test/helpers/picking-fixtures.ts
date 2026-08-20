@@ -29,7 +29,7 @@ export interface PickingWorld extends ReferralWorld {
 export async function setUpPickingWorld(
   testApp: TestApp,
   token: string,
-  options: { capacity?: number } = {},
+  options: { capacity?: number; deliveryCapacity?: number } = {},
 ): Promise<PickingWorld> {
   const base = await setUpReferralWorld(testApp, token, options);
 

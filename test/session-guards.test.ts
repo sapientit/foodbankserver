@@ -53,6 +53,7 @@ async function anotherSession(testApp: TestApp, token: string): Promise<string> 
       durationMinutes: 120,
       location: 'Church Hall',
       capacity: 25,
+      deliveryCapacity: 25,
     }),
   });
   expect(response.status).toBe(201);

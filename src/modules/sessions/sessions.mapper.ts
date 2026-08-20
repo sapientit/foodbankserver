@@ -37,7 +37,7 @@ export interface SessionResponse {
    */
   readonly deliveryWindowStart: string | null;
   readonly deliveryWindowEnd: string | null;
-  readonly deliveriesAllowed: boolean;
+  readonly deliveryCapacity: number;
 }
 
 /**
@@ -62,8 +62,25 @@ export function toSessionResponse({ session, booked }: SessionWithBooked): Sessi
     occurrenceDate: session.occurrenceDate,
     deliveryWindowStart: session.deliveryWindowStart,
     deliveryWindowEnd: session.deliveryWindowEnd,
-    deliveriesAllowed: session.deliveriesAllowed === 1,
+    deliveryCapacity: session.deliveryCapacity,
   };
+}
+
+/**
+ * Whether a session is still taking deliveries.
+ *
+ * Exported and shared rather than inlined into the public mapper below:
+ * `referrals.service.ts` needs the exact same `>=` comparison to decide
+ * whether a delivery referral can still be accepted, and the two must not
+ * drift out of sync.
+ */
+export function deliveryAvailabilityFor(
+  deliveryCapacity: number,
+  deliveryBooked: number,
+): 'not_offered' | 'full' | 'available' {
+  if (deliveryCapacity === 0) return 'not_offered';
+  if (deliveryBooked >= deliveryCapacity) return 'full';
+  return 'available';
 }
 
 /**
@@ -80,7 +97,12 @@ export interface PublicSessionResponse {
   readonly startsAtUtc: string;
   readonly durationMinutes: number;
   readonly location: string;
-  readonly deliveriesAllowed: boolean;
+  /**
+   * Whether a delivery referral can still be made for this session — never
+   * the raw capacity or booked count, which would leak operational detail.
+   * See {@link deliveryAvailabilityFor}.
+   */
+  readonly deliveryAvailability: 'not_offered' | 'full' | 'available';
   /**
    * The **effective** window, never null — this deliberately widens the
    * narrowest response in the API, on purpose. The referral form now asks
@@ -97,7 +119,13 @@ export interface PublicSessionResponse {
   readonly deliveryWindowEnd: string;
 }
 
-export function toPublicSessionResponse(session: Session): PublicSessionResponse {
+export function toPublicSessionResponse({
+  session,
+  deliveryBooked,
+}: {
+  readonly session: Session;
+  readonly deliveryBooked: number;
+}): PublicSessionResponse {
   const window = effectiveDeliveryWindow(session);
   return {
     id: session.id,
@@ -106,7 +134,7 @@ export function toPublicSessionResponse(session: Session): PublicSessionResponse
     startsAtUtc: session.startsAtUtc,
     durationMinutes: session.durationMinutes,
     location: session.location,
-    deliveriesAllowed: session.deliveriesAllowed === 1,
+    deliveryAvailability: deliveryAvailabilityFor(session.deliveryCapacity, deliveryBooked),
     deliveryWindowStart: window.start,
     deliveryWindowEnd: window.end,
   };
@@ -125,7 +153,7 @@ export interface RecurringSessionResponse {
   /** `HH:MM` London wall clock, both or neither, exactly as stored. */
   readonly deliveryWindowStart: string | null;
   readonly deliveryWindowEnd: string | null;
-  readonly deliveriesAllowed: boolean;
+  readonly deliveryCapacity: number;
 }
 
 export function toRecurringSessionResponse(row: RecurringSession): RecurringSessionResponse {
@@ -141,6 +169,6 @@ export function toRecurringSessionResponse(row: RecurringSession): RecurringSess
     activeUntil: row.activeUntil,
     deliveryWindowStart: row.deliveryWindowStart,
     deliveryWindowEnd: row.deliveryWindowEnd,
-    deliveriesAllowed: row.deliveriesAllowed === 1,
+    deliveryCapacity: row.deliveryCapacity,
   };
 }

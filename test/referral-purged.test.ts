@@ -109,6 +109,7 @@ describe('a forgotten referral cannot be acted on', () => {
         startTime: '10:00',
         durationMinutes: 120,
         location: 'Annexe',
+        deliveryCapacity: 25,
       }),
     });
     const { id: otherSessionId }: { id: string } = await other.json();
@@ -189,6 +190,7 @@ describe('a forgotten referral cannot be acted on', () => {
         startTime: '10:00',
         durationMinutes: 120,
         location: 'Annexe',
+        deliveryCapacity: 25,
       }),
     });
     const { id: otherSessionId }: { id: string } = await other.json();

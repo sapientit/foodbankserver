@@ -124,6 +124,16 @@ only thing stopping them accumulating with no referral to count a period from.
 
 ## Rules the code must enforce, not merely document
 
+**A session's `deliveryCapacity` is a number within its overall `capacity`, not a boolean.** It
+replaced `deliveriesAllowed` outright (migration `0025`) — a session that takes no deliveries at all
+is simply one with `deliveryCapacity = 0`, there is no separate flag. `POST /public/referrals` refuses
+(`409`) a delivery referral once the session's delivery places are gone, including the zero case; a
+collection referral is never affected by delivery capacity, however full it is. This check and the
+cutoff check (above) are both scoped to public submission only — `move`/`copy`/admin amend keep
+exactly their existing capacity-only warn-and-`acknowledgeOverCapacity` pattern, unchanged. The public
+list represents delivery state as words (`deliveryAvailability: not_offered | full | available`), not
+numbers, matching the list's existing refusal to leak raw capacity/booked counts.
+
 **Stock moves on attendance, and only on attendance.** Generating or confirming a pick list does
 **not** touch stock. Attended → stock decrements. **No-show → the parcel's movements are deleted**,
 so a household that never came has taken nothing off the shelf, whether or not they were marked
@@ -286,9 +296,11 @@ The public list is the one with a **near** end as well as a far one: referrals f
 at 16:00 `Europe/London` the day before it runs, so the soonest session offered is tomorrow's up to
 and including 16:00 today and the day after tomorrow's from 16:01 — 16:00 itself still makes the
 deadline. The far end stays 14 days from today, so the
-list shortens over the afternoon rather than sliding forward. **Only the list applies the cutoff** —
-`POST /public/referrals` accepts a referral for a session that has closed, so a referrer who is
-still typing at five past four does not lose the form.
+list shortens over the afternoon rather than sliding forward. **The cutoff now applies to submission
+as well as to the list**, as of 2026-08-19 — `POST /public/referrals` refuses (`409`) a referral
+against a session whose cutoff has passed, reversing the earlier settled position that a referrer
+still typing at five past four should not lose the form. `firstOfferableDate` in
+`sessions/public-window.ts` is the one predicate both the list and submission now share.
 
 The horizon is applied from the `Actor`, never from the request — a `to` beyond it is **clamped**,
 so no query parameter widens it. It caps looking forward only; past sessions are untouched. It
