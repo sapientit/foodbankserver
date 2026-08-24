@@ -5,7 +5,7 @@ import { sessions } from './sessions.ts';
 import { stockItems } from './stock.ts';
 import { users } from './users.ts';
 
-export const PICK_LIST_STATUSES = ['draft', 'printed', 'confirmed'] as const;
+export const PICK_LIST_STATUSES = ['draft', 'printed'] as const;
 export type PickListStatus = (typeof PICK_LIST_STATUSES)[number];
 
 export const ATTENDANCE_STATUSES = ['pending', 'attended', 'no_show', 'cancelled'] as const;
@@ -23,8 +23,8 @@ export const NEEDS_ATTENTION_QUANTITY = -1;
 /**
  * One pick list per session, generated on first view.
  *
- * `confirmed` means **picking is finished and the list is locked** — it does
- * *not* move stock. Stock moves on attendance, which is a separate step.
+ * Editing is locked by the **session's** own confirmation, not by anything on
+ * the pick list itself — see `requireEditable` in `pick-lists.service.ts`.
  *
  * The contents are **copied** from the model parcels at generation, not looked
  * up at print time. That copy is what makes a pick list immutable in practice:
@@ -44,14 +44,10 @@ export const pickLists = sqliteTable(
     generatedAt: text('generated_at').notNull(),
     generatedByUserId: text('generated_by_user_id').references(() => users.id),
     firstPrintedAt: text('first_printed_at'),
-    confirmedAt: text('confirmed_at'),
-    confirmedByUserId: text('confirmed_by_user_id').references(() => users.id),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
   },
-  (table) => [
-    check('pick_lists_status_valid', sql`${table.status} IN ('draft', 'printed', 'confirmed')`),
-  ],
+  (table) => [check('pick_lists_status_valid', sql`${table.status} IN ('draft', 'printed')`)],
 );
 
 /**

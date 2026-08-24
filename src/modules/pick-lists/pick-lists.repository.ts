@@ -274,9 +274,8 @@ export function createPickListsRepository(db: Database) {
         .prepare(
           `INSERT INTO pick_lists
              (id, session_id, status, generated_at, generated_by_user_id,
-              first_printed_at, confirmed_at, confirmed_by_user_id,
-              created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              first_printed_at, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .bind(
           value.id,
@@ -285,8 +284,6 @@ export function createPickListsRepository(db: Database) {
           value.generatedAt,
           value.generatedByUserId ?? null,
           value.firstPrintedAt ?? null,
-          value.confirmedAt ?? null,
-          value.confirmedByUserId ?? null,
           value.createdAt,
           value.updatedAt,
         );

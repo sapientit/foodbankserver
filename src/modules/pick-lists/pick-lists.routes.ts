@@ -40,9 +40,9 @@ const attendanceSchema = z.object({
 });
 
 /**
- * Team leads run sessions, so they generate, edit, print and confirm pick
- * lists. Nothing here is admin-only — an admin is not going to be in the hall
- * on a Tuesday morning.
+ * Team leads run sessions, so they generate, edit and print pick lists, and
+ * confirm the session itself once it is done. Nothing here is admin-only — an
+ * admin is not going to be in the hall on a Tuesday morning.
  */
 export function pickListRoutes(): Hono<AppEnv> {
   const routes = new Hono<AppEnv>();
@@ -214,12 +214,6 @@ export function pickListRoutes(): Hono<AppEnv> {
       status: session.status,
       confirmedAt: session.confirmedAt,
     });
-  });
-
-  /** Locks the list. Deliberately does **not** move stock — that is attendance. */
-  routes.post('/pick-lists/:id/confirm', ...staff, async (c) => {
-    const updated = await serviceFor(c).confirm(c.req.param('id'), actorOf(c));
-    return c.json(toPickListResponse(updated));
   });
 
   return routes;

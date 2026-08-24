@@ -52,7 +52,7 @@ export interface PickListDivergence {
 const UNREVIEWED_PARCEL = 'Review every parcel on this pick list before printing it';
 
 export function createPickListsService(deps: PickListsServiceDeps) {
-  const { repository, referrals, sessions, stock, clock, logger } = deps;
+  const { repository, referrals, sessions, stock, clock } = deps;
 
   async function getPickList(id: string): Promise<PickList> {
     const pickList = await repository.findById(id);
@@ -72,7 +72,7 @@ export function createPickListsService(deps: PickListsServiceDeps) {
 
   /**
    * The pick list for a session, generating it on first view and reconciling
-   * any active referral that arrived before the list is confirmed.
+   * any active referral that arrived since.
    */
   async function getOrGenerate(
     sessionId: string,
@@ -85,16 +85,6 @@ export function createPickListsService(deps: PickListsServiceDeps) {
     const { preferenceLines, pickListInformation } = input;
     const existing = await repository.findBySession(sessionId);
     if (existing !== undefined) {
-      if (existing.status === 'confirmed') {
-        return {
-          pickList: existing,
-          parcelsCreated: 0,
-          linesCreated: 0,
-          preferenceLinesApplied: 0,
-          preferenceLinesDropped: 0,
-          preferenceReferralsIgnored: preferenceLines.length,
-        };
-      }
       return generatePickList(deps, sessionId, actor, {
         preferenceLines,
         pickListInformation,
@@ -104,12 +94,9 @@ export function createPickListsService(deps: PickListsServiceDeps) {
     return generatePickList(deps, sessionId, actor, { preferenceLines, pickListInformation });
   }
 
-  /** Editing is allowed while draft and after printing — but never once confirmed. */
+  /** Editing is allowed while draft and after printing — locked once the session is confirmed. */
   async function requireEditable(pickListId: string): Promise<PickList> {
     const pickList = await getPickList(pickListId);
-    if (pickList.status === 'confirmed') {
-      throw new ConflictError('This pick list has been confirmed and can no longer be changed');
-    }
     const session = await sessions.findById(pickList.sessionId);
     if (session === undefined) {
       throw new NotFoundError('Session not found');
@@ -266,31 +253,6 @@ export function createPickListsService(deps: PickListsServiceDeps) {
   }
 
   /**
-   * Confirms picking is finished and locks the list.
-   *
-   * **This does not move stock.** Stock moves when attendance is recorded,
-   * because until someone turns up nothing has been given away.
-   */
-  async function confirm(pickListId: string, actor: Actor): Promise<PickList> {
-    const pickList = await getPickList(pickListId);
-    if (pickList.status === 'confirmed') return pickList; // Idempotent.
-
-    const now = clock.nowIso();
-    const updated = await repository.updatePickList(pickListId, {
-      status: 'confirmed',
-      confirmedAt: now,
-      confirmedByUserId: actor.userId,
-      updatedAt: now,
-    });
-    if (updated === undefined) {
-      throw new NotFoundError('Pick list not found');
-    }
-
-    logger.info('confirmed pick list', { pickListId, userId: actor.userId });
-    return updated;
-  }
-
-  /**
    * What the session will take off the shelves, item by item, against what is
    * on them.
    *
@@ -298,25 +260,44 @@ export function createPickListsService(deps: PickListsServiceDeps) {
    * catalogue with a hundred blank lines in it is the stock-take screen, not
    * this one.
    *
-   * **Every parcel must have been reviewed**, and the list need not be
-   * confirmed — the same point printing waits for, and for the same reason. A
-   * reviewed parcel is one a team leader has settled, so the quantities on it
-   * are decided; an unreviewed one may still be carrying a line saying
-   * somebody has to choose, and there is no honest total to add that up into.
-   * Waiting for confirmation instead would put the answer *after* the work it
-   * is meant to inform.
+   * **Every parcel must have been reviewed** — the same point printing waits
+   * for, and for the same reason. A reviewed parcel is one a team leader has
+   * settled, so the quantities on it are decided; an unreviewed one may still
+   * be carrying a line saying somebody has to choose, and there is no honest
+   * total to add that up into.
    *
    * `quantityOnHand` is the level *now*, so a parcel already marked attended
    * has come off it while still counting towards the requirement — the figure
    * is what the session as a whole asks for, not what is left to pick.
    *
-   * Four queries: the pick list, its parcels, the totals, and the catalogue.
+   * **Refused once the session itself is confirmed.** Confirming records every
+   * attended household's parcel against `quantityOnHand`, so by the time a
+   * session is confirmed that stock has already left the shelf while the
+   * parcel still counts towards this figure — the comparison would be a
+   * finished session measured against a shelf nobody can still act on. Checked
+   * first, ahead of the review and needs-attention gates below: a confirmed
+   * session cannot have an unreviewed or unsettled parcel on it either (both
+   * are required before attendance can be recorded), so this can never mask
+   * either of those — it is simply the cheaper, more final reason to refuse.
+   *
+   * Five queries: the session, the pick list, its parcels, the totals, and the
+   * catalogue.
    */
   async function stockRequirement(
     sessionId: string,
     order: StockOrder,
   ): Promise<{ pickList: PickList; lines: StockRequirementLine[] }> {
     const pickList = await getPickListForSession(sessionId);
+
+    const session = await sessions.findById(pickList.sessionId);
+    if (session === undefined) {
+      throw new NotFoundError('Session not found');
+    }
+    if (session.status === 'confirmed') {
+      throw new ConflictError(
+        'This session has been confirmed, so it can no longer be compared against stock',
+      );
+    }
 
     // Cancelled parcels are neither reviewed nor counted — the household is
     // not coming, so waiting on a review for one would hold the whole session's
@@ -407,7 +388,6 @@ export function createPickListsService(deps: PickListsServiceDeps) {
     setParcelNotes,
     markParcelReviewed,
     markPrinted,
-    confirm,
     stockRequirement,
     divergence,
     requireEditable,

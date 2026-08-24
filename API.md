@@ -788,9 +788,11 @@ typed over. Confirm corrections that look destructive.
 `422`. A referral already citing a retired reason keeps it.
 
 **Which key is "other information" is still yours.** The server holds no form
-definition and does not police which answers moved. Corrections are still worth
-putting there as well as in the field: a corrected address reaches the driver, a
-note saying why reaches the person handing the bag over — the answers surface
+definition and does not police which answers moved. That answer is a free note to
+whoever runs the session, not a substitute for correcting a field — almost every
+fact here has its own field and is corrected outright, above. It earns its place
+for what a field can't say: a corrected address reaches the driver, a note
+explaining why reaches the person handing the bag over — the answers surface
 beside the parcel on the picking screen and on the listener sheet.
 
 ### A referral now says what became of the household
@@ -880,12 +882,12 @@ opened again.
 
 No Turnstile token — this is authenticated, unlike `POST /public/referrals`.
 
-**Guard the button against a double press.** Copying is not idempotent and the
-server does not stop a second copy: two presses make two referrals on the same
-session, two places held and two parcels picked. That is currently a guess
-(`OPEN-QUESTIONS.md` Q36, and `x-assumed` on the operation), so disable the
-button while the request is in flight rather than relying on the server to
-refuse.
+**Guard the button against a double press if that matters to you.** Copying is
+not idempotent and the server does not stop a second copy: two presses make two
+referrals on the same session, two places held and two parcels picked. This is
+deliberate rather than a gap — the charity does not want it guarded, the same
+trade a public referral submission already carries — so the server will not
+refuse a second copy for you.
 
 ### A forgotten referral can no longer be acted on
 
@@ -907,8 +909,6 @@ POST /api/v1/parcels/{id}/review                per household, BEFORE printing
 GET  /api/v1/pick-lists/{id}/print              one sheet per parcel
 POST /api/v1/pick-lists/{id}/print              mark printed
      …pick, adjusting lines as stock runs out…
-POST /api/v1/pick-lists/{id}/confirm            lock the list
-     …the session happens…
 POST /api/v1/parcels/{id}/attendance            per household
 POST /api/v1/sessions/{sessionId}/confirm       close the session
 ```
@@ -917,7 +917,8 @@ The review step is not optional, and it now comes before printing rather than be
 pick list is not printable until every one of its parcels has been reviewed, because printing an
 unfinished parcel turns an unresolved decision into a bag on a table. Attendance on an unreviewed
 parcel is still a `409` too. Reviewing does not freeze anything — lines stay editable afterwards,
-right up to confirm.
+right up to the point the session itself is confirmed. **There is no separate pick-list-level lock**
+— editing a pick list is refused only once its session is confirmed.
 
 ### Generating
 
@@ -925,7 +926,7 @@ Generated on first view. `POST` is idempotent — calling it again reconciles an
 household holding a place (`pending_review`, `active` or `reviewed`) which does
 not yet have a parcel, and reports how many it added in `parcelsCreated`. It
 never alters an existing parcel, so
-your line changes and the household snapshot stay intact. Once the list is
+your line changes and the household snapshot stay intact. Once the session is
 confirmed it creates nothing. Just call it when the picking screen opens and
 tell staff when `parcelsCreated` is non-zero: a previously printed list now
 needs printing again to include those households.
@@ -949,8 +950,8 @@ either, both or neither.
 ### Editing
 
 Lines can be changed while `draft` **and after `printed`**. The list locks only
-on `confirm`. This matters: pickers discover shortages at the shelf, after the
-sheet is printed.
+once the session is confirmed. This matters: pickers discover shortages at the
+shelf, after the sheet is printed.
 
 `PUT /parcels/{id}/lines` with `quantity: 0` **removes** the line — that is how
 "we had none" is recorded.
@@ -1029,8 +1030,8 @@ operator might have meant instead:
 
 `GET /pick-lists/{id}/divergence` reports households whose size changed and
 referrals since cancelled. While a list is editable, opening it reconciles
-newly booked households automatically; a confirmed list still reports them as
-missing because it is locked.
+newly booked households automatically; once the session is confirmed the list
+still reports them as missing because it is locked.
 
 No existing parcel is ever changed automatically. Show household-size changes
 and cancelled referrals as warnings and let a human decide what to do.
@@ -1135,10 +1136,12 @@ absent, not a nought — the list is as long as the work is, and no longer.
 `GET /pick-lists/{id}/print`, and a cancelled parcel is not waited for. An
 unreviewed parcel may still carry a line saying an item needs attention
 (`quantity: -1`, see **5g**), which is not a quantity and cannot be added up.
-**The list does not need to be confirmed.** Confirmation comes after picking; if
-you waited for it, the answer would arrive after the work it is meant to inform.
-A second `409` guards the `-1` itself, which reviewing already rules out. `404`
-if the session has no pick list at all.
+A second `409` guards the `-1` itself, which reviewing already rules out.
+**A third `409` once the session itself has been confirmed** — confirming
+records every attended household's parcel against stock, so by then that
+stock has already left the shelf while the parcel still counts towards this
+figure, and the comparison would be a finished session measured against a
+shelf nobody can still act on. `404` if the session has no pick list at all.
 
 **Cancelled parcels are excluded; every other parcel counts.** A household that
 is not coming is not picked for, the same rule that keeps them off the printed
@@ -1579,9 +1582,7 @@ a bug to work around: **display what the server returns**, never what was typed,
 or the screen will disagree with the grouping.
 
 An item **cannot exist without a category** and cannot be amended to have none —
-it is what two screens are ordered by. The existing items were given
-`Uncategorised` on take-on, so expect a group of that name until an admin has
-worked through them.
+it is what two screens are ordered by.
 
 ### `description`
 
@@ -1769,8 +1770,7 @@ the limit, which is now 1,200 to match generation — so a note created at
 generation can always be edited and put straight back. `null` clears it.
 
 Editable while the pick list is `draft` **and after `printed`**, on the same
-terms as the parcel's lines; `409` once the pick list or the session is
-confirmed.
+terms as the parcel's lines; `409` once the session is confirmed.
 
 The printed sheet carries `PrintParcel.notes` **as saved**, not the answers as
 they read today. Render the parcel's note; do not recompose it from
@@ -1810,8 +1810,8 @@ is also in the `x-request-id` header; quote it when reporting a problem.
 | `500`  | A bug                       | Generic apology plus the `requestId`    |
 
 `409` and `422` are the two worth reading carefully. They are not failures to
-retry — they mean _the session is full_, _this list is confirmed_, _that reason
-is no longer offered_. Their messages are written to be shown.
+retry — they mean _the session is full_, _this session is confirmed_, _that
+reason is no longer offered_. Their messages are written to be shown.
 
 Validation errors name the field and the rule but **never echo the value**, so
 you cannot render "you entered X" from the response. Keep your own copy of what

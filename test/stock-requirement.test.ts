@@ -92,14 +92,6 @@ async function createItem(
   return id;
 }
 
-async function confirmPickList(testApp: TestApp, token: string, pickListId: string): Promise<void> {
-  const response = await testApp.request(`/api/v1/pick-lists/${pickListId}/confirm`, {
-    method: 'POST',
-    headers: authHeaders(token),
-  });
-  expect(response.status).toBe(200);
-}
-
 async function reviewParcel(testApp: TestApp, token: string, parcelId: string): Promise<void> {
   const response = await testApp.request(`/api/v1/parcels/${parcelId}/review`, {
     method: 'POST',
@@ -285,19 +277,7 @@ describe('the review gate', () => {
     expect(response.status).toBe(409);
   });
 
-  it('refuses an unreviewed parcel even once the list has been confirmed', async () => {
-    // Proves confirmation is not a substitute for review under the new gate —
-    // it used to be the whole gate, and the precondition changed under it.
-    const { testApp, token, world: w } = await world();
-    await submitReferral(testApp, w, { adults: 1, children: 0 });
-    const { id } = await generatePickList(testApp, token, w.sessionId);
-    await confirmPickList(testApp, token, id);
-
-    const response = await stockRequirementResponse(testApp, token, w.sessionId);
-    expect(response.status).toBe(409);
-  });
-
-  it('allows a draft list once every parcel has been reviewed — confirmation is not required', async () => {
+  it('allows a draft list once every parcel has been reviewed', async () => {
     const { testApp, token, world: w } = await world();
     await submitReferral(testApp, w, { adults: 1, children: 0 });
     const { id } = await generatePickList(testApp, token, w.sessionId);
@@ -306,7 +286,7 @@ describe('the review gate', () => {
     const response = await stockRequirementResponse(testApp, token, w.sessionId);
     expect(response.status).toBe(200);
 
-    // The point Pete cares about: the list genuinely never got confirmed.
+    // The point Pete cares about: reviewing every parcel is enough on its own.
     const [row] = await db.select().from(pickLists).where(eq(pickLists.id, id));
     expect(row?.status).toBe('draft');
   });
@@ -349,6 +329,38 @@ describe('the review gate', () => {
 
     const response = await stockRequirementResponse(testApp, token, w.sessionId);
     expect(response.status).toBe(404);
+  });
+});
+
+describe('the confirmed-session gate', () => {
+  it('refuses once the session itself is confirmed, even though every parcel is reviewed and nothing needs attention', async () => {
+    const { testApp, token, world: w } = await world();
+    await submitReferral(testApp, w, { adults: 1, children: 0 });
+    const { id } = await generatePickList(testApp, token, w.sessionId);
+    const { parcels: rows } = await readPickList(testApp, token, id);
+    const parcelId = rows[0]?.id ?? '';
+
+    await reviewParcel(testApp, token, parcelId);
+    const attended = await testApp.request(`/api/v1/parcels/${parcelId}/attendance`, {
+      method: 'POST',
+      headers: json(token),
+      body: JSON.stringify({ attendance: 'attended' }),
+    });
+    expect(attended.status).toBe(200);
+
+    // Every parcel has an outcome, so confirming succeeds.
+    const confirmed = await testApp.request(`/api/v1/sessions/${w.sessionId}/confirm`, {
+      method: 'POST',
+      headers: authHeaders(token),
+    });
+    expect(confirmed.status).toBe(200);
+
+    const response = await stockRequirementResponse(testApp, token, w.sessionId);
+    expect(response.status).toBe(409);
+    const body: { error: { message: string } } = await response.json();
+    expect(body.error.message).toBe(
+      'This session has been confirmed, so it can no longer be compared against stock',
+    );
   });
 });
 

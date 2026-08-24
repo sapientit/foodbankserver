@@ -53,6 +53,16 @@ allowlist, so a column added to `referrals` cannot widen what an administrator i
 
 ## The purge
 
+**This describes what `purgeReferralPii` does today, not what the spec now asks for.** Pete settled
+on 2026-08-21 (closing Q12 and Q27) that a forgotten referral is **deleted outright**, not
+anonymised, and on 2026-08-23 (closing Q32 and Q43) that its parcel — pick-list information included
+— is deleted with it — `INITIAL_SPEC1.txt`, `#Forgetting a referral`. The code below hasn't been
+rewritten to match; that's tracked in `STATUS.md` under "Agreed but not yet built". Two FKs will need
+handling when it is: `parcels.referral_id` (`NOT NULL`, no `ON DELETE`) and `sms_messages.referral_id`
+(nullable, also no `ON DELETE` — in practice always empty by twelve months, since SMS rows live
+thirty days, but the purge can't assume that). Not urgent while the system isn't live. Don't restore
+the anonymising design once this is rebuilt.
+
 `purgeReferralPii` nulls the identifying columns, drops the dynamic answers **whole**, and nulls
 `adminInfo` — the administrators' own note about the household. That last one is written by an
 administrator and goes anyway, while `reviewComment`, also written by an administrator, stays: the

@@ -3,9 +3,7 @@ import { z } from 'zod';
 /**
  * The roles an admin may hand out.
  *
- * All three, since 0018 removed the speculative `volunteer` and the database
- * now enumerates exactly the roles that have routes. So this list and
- * `USER_ROLES` currently say the same thing.
+ * All three: this list and `USER_ROLES` currently say the same thing.
  *
  * **They stay two constants all the same.** "What the database will store" and
  * "what an administrator may pick from a dropdown" are different questions,

@@ -348,8 +348,6 @@ export async function generatePickList(
             generatedAt: now,
             generatedByUserId: actor.userId,
             firstPrintedAt: null,
-            confirmedAt: null,
-            confirmedByUserId: null,
             createdAt: now,
             updatedAt: now,
           }),
@@ -389,7 +387,7 @@ export async function generatePickList(
         isUniqueViolation(error, 'parcels.pick_list_id', 'parcels.pick_number'))
     ) {
       const current = await repository.findBySession(sessionId);
-      if (current !== undefined && current.status !== 'confirmed') {
+      if (current !== undefined) {
         return generatePickList(deps, sessionId, actor, {
           preferenceLines,
           pickListInformation,

@@ -13,7 +13,6 @@ export interface PickListResponse {
   readonly status: string;
   readonly generatedAt: string;
   readonly firstPrintedAt: string | null;
-  readonly confirmedAt: string | null;
 }
 
 export function toPickListResponse(pickList: PickList): PickListResponse {
@@ -23,7 +22,6 @@ export function toPickListResponse(pickList: PickList): PickListResponse {
     status: pickList.status,
     generatedAt: pickList.generatedAt,
     firstPrintedAt: pickList.firstPrintedAt,
-    confirmedAt: pickList.confirmedAt,
   };
 }
 

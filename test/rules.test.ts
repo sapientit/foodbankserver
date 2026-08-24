@@ -242,9 +242,14 @@ describe('grid maintenance', () => {
     const response = await saveGrid(testApp, token, gridOf('Single parcel', 'Imaginary'));
 
     expect(response.status).toBe(422);
-    const body: { error: { details: { unknownParcels: { name: string }[] } } } =
-      await response.json();
+    const body: {
+      error: {
+        details: { unknownParcels: { cell: string; name: string }[]; unexpectedCells: string[] };
+      };
+    } = await response.json();
     expect(body.error.details.unknownParcels[0]?.name).toBe('Imaginary');
+    expect(body.error.details.unknownParcels[0]?.cell).toEqual(expect.any(String));
+    expect(body.error.details.unexpectedCells).toEqual([]);
   });
 
   it('refuses a cell that is not a real household size', async () => {
@@ -257,6 +262,13 @@ describe('grid maintenance', () => {
     });
 
     expect(response.status).toBe(422);
+    const body: {
+      error: {
+        details: { unknownParcels: { cell: string; name: string }[]; unexpectedCells: string[] };
+      };
+    } = await response.json();
+    expect(body.error.details.unexpectedCells).toEqual(['9-9']);
+    expect(body.error.details.unknownParcels).toEqual([]);
   });
 
   it('allows a partly filled grid while the charity is still setting up', async () => {

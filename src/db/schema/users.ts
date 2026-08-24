@@ -11,13 +11,6 @@ import { sql } from 'drizzle-orm';
  * not a variety of administrator** — it is the boundary that stops somebody
  * brought in to help with fuel bills reading why every household in the
  * borough was referred. See `INITIAL_SPEC1.txt`, #Roles.
- *
- * `volunteer` was here until 0018, enumerated speculatively on the reasoning
- * that adding a role later would cost a table rebuild. Adding `fuel_admin` was
- * that rebuild, so the speculation paid for nothing and the value went with
- * it. Do not add another on the same argument — see
- * `docs/engineering/d1-constraints.md`, which counts what guessing has cost
- * this schema already.
  */
 export const USER_ROLES = ['admin', 'team_lead', 'fuel_admin'] as const;
 export type UserRole = (typeof USER_ROLES)[number];

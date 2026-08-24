@@ -542,60 +542,6 @@ describe('editing the pick list', () => {
 
     expect(edit.status).toBe(204);
   });
-
-  it('a confirmed pick list cannot be edited', async () => {
-    const { testApp, token, world: w } = await world();
-    await submitReferral(testApp, w, { adults: 1, children: 0 });
-    const { id } = await generatePickList(testApp, token, w.sessionId);
-    const { parcels: rows } = await readPickList(testApp, token, id);
-
-    await testApp.request(`/api/v1/pick-lists/${id}/confirm`, {
-      method: 'POST',
-      headers: authHeaders(token),
-    });
-
-    const edit = await testApp.request(`/api/v1/parcels/${rows[0]?.id ?? ''}/lines`, {
-      method: 'PUT',
-      headers: { ...authHeaders(token), 'content-type': 'application/json' },
-      body: JSON.stringify({ stockItemId: w.stockItems.Pasta, quantity: 1 }),
-    });
-
-    expect(edit.status).toBe(409);
-  });
-
-  it('confirming does not move stock', async () => {
-    const { testApp, token, world: w } = await world();
-    await submitReferral(testApp, w, { adults: 2, children: 3 });
-    const { id } = await generatePickList(testApp, token, w.sessionId);
-
-    await testApp.request(`/api/v1/pick-lists/${id}/confirm`, {
-      method: 'POST',
-      headers: authHeaders(token),
-    });
-
-    // Confirmed means "picking finished, list locked", not "stock issued".
-    expect(await db.select().from(stockLedger)).toHaveLength(0);
-    const [row] = await db.select().from(pickLists).where(eq(pickLists.id, id));
-    expect(row?.status).toBe('confirmed');
-  });
-
-  it('confirming twice is harmless', async () => {
-    const { testApp, token, world: w } = await world();
-    await submitReferral(testApp, w, { adults: 1, children: 0 });
-    const { id } = await generatePickList(testApp, token, w.sessionId);
-
-    const first = await testApp.request(`/api/v1/pick-lists/${id}/confirm`, {
-      method: 'POST',
-      headers: authHeaders(token),
-    });
-    const second = await testApp.request(`/api/v1/pick-lists/${id}/confirm`, {
-      method: 'POST',
-      headers: authHeaders(token),
-    });
-
-    expect(first.status).toBe(200);
-    expect(second.status).toBe(200);
-  });
 });
 
 describe('parcel line descriptions', () => {
@@ -944,16 +890,11 @@ describe('pick list authorisation', () => {
     expect(generated.status).toBe(200);
     await reviewEveryParcel(lead, accessToken, generated.id);
 
-    for (const path of [
-      `/api/v1/pick-lists/${generated.id}/print`,
-      `/api/v1/pick-lists/${generated.id}/confirm`,
-    ]) {
-      const response = await lead.request(path, {
-        method: 'POST',
-        headers: authHeaders(accessToken),
-      });
-      expect(response.status).toBe(200);
-    }
+    const printed = await lead.request(`/api/v1/pick-lists/${generated.id}/print`, {
+      method: 'POST',
+      headers: authHeaders(accessToken),
+    });
+    expect(printed.status).toBe(200);
     expect(token).toEqual(expect.any(String));
   });
 
@@ -1645,31 +1586,6 @@ describe('editing a parcel note', () => {
 
     const afterClear = await readPickList(testApp, token, id);
     expect(afterClear.parcels[0]?.notes).toBeNull();
-  });
-
-  it('refuses to edit a parcel note once the pick list has been confirmed', async () => {
-    const { testApp, token, world: w } = await world();
-    await submitReferral(testApp, w, { adults: 1, children: 0 });
-    const { id } = await generatePickList(testApp, token, w.sessionId);
-    const { parcels: rows } = await readPickList(testApp, token, id);
-    const parcelId = rows[0]?.id ?? '';
-
-    const confirmed = await testApp.request(`/api/v1/pick-lists/${id}/confirm`, {
-      method: 'POST',
-      headers: authHeaders(token),
-    });
-    expect(confirmed.status).toBe(200);
-
-    const patch = await testApp.request(`/api/v1/parcels/${parcelId}`, {
-      method: 'PATCH',
-      headers: { ...authHeaders(token), 'content-type': 'application/json' },
-      body: JSON.stringify({ notes: 'Too late.' }),
-    });
-    expect(patch.status).toBe(409);
-
-    // Nothing changed underneath the refusal.
-    const [row] = await db.select().from(parcels).where(eq(parcels.id, parcelId));
-    expect(row?.notes).toBeNull();
   });
 
   it('accepts a PATCH note of exactly 1200 characters and refuses one of 1201', async () => {
