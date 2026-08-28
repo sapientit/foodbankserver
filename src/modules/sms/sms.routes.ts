@@ -7,7 +7,11 @@ import type { AppEnv } from '../../http/types.ts';
 import { createSessionsRepository } from '../sessions/sessions.repository.ts';
 import { createSmsRepository } from './sms.repository.ts';
 import { createSmsService, type SmsServiceDeps } from './sms.service.ts';
-import { toSmsMessageResponse, type SmsMessageResponse } from './sms.mapper.ts';
+import {
+  toSmsMessageResponse,
+  type SmsInboxMessageResponse,
+  type SmsMessageResponse,
+} from './sms.mapper.ts';
 import { staffReplySchema } from './sms.schema.ts';
 
 /**
@@ -65,8 +69,18 @@ export function smsRoutes(): Hono<AppEnv> {
   });
 
   routes.post('/sms-messages/:id/read', ...admins, async (c) => {
-    const message = await serviceFor(c).markUnmatchedRead(c.req.param('id'));
+    const message = await serviceFor(c).markMessageRead(c.req.param('id'));
     return c.json(toSmsMessageResponse(message));
+  });
+
+  routes.get('/sms-messages/attention-summary', ...admins, async (c) => {
+    const result = await serviceFor(c).attentionSummary();
+    return c.json(result);
+  });
+
+  routes.get('/sms-messages', ...admins, async (c) => {
+    const messages = await serviceFor(c).listInbox();
+    return c.json<{ messages: SmsInboxMessageResponse[] }>({ messages });
   });
 
   return routes;

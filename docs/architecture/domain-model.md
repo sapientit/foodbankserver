@@ -122,6 +122,22 @@ get a 200 for; the unique index is what stops the same text appearing twice on a
 **Messages are deleted after thirty days, not anonymised** — including loose replies, which is the
 only thing stopping them accumulating with no referral to count a period from.
 
+**`sms_messages.session_id` is a snapshot taken at insert, never re-derived.** It is stamped once
+from `referral.session_id` as it stood at that moment. `referrals.service.ts`'s `move()` overwrites
+`referrals.session_id` in place with no cascade to this table, so if a message's session were
+computed live by joining through the referral instead, it would silently follow the household to
+wherever it is moved next. Null means the same as a null `referral_id` — no session was known when
+the row was written — and is treated as a loose reply throughout.
+
+**The administrator inbox (`GET /sms-messages`, `GET /sms-messages/attention-summary`) reads
+everything but tells an administrator about very little.** An unread `household_reply` needs an
+administrator only when it is unmatched or its snapshotted session has since moved to `confirmed` or
+`cancelled`; one on a `planned` or `in_progress` session stays the team leader's responsibility, and
+an administrator may view it but it never contributes to `unreadTotal`. Nothing here creates an
+ownership, handover, acknowledgement or preference record — a message is still simply read or unread,
+and `POST /sms-messages/{id}/read` (now usable on any unread household reply, not only a loose one)
+touches only the one row named.
+
 ## Rules the code must enforce, not merely document
 
 **A session's `deliveryCapacity` is a number within its overall `capacity`, not a boolean.** It

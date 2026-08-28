@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { API_PREFIX } from '../src/app.ts';
 import { fixedClock } from '../src/core/clock.ts';
+import { createLogger } from '../src/core/log.ts';
 import { createDatabase } from '../src/db/client.ts';
 import { parcelLines, parcels, pickLists } from '../src/db/schema/pick-lists.ts';
 import { auditEvents, referrals } from '../src/db/schema/referrals.ts';
@@ -12,6 +13,7 @@ import { recurringSessions, sessions } from '../src/db/schema/sessions.ts';
 import { smsMessages } from '../src/db/schema/sms.ts';
 import { stockItems, stockLedger } from '../src/db/schema/stock.ts';
 import { refreshTokens, users } from '../src/db/schema/users.ts';
+import { purgeSmsMessages } from '../src/modules/jobs/purge-sms.ts';
 import { authHeaders, buildTestApp, devLogin, type TestApp } from './helpers/app.ts';
 import { generatePickList, setUpPickingWorld } from './helpers/picking-fixtures.ts';
 import {
@@ -746,5 +748,522 @@ describe('loose replies, admin only', () => {
     expect(markRead.status).toBe(200);
     const markedMessage: { readAt: string | null } = await markRead.json();
     expect(markedMessage.readAt).not.toBeNull();
+  });
+});
+
+/** The shape `toInboxMessageResponse` produces — see `sms.mapper.ts`. */
+interface InboxMessage {
+  readonly id: string;
+  readonly referralId: string | null;
+  readonly kind: string;
+  readonly body: string;
+  readonly occurredAt: string;
+  readonly readAt: string | null;
+  readonly location: 'unmatched' | 'active_session' | 'closed_session';
+  readonly session: { id: string; sessionDate: string; startTime: string; status: string } | null;
+  readonly phone?: string;
+}
+
+/** Posts a household reply that the webhook will match to whatever referral holds `phone`. */
+async function postReply(testApp: TestApp, phone: string, content = 'Hello'): Promise<Response> {
+  return testApp.request(`${API_PREFIX}/webhooks/sms`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ source: phone, content, messageid: crypto.randomUUID() }),
+  });
+}
+
+async function confirmSession(testApp: TestApp, token: string, sessionId: string): Promise<void> {
+  const response = await testApp.request(`${API_PREFIX}/sessions/${sessionId}/confirm`, {
+    method: 'POST',
+    headers: authHeaders(token),
+  });
+  expect(response.status).toBe(200);
+}
+
+async function cancelSession(testApp: TestApp, token: string, sessionId: string): Promise<void> {
+  const response = await testApp.request(`${API_PREFIX}/sessions/${sessionId}/cancel`, {
+    method: 'POST',
+    headers: authHeaders(token),
+  });
+  expect(response.status).toBe(200);
+}
+
+async function attentionTotal(testApp: TestApp, token: string): Promise<unknown> {
+  const response = await testApp.request(`${API_PREFIX}/sms-messages/attention-summary`, {
+    headers: authHeaders(token),
+  });
+  expect(response.status).toBe(200);
+  return response.json();
+}
+
+describe('the administrator attention summary', () => {
+  it('is admin only, refusing a team lead', async () => {
+    const testApp = buildSmsTestApp();
+    const { accessToken: leadToken } = await devLogin(testApp, {
+      email: 'lead@foodbank.org',
+      role: 'team_lead',
+    });
+
+    const response = await testApp.request(`${API_PREFIX}/sms-messages/attention-summary`, {
+      headers: authHeaders(leadToken),
+    });
+    expect(response.status).toBe(403);
+  });
+
+  it('returns unreadTotal and nothing else, leaking no message content', async () => {
+    const testApp = buildSmsTestApp();
+    const { accessToken: adminToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+
+    await postReply(testApp, '07700 900999', 'Something personal');
+
+    const response = await testApp.request(`${API_PREFIX}/sms-messages/attention-summary`, {
+      headers: authHeaders(adminToken),
+    });
+    expect(response.status).toBe(200);
+    // toEqual, not toMatchObject: this is a leakage check, so an extra field
+    // must fail it as loudly as a missing one.
+    expect(await response.json()).toEqual({ unreadTotal: 1 });
+  });
+
+  it('does not count an unread reply while its session is still planned', async () => {
+    const testApp = buildSmsTestApp();
+    const { accessToken: adminToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world = await setUpReferralWorld(testApp, adminToken);
+    await submitReferral(testApp, world);
+    await postReply(testApp, '07700 900123');
+
+    expect(await attentionTotal(testApp, adminToken)).toEqual({ unreadTotal: 0 });
+  });
+
+  it('counts an unread reply once its session has been confirmed', async () => {
+    const testApp = buildSmsTestApp();
+    const { accessToken: adminToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world = await setUpReferralWorld(testApp, adminToken);
+    await submitReferral(testApp, world);
+    await postReply(testApp, '07700 900123');
+
+    await confirmSession(testApp, adminToken, world.sessionId);
+
+    expect(await attentionTotal(testApp, adminToken)).toEqual({ unreadTotal: 1 });
+  });
+
+  it('counts an unread reply once its session has been cancelled', async () => {
+    const testApp = buildSmsTestApp();
+    const { accessToken: adminToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world = await setUpReferralWorld(testApp, adminToken);
+    const { id: referralId } = await submitReferral(testApp, world);
+    await postReply(testApp, '07700 900123');
+
+    // A session cannot be cancelled while a referral still holds a place on
+    // it, so the household is cancelled first — the sms row's session
+    // snapshot is independent of that and is untouched by it.
+    const cancelReferral = await testApp.request(`${API_PREFIX}/referrals/${referralId}/cancel`, {
+      method: 'POST',
+      headers: authHeaders(adminToken),
+    });
+    expect(cancelReferral.status).toBe(200);
+
+    await cancelSession(testApp, adminToken, world.sessionId);
+
+    expect(await attentionTotal(testApp, adminToken)).toEqual({ unreadTotal: 1 });
+  });
+
+  it('counts an unread loose reply with no session behind it at all', async () => {
+    const testApp = buildSmsTestApp();
+    const { accessToken: adminToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+
+    await postReply(testApp, '07700 900999', 'Who is this?');
+
+    expect(await attentionTotal(testApp, adminToken)).toEqual({ unreadTotal: 1 });
+  });
+
+  it('does not count a reply that has already been read, even on a closed session', async () => {
+    const testApp = buildSmsTestApp();
+    const { accessToken: adminToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world = await setUpReferralWorld(testApp, adminToken);
+    await submitReferral(testApp, world);
+    await postReply(testApp, '07700 900123');
+    await confirmSession(testApp, adminToken, world.sessionId);
+
+    const [reply] = await db
+      .select()
+      .from(smsMessages)
+      .where(eq(smsMessages.kind, 'household_reply'));
+    const markRead = await testApp.request(`${API_PREFIX}/sms-messages/${reply?.id ?? ''}/read`, {
+      method: 'POST',
+      headers: authHeaders(adminToken),
+    });
+    expect(markRead.status).toBe(200);
+
+    expect(await attentionTotal(testApp, adminToken)).toEqual({ unreadTotal: 0 });
+  });
+
+  it('never counts a failure row, even on a closed session, because a failure always arrives read', async () => {
+    const testApp = buildSmsTestApp();
+    const { accessToken: adminToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world = await setUpReferralWorld(testApp, adminToken);
+    // No phone on file: `sms-reminders` records this as a `failure` row.
+    await submitReferral(testApp, world, { refereePhone: undefined });
+
+    const remind = await testApp.request(
+      `${API_PREFIX}/sessions/${world.sessionId}/sms-reminders`,
+      {
+        method: 'POST',
+        headers: authHeaders(adminToken),
+      },
+    );
+    expect(await remind.json()).toMatchObject({ reminded: 0, failed: 1 });
+
+    await confirmSession(testApp, adminToken, world.sessionId);
+
+    expect(await attentionTotal(testApp, adminToken)).toEqual({ unreadTotal: 0 });
+  });
+});
+
+describe('the administrator inbox', () => {
+  it('is admin only, refusing a team lead', async () => {
+    const testApp = buildSmsTestApp();
+    const { accessToken: leadToken } = await devLogin(testApp, {
+      email: 'lead@foodbank.org',
+      role: 'team_lead',
+    });
+
+    const response = await testApp.request(`${API_PREFIX}/sms-messages`, {
+      headers: authHeaders(leadToken),
+    });
+    expect(response.status).toBe(403);
+  });
+
+  it('lists every message newest first, with location, session and phone set per row', async () => {
+    const mainApp = buildSmsTestApp();
+    const { accessToken: adminToken } = await devLogin(mainApp, { email: 'admin@foodbank.org' });
+
+    // One world (one reason, one referrer); a second session for the closed case.
+    const world = await setUpReferralWorld(mainApp, adminToken);
+    await submitReferral(mainApp, world, { refereePhone: '07700 900111' });
+
+    const closedSessionId = await createSession(mainApp, adminToken, { sessionDate: '2026-08-18' });
+    await submitReferral(
+      mainApp,
+      { ...world, sessionId: closedSessionId },
+      { refereePhone: '07700 900222' },
+    );
+
+    // Distinct clocks so the three messages land at three distinct instants,
+    // sharing the same underlying database as `mainApp`.
+    const earlyApp = buildTestApp({ clock: fixedClock('2026-08-01T09:00:00.000Z') });
+    const middleApp = buildTestApp({ clock: fixedClock('2026-08-02T09:00:00.000Z') });
+    const lateApp = buildTestApp({ clock: fixedClock(NOW) });
+
+    await postReply(earlyApp, '07700 900333', 'Who is this?'); // oldest: unmatched
+    await postReply(middleApp, '07700 900111', 'Running late'); // middle: active session
+    await postReply(lateApp, '07700 900222', 'Thank you'); // newest: soon-to-close session
+
+    await confirmSession(lateApp, adminToken, closedSessionId);
+
+    const response = await mainApp.request(`${API_PREFIX}/sms-messages`, {
+      headers: authHeaders(adminToken),
+    });
+    expect(response.status).toBe(200);
+    const body: { messages: InboxMessage[] } = await response.json();
+
+    expect(body.messages.map((m) => m.body)).toEqual(['Thank you', 'Running late', 'Who is this?']);
+    const [closed, active, unmatched] = body.messages;
+
+    expect(closed).toMatchObject({
+      location: 'closed_session',
+      session: {
+        id: closedSessionId,
+        sessionDate: '2026-08-18',
+        startTime: '10:00',
+        status: 'confirmed',
+      },
+    });
+    expect(closed?.phone).toBeUndefined(); // only an unmatched row carries a phone
+
+    expect(active).toMatchObject({
+      location: 'active_session',
+      session: { id: world.sessionId, status: 'planned' },
+    });
+    expect(active?.phone).toBeUndefined();
+
+    expect(unmatched).toMatchObject({
+      location: 'unmatched',
+      session: null,
+      phone: '+447700900333',
+    });
+  });
+});
+
+describe('the sessionId snapshot survives a referral move', () => {
+  it('keeps reflecting the session a reply actually arrived on, not wherever the referral sits now', async () => {
+    const testApp = buildSmsTestApp();
+    const { accessToken: adminToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const worldA = await setUpReferralWorld(testApp, adminToken);
+    const { id: referralId } = await submitReferral(testApp, worldA);
+
+    const sessionB = await createSession(testApp, adminToken, { sessionDate: '2026-08-18' });
+
+    await postReply(testApp, '07700 900123', 'See you then');
+
+    const [beforeMove] = await db
+      .select()
+      .from(smsMessages)
+      .where(eq(smsMessages.kind, 'household_reply'));
+    expect(beforeMove?.sessionId).toBe(worldA.sessionId);
+
+    // Move the referral away while session A is still open.
+    const move = await testApp.request(`${API_PREFIX}/referrals/${referralId}`, {
+      method: 'PATCH',
+      headers: json(adminToken),
+      body: JSON.stringify({ sessionId: sessionB }),
+    });
+    expect(move.status).toBe(200);
+
+    const [afterMove] = await db
+      .select()
+      .from(smsMessages)
+      .where(eq(smsMessages.kind, 'household_reply'));
+    expect(afterMove?.sessionId).toBe(worldA.sessionId); // untouched by the move
+
+    // Session A closes; session B — where the referral now actually sits — does not.
+    await confirmSession(testApp, adminToken, worldA.sessionId);
+
+    const response = await testApp.request(`${API_PREFIX}/sms-messages`, {
+      headers: authHeaders(adminToken),
+    });
+    const body: { messages: InboxMessage[] } = await response.json();
+    const message = body.messages.find((m) => m.body === 'See you then');
+
+    expect(message).toMatchObject({
+      location: 'closed_session',
+      session: { id: worldA.sessionId, status: 'confirmed' },
+    });
+
+    // The proof that matters: it counts as a closed-session item, which it
+    // could only do by keying off the snapshot — a live join through the
+    // referral would find session B, still `planned`, and not count it at all.
+    expect(await attentionTotal(testApp, adminToken)).toEqual({ unreadTotal: 1 });
+  });
+});
+
+describe('marking one inbox message read', () => {
+  it('marks an unread reply on a closed session read, returning it with readAt set', async () => {
+    const testApp = buildSmsTestApp();
+    const { accessToken: adminToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world = await setUpReferralWorld(testApp, adminToken);
+    await submitReferral(testApp, world);
+    await postReply(testApp, '07700 900123');
+    await confirmSession(testApp, adminToken, world.sessionId);
+
+    const [reply] = await db
+      .select()
+      .from(smsMessages)
+      .where(eq(smsMessages.kind, 'household_reply'));
+    const response = await testApp.request(`${API_PREFIX}/sms-messages/${reply?.id ?? ''}/read`, {
+      method: 'POST',
+      headers: authHeaders(adminToken),
+    });
+
+    expect(response.status).toBe(200);
+    const body: { readAt: string | null } = await response.json();
+    expect(body.readAt).not.toBeNull();
+  });
+
+  it('is idempotent: reading the same message again reports the same readAt rather than erroring', async () => {
+    const testApp = buildSmsTestApp();
+    const { accessToken: adminToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world = await setUpReferralWorld(testApp, adminToken);
+    await submitReferral(testApp, world);
+    await postReply(testApp, '07700 900123');
+    await confirmSession(testApp, adminToken, world.sessionId);
+
+    const [reply] = await db
+      .select()
+      .from(smsMessages)
+      .where(eq(smsMessages.kind, 'household_reply'));
+    const messageId = reply?.id ?? '';
+
+    const first = await testApp.request(`${API_PREFIX}/sms-messages/${messageId}/read`, {
+      method: 'POST',
+      headers: authHeaders(adminToken),
+    });
+    const firstBody: { readAt: string | null } = await first.json();
+
+    const second = await testApp.request(`${API_PREFIX}/sms-messages/${messageId}/read`, {
+      method: 'POST',
+      headers: authHeaders(adminToken),
+    });
+    expect(second.status).toBe(200);
+    const secondBody: { readAt: string | null } = await second.json();
+
+    expect(secondBody.readAt).not.toBeNull();
+    expect(secondBody.readAt).toBe(firstBody.readAt);
+  });
+
+  it('does not mark a different unread reply on the same session read', async () => {
+    const testApp = buildSmsTestApp();
+    const { accessToken: adminToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world = await setUpReferralWorld(testApp, adminToken);
+    await submitReferral(testApp, world, { refereePhone: '07700 900111' });
+    await submitReferral(testApp, world, { refereePhone: '07700 900222' });
+    await postReply(testApp, '07700 900111', 'First household');
+    await postReply(testApp, '07700 900222', 'Second household');
+    await confirmSession(testApp, adminToken, world.sessionId);
+
+    expect(await attentionTotal(testApp, adminToken)).toEqual({ unreadTotal: 2 });
+
+    const rows = await db.select().from(smsMessages).where(eq(smsMessages.kind, 'household_reply'));
+    const [first, second] = rows;
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+
+    const markRead = await testApp.request(`${API_PREFIX}/sms-messages/${first?.id ?? ''}/read`, {
+      method: 'POST',
+      headers: authHeaders(adminToken),
+    });
+    expect(markRead.status).toBe(200);
+
+    // Exactly one cleared — the count drops by one, not to zero.
+    expect(await attentionTotal(testApp, adminToken)).toEqual({ unreadTotal: 1 });
+
+    const [untouched] = await db
+      .select()
+      .from(smsMessages)
+      .where(eq(smsMessages.id, second?.id ?? ''));
+    expect(untouched?.readAt).toBeNull();
+  });
+
+  it('refuses a reminder id, a staff-reply id and a nonexistent id, matching the old NotFoundError shape', async () => {
+    const testApp = buildSmsTestApp();
+    const { accessToken: adminToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world = await setUpReferralWorld(testApp, adminToken);
+    const { id: referralId } = await submitReferral(testApp, world);
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(providerSuccess('prov-1'));
+    await testApp.request(`${API_PREFIX}/sessions/${world.sessionId}/sms-reminders`, {
+      method: 'POST',
+      headers: authHeaders(adminToken),
+    });
+    const staffReply = await testApp.request(`${API_PREFIX}/referrals/${referralId}/sms-messages`, {
+      method: 'POST',
+      headers: json(adminToken),
+      body: JSON.stringify({ body: 'Thanks for letting us know' }),
+    });
+    const staffReplyBody: { id: string } = await staffReply.json();
+
+    const [reminder] = await db.select().from(smsMessages).where(eq(smsMessages.kind, 'reminder'));
+
+    for (const id of [reminder?.id ?? '', staffReplyBody.id, crypto.randomUUID()]) {
+      const response = await testApp.request(`${API_PREFIX}/sms-messages/${id}/read`, {
+        method: 'POST',
+        headers: authHeaders(adminToken),
+      });
+      expect(response.status, id).toBe(404);
+    }
+  });
+
+  it('refuses to mark an active-session reply read, leaving it and the session unread count untouched', async () => {
+    const testApp = buildSmsTestApp();
+    const { accessToken: adminToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world = await setUpReferralWorld(testApp, adminToken);
+    await submitReferral(testApp, world);
+    // The session stays `planned` — postReply snapshots it as an active_session message.
+    await postReply(testApp, '07700 900123');
+
+    const [reply] = await db
+      .select()
+      .from(smsMessages)
+      .where(eq(smsMessages.kind, 'household_reply'));
+
+    const response = await testApp.request(`${API_PREFIX}/sms-messages/${reply?.id ?? ''}/read`, {
+      method: 'POST',
+      headers: authHeaders(adminToken),
+    });
+    expect(response.status).toBe(404);
+
+    const summary = await testApp.request(`${API_PREFIX}/sessions/${world.sessionId}/sms-summary`, {
+      headers: authHeaders(adminToken),
+    });
+    const body: { unreadTotal: number; households: { unreadCount: number }[] } =
+      await summary.json();
+    expect(body.unreadTotal).toBe(1);
+    expect(body.households[0]?.unreadCount).toBe(1);
+
+    const [stillUnread] = await db
+      .select()
+      .from(smsMessages)
+      .where(eq(smsMessages.id, reply?.id ?? ''));
+    expect(stillUnread?.readAt).toBeNull(); // the refused call had zero effect
+  });
+
+  it('does not clear an active session thread, or its sms-summary count, when a closed-session message is cleared', async () => {
+    const testApp = buildSmsTestApp();
+    const { accessToken: adminToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+
+    const activeWorld = await setUpReferralWorld(testApp, adminToken);
+    await submitReferral(testApp, activeWorld, { refereePhone: '07700 900111' });
+    await postReply(testApp, '07700 900111', 'Still coming');
+
+    const closedSessionId = await createSession(testApp, adminToken, { sessionDate: '2026-08-18' });
+    await submitReferral(
+      testApp,
+      { ...activeWorld, sessionId: closedSessionId },
+      { refereePhone: '07700 900222' },
+    );
+    await postReply(testApp, '07700 900222', 'Thanks for the reminder');
+    await confirmSession(testApp, adminToken, closedSessionId);
+
+    const [closedMessage] = await db
+      .select()
+      .from(smsMessages)
+      .where(eq(smsMessages.sessionId, closedSessionId));
+    const markRead = await testApp.request(
+      `${API_PREFIX}/sms-messages/${closedMessage?.id ?? ''}/read`,
+      {
+        method: 'POST',
+        headers: authHeaders(adminToken),
+      },
+    );
+    expect(markRead.status).toBe(200);
+
+    const summary = await testApp.request(
+      `${API_PREFIX}/sessions/${activeWorld.sessionId}/sms-summary`,
+      { headers: authHeaders(adminToken) },
+    );
+    const body: { unreadTotal: number } = await summary.json();
+    expect(body.unreadTotal).toBe(1); // untouched by clearing the unrelated closed-session item
+  });
+});
+
+describe('purging still works with the session snapshot column', () => {
+  it('deletes a message with a non-null sessionId once past the retention window, same as before', async () => {
+    const testApp = buildSmsTestApp();
+    const { accessToken: adminToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world = await setUpReferralWorld(testApp, adminToken);
+    await submitReferral(testApp, world);
+    await postReply(testApp, '07700 900123');
+
+    const [beforeAging] = await db
+      .select()
+      .from(smsMessages)
+      .where(eq(smsMessages.kind, 'household_reply'));
+    expect(beforeAging?.sessionId).toBe(world.sessionId); // sanity: this is the column under test
+
+    // Age it past the thirty-day retention window.
+    await db
+      .update(smsMessages)
+      .set({ occurredAt: '2026-06-01T00:00:00.000Z' })
+      .where(eq(smsMessages.id, beforeAging?.id ?? ''));
+
+    const result = await purgeSmsMessages({
+      db,
+      clock: fixedClock(NOW),
+      logger: createLogger('silent'),
+    });
+
+    expect(result.purged).toBe(1);
+    expect(await db.select().from(smsMessages)).toHaveLength(0);
   });
 });

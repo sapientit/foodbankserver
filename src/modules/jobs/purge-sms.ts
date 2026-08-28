@@ -1,9 +1,9 @@
 import { lt } from 'drizzle-orm';
-import { SMS_MESSAGE_RETENTION_DAYS } from '../../config/constants.ts';
 import type { Clock } from '../../core/clock.ts';
 import type { Logger } from '../../core/log.ts';
 import type { Database } from '../../db/client.ts';
 import { smsMessages } from '../../db/schema/sms.ts';
+import { smsRetentionCutoffIso } from '../sms/retention.ts';
 
 export const PURGE_SMS_JOB = 'purge-sms-messages';
 
@@ -44,9 +44,7 @@ export async function purgeSmsMessages(deps: {
 }): Promise<PurgeSmsResult> {
   const { db, clock, logger } = deps;
 
-  const cutoff = new Date(
-    Date.parse(clock.nowIso()) - SMS_MESSAGE_RETENTION_DAYS * 24 * 60 * 60 * 1000,
-  ).toISOString();
+  const cutoff = smsRetentionCutoffIso(clock.nowIso());
 
   const deleted = await db
     .delete(smsMessages)

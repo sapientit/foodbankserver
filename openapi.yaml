@@ -2059,16 +2059,53 @@ paths:
         Idempotent. Only inbound messages are ever unread, so this never touches
         what the food bank sent.
       responses:
+        '204': { description: Marked. No body. }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/sms-messages/attention-summary:
+    get:
+      tags: [SMS]
+      summary: Count of unread replies an administrator needs to deal with
+      description: >
+        **Admin only.** No message body, household name, phone number or
+        referral data — a count and nothing else.
+
+        Counts only unread household replies that are unmatched, or that
+        belong to a session which has since been confirmed or cancelled. A
+        reply on a session still planned or under way is excluded — that one
+        is the team leader running it who reads it, not an administrator.
+        Failures are always excluded; they arrive already read.
+      responses:
         '200':
-          description: Marked
+          description: The count
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SmsAttentionSummary' }
+
+  /api/v1/sms-messages:
+    get:
+      tags: [SMS]
+      summary: Every retained text message
+      description: >
+        **Admin only.** Every message still within the thirty-day retention
+        period, newest first, whichever household or session it belongs to —
+        the reminders, the replies, the failures and the loose replies alike.
+
+        Each row carries `location` so the client can group and label it
+        without working out the session-status rule itself; see
+        `SmsInboxMessage`. Viewing this list marks nothing read.
+      responses:
+        '200':
+          description: The inbox
           content:
             application/json:
               schema:
                 type: object
-                required: [markedRead]
+                required: [messages]
                 properties:
-                  markedRead: { type: integer }
-        '404': { $ref: '#/components/responses/NotFound' }
+                  messages:
+                    type: array
+                    items: { $ref: '#/components/schemas/SmsInboxMessage' }
 
   /api/v1/sms-messages/unmatched:
     get:
@@ -2086,6 +2123,10 @@ paths:
         `phone` is on every message, but it is on these that it matters: acting
         on a loose reply means ringing the number back, and there is no referral
         behind it to look the household up by.
+
+        **Superseded by `GET /api/v1/sms-messages`**, which returns this and
+        everything else in one list, with `location: unmatched` on these same
+        rows. Kept unchanged here rather than removed.
       responses:
         '200':
           description: Loose replies, newest first
@@ -2103,8 +2144,18 @@ paths:
     parameters: [{ $ref: '#/components/parameters/Id' }]
     post:
       tags: [SMS]
-      summary: Mark one loose reply read
-      description: "Admin only. The unmatched screen's equivalent of expanding a household."
+      summary: Mark one unread household reply read
+      description: >
+        Admin only. Marks one unread household reply read — a loose reply or
+        one from a session that has since closed, not only an unmatched one
+        as before.
+
+        Refuses a reply still on a `planned` or `in_progress` session: that
+        one remains the team leader's to read until the session closes, and
+        this endpoint is not a side door round that. Idempotent, and scoped
+        to exactly the message named — clearing a closed-session or
+        unmatched item never marks another message and never touches a
+        session's own unread count.
       responses:
         '200':
           description: Marked
@@ -3829,6 +3880,75 @@ components:
             Present on every message: on a loose reply it is the only way to
             act on one, and on a thread it is the same number the referral
             already carries, so withholding it there would buy nothing.
+
+    SmsAttentionSummary:
+      type: object
+      required: [unreadTotal]
+      properties:
+        unreadTotal:
+          type: integer
+          description: >-
+            Unread household replies that are unmatched or belong to a
+            confirmed or cancelled session. A reply on a session still planned
+            or under way is excluded — that one is the team leader's to read.
+
+    SmsInboxSession:
+      type: object
+      description: The session an `SmsInboxMessage` was snapshotted against, when it has one.
+      required: [id, sessionDate, startTime, status]
+      properties:
+        id: { type: string, format: uuid }
+        sessionDate: { type: string, format: date }
+        startTime: { type: string, description: 'HH:MM, the wall clock the charity set.' }
+        status:
+          type: string
+          enum: [planned, in_progress, confirmed, cancelled]
+
+    SmsInboxMessage:
+      type: object
+      description: |
+        One row in the administrator inbox — every retained message, whichever
+        household or session it belongs to.
+
+        `location` is derived from the session the message was snapshotted
+        against when it arrived, not from wherever its referral sits now: a
+        household later moved to another session does not retroactively move
+        an old message with it.
+
+        - `unmatched` — a loose reply, no session behind it.
+        - `active_session` — its session is still planned or under way; this
+          is the team leader's to read.
+        - `closed_session` — its session has since been confirmed or
+          cancelled; nobody else was coming back to it, which is why this one
+          counts towards `SmsAttentionSummary` when unread.
+
+        `session` is null only when `location` is `unmatched`.
+      required: [id, referralId, kind, body, occurredAt, readAt, location, session]
+      properties:
+        id: { type: string, format: uuid }
+        referralId:
+          type: [string, 'null']
+          format: uuid
+        kind:
+          type: string
+          enum: [reminder, staff_reply, household_reply, failure]
+        body: { type: string }
+        occurredAt: { type: string, format: date-time }
+        readAt: { type: [string, 'null'], format: date-time }
+        location:
+          type: string
+          enum: [unmatched, active_session, closed_session]
+        session:
+          oneOf:
+            - type: 'null'
+            - $ref: '#/components/schemas/SmsInboxSession'
+        phone:
+          type: string
+          description: >-
+            Present only when `location` is `unmatched`. A linked-session row
+            has a referral to open instead, so there is nothing to act on a
+            phone number for; a loose reply has no referral, and the number is
+            the only way to act on it.
 
     ReferralReceipt:
       type: object

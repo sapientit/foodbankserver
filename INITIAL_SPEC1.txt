@@ -322,6 +322,14 @@ The text messages are sent and received through TheSMSWorks, and the only thing 
 
 What a household texts back is theirs, and it is held with the rest of their details and forgotten with them.
 
+Administrators can see every text message the food bank is still holding, not only the loose replies, on a screen of their own.  Kept there is everything within the thirty days already described - what was sent, what came back, and what failed, whichever household or session it belongs to.
+
+What an administrator is actually told needs doing is smaller than what they can see.  A household's reply that nobody has read yet needs an administrator when it is a loose reply, or when the session it belonged to has since been confirmed or cancelled - the team leader who was running that session is not going to open it again, and nobody else was going to either unless it is put in front of somebody.  A reply still sitting on a session that has not yet happened, or is under way, stays the team leader's to read; an administrator can look at it from this screen, but it does not count towards what administrators are told needs doing, because reading it is somebody else's job until that session is over.
+
+A message remembers the session it actually arrived about.  Moving a household to a later session afterwards, as administrators can, must not quietly move an old message with it - a text that came in while a household was booked onto Tuesday's session was about Tuesday's session, whatever session that household sits on by the time anybody reads it.
+
+Reading one message from the administrators' screen marks only that message read.  It does not clear anything else - not another loose reply, not a session's own unread count, and not the messages a team leader is still working through.  None of this creates a record of who is dealing with a message or that anybody has taken it on; a message is still simply read or unread, the same as everywhere else in this feature.
+
 #Listener sheet
 The food bank gives selected volunteers - listeners - the job of talking to households at a session, and the listener sheet is what they are given to do it from.
 

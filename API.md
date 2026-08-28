@@ -1275,7 +1275,8 @@ Generate or reconcile the session's pick list first, then ask again.
 ## 5d. Text reminders and replies
 
 The run-session screen gains a **Send SMS Reminders** button and a conversation
-per household. Team leader or admin throughout, except the unmatched screen.
+per household. Team leader or admin throughout, except the administrator
+inbox endpoints below.
 
 ```
 POST /api/v1/sessions/{sessionId}/sms-reminders   (no body)
@@ -1285,7 +1286,10 @@ GET  /api/v1/sessions/{sessionId}/sms-summary
 GET  /api/v1/referrals/{id}/sms-messages          → the thread, both directions
 POST /api/v1/referrals/{id}/sms-messages          { body }  → text them back
 POST /api/v1/referrals/{id}/sms-messages/read     → mark that household read
-GET  /api/v1/sms-messages/unmatched               admin only
+
+GET  /api/v1/sms-messages/attention-summary       admin only → { unreadTotal }
+GET  /api/v1/sms-messages                         admin only → { messages: [...] }
+GET  /api/v1/sms-messages/unmatched               admin only (superseded, see below)
 POST /api/v1/sms-messages/{id}/read               admin only
 ```
 
@@ -1352,6 +1356,55 @@ bank has never heard of.
 They are never dropped. `phone` is on every message, but here it is the only
 thing to act on — there is no referral behind a loose reply to look the
 household up by.
+
+**Superseded by the administrator inbox below**, which returns these same rows
+(with `location: "unmatched"`) alongside everything else. This endpoint is kept
+unchanged rather than removed — build new work against the inbox instead.
+
+### The administrator inbox
+
+Two endpoints, both admin only, neither of which marks anything read:
+
+- `GET /sms-messages/attention-summary` → `{ unreadTotal }`. No message body,
+  household name, phone number or referral data — a count and nothing else.
+  This is the number to badge an admin nav item with; poll it the same way you
+  poll `sms-summary`.
+- `GET /sms-messages` → `{ messages: [...] }`. Every message still within the
+  thirty-day retention window, newest first, whichever household or session it
+  belongs to.
+
+Each row in the full list carries a `location`:
+
+| `location`       | Meaning                                                | Counts towards `attention-summary`? |
+| ---------------- | ------------------------------------------------------ | ----------------------------------- |
+| `unmatched`      | A loose reply — no session behind it.                  | Yes, if unread.                     |
+| `active_session` | Its session is still `planned` or `in_progress`.       | No — the team lead's to read.       |
+| `closed_session` | Its session has since been `confirmed` or `cancelled`. | Yes, if unread.                     |
+
+Only unread `household_reply` rows are ever counted at all — a `reminder`,
+`staff_reply` or `failure` is never unread, so `location` is informational for
+those, not a trigger for attention.
+
+`session` (session id, `sessionDate`, `startTime`, `status`) is included on
+every row except `unmatched`, where it is `null`. `phone` is included only on
+an `unmatched` row — a linked-session row has a referral to open instead.
+
+**`location` reflects the session a message actually arrived about, not
+wherever its referral sits now.** Moving a household to a later session
+afterwards does not retroactively move an old message with it — a reply that
+came in while the household was on a session that has since closed still
+reads as `closed_session`, even though the referral itself may since have been
+moved onto a session that is still open. There is no separate record of who
+picked up an inbox item; a message is still simply read or unread.
+
+`POST /sms-messages/{id}/read` now marks one unread household reply read on a
+loose reply or one from a closed session, not only an unmatched one as
+before. **It refuses (404) a reply still on an `active_session`** — that one
+remains the team leader's to read until the session closes, and this
+endpoint does not offer a way around that; open and mark it read through the
+referral's own thread instead. It is idempotent and touches only the message
+named: it never marks another message and never clears a session's own
+`sms-summary` count.
 
 ### Thirty days
 

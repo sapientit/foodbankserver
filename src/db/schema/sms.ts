@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { check, index, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 import { referrals } from './referrals.ts';
+import { sessions } from './sessions.ts';
 import { users } from './users.ts';
 
 /**
@@ -47,12 +48,24 @@ export const SMS_INBOUND_KINDS = ['household_reply', 'failure'] as const;
  * row is still written — a reply is never dropped — and only administrators
  * see it. The thirty days apply to these too, which is the only thing stopping
  * them accumulating with no referral to count a period from.
+ *
+ * ## `sessionId` is a snapshot, not a lookup
+ *
+ * It is stamped once, at insert, from `referral.sessionId` as it stood at
+ * that moment — never re-derived later. `referrals.sessionId` is a mutable
+ * column that `referrals.service.ts`'s `move()` overwrites in place, so a
+ * message's own session would silently drift to wherever the household ends
+ * up if this were computed by joining through the referral instead. Null
+ * means the same as a null `referralId`: no session was known when the row
+ * was written, which the administrator inbox treats as a loose reply.
  */
 export const smsMessages = sqliteTable(
   'sms_messages',
   {
     id: text('id').primaryKey(),
     referralId: text('referral_id').references(() => referrals.id),
+    /** Snapshot at insert time — see the note above. Null on a loose reply. */
+    sessionId: text('session_id').references(() => sessions.id),
     kind: text('kind').$type<SmsMessageKind>().notNull(),
     /** E.164 where known. Personal data; see the note on this table. */
     phone: text('phone').notNull(),
@@ -79,6 +92,8 @@ export const smsMessages = sqliteTable(
     index('idx_sms_messages_referral').on(table.referralId, table.occurredAt),
     /** The purge scans this, nightly, on the whole table. */
     index('idx_sms_messages_occurred').on(table.occurredAt),
+    /** The administrator inbox joins on this to classify a message's location. */
+    index('idx_sms_messages_session').on(table.sessionId),
     /**
      * SQLite treats NULLs as distinct, so rows without a provider id never
      * collide with each other. Match it with

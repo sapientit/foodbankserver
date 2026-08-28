@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, inArray, isNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNull, or, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.ts';
 import { expectAtMostOne } from '../../db/expect.ts';
 import {
@@ -12,7 +12,10 @@ import {
   REFERRAL_STATUSES_HOLDING_A_PLACE,
   type Referral,
 } from '../../db/schema/referrals.ts';
-import { sessions, type Session } from '../../db/schema/sessions.ts';
+import { sessions, type Session, type SessionStatus } from '../../db/schema/sessions.ts';
+
+/** The two statuses `sms.mapper.ts` treats as "closed" — see its `SmsMessageLocation`. */
+const CLOSED_SESSION_STATUSES: readonly SessionStatus[] = ['confirmed', 'cancelled'];
 
 /**
  * `sms_messages` queries, plus the one statement outside that table this
@@ -88,6 +91,41 @@ export function createSmsRepository(db: Database) {
         .from(smsMessages)
         .where(isNull(smsMessages.referralId))
         .orderBy(asc(smsMessages.occurredAt));
+    },
+
+    /**
+     * Unread household replies needing an administrator, within retention:
+     * unmatched (no session snapshot) or on a session that has since closed
+     * (confirmed or cancelled). A reply still on a planned/in-progress session
+     * is the team leader's business and is deliberately excluded.
+     */
+    async countAttentionNeeded(cutoff: string): Promise<number> {
+      const rows = await db
+        .select({ count: sql<number>`COUNT(*)` })
+        .from(smsMessages)
+        .leftJoin(sessions, eq(smsMessages.sessionId, sessions.id))
+        .where(
+          and(
+            eq(smsMessages.kind, 'household_reply'),
+            isNull(smsMessages.readAt),
+            gte(smsMessages.occurredAt, cutoff),
+            or(
+              isNull(smsMessages.sessionId),
+              inArray(sessions.status, [...CLOSED_SESSION_STATUSES]),
+            ),
+          ),
+        );
+      return rows[0]?.count ?? 0;
+    },
+
+    /** Every message within retention, newest first, with the session it was snapshotted against (null on a loose reply). */
+    async listInbox(cutoff: string): Promise<{ message: SmsMessage; session: Session | null }[]> {
+      return db
+        .select({ message: smsMessages, session: sessions })
+        .from(smsMessages)
+        .leftJoin(sessions, eq(smsMessages.sessionId, sessions.id))
+        .where(gte(smsMessages.occurredAt, cutoff))
+        .orderBy(desc(smsMessages.occurredAt));
     },
 
     /**

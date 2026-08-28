@@ -1,4 +1,5 @@
 import type { SmsMessage } from '../../db/schema/sms.ts';
+import type { Session, SessionStatus } from '../../db/schema/sessions.ts';
 
 /**
  * Response mappers are the output allowlist here too, but **there is no
@@ -9,10 +10,12 @@ import type { SmsMessage } from '../../db/schema/sms.ts';
  * The role split for SMS lives at the *route* level instead: a team lead can
  * reach a referral's thread and reply to it — a deliberate second exception
  * to "a team lead does not see the reason for referral", the same kind as the
- * listener sheet — but the loose-reply routes (`GET /sms-messages/unmatched`,
- * `POST /sms-messages/:id/read`) are `requireRole('admin')` only and a team
- * lead's token never reaches this mapper for one. So once a caller is allowed
- * to see a message at all, they may see the whole of it.
+ * listener sheet — but the administrator-inbox routes (`GET
+ * /sms-messages/unmatched`, `GET /sms-messages`, `GET
+ * /sms-messages/attention-summary`, `POST /sms-messages/:id/read`) are
+ * `requireRole('admin')` only and a team lead's token never reaches this
+ * mapper for one. So once a caller is allowed to see a message at all, they
+ * may see the whole of it.
  */
 
 export interface SmsMessageResponse {
@@ -65,4 +68,92 @@ export interface SmsSendResultResponse {
   readonly reminded: number;
   readonly failed: number;
   readonly alreadyReminded: number;
+}
+
+/** The one number the admin inbox screen makes prominent. */
+export interface SmsAttentionSummaryResponse {
+  readonly unreadTotal: number;
+}
+
+export function toAttentionSummaryResponse(unreadTotal: number): SmsAttentionSummaryResponse {
+  return { unreadTotal };
+}
+
+/**
+ * Where a message sits, for the admin inbox to decide what it can do with it:
+ *
+ * - `unmatched` — no session snapshot. The only location with a `phone`,
+ *   because it is the only one with nothing else to act on it by.
+ * - `active_session` — the session it was snapshotted against is still
+ *   `planned` or `in_progress`. A team leader's business: excluded from
+ *   `SmsAttentionSummary`, and `POST /sms-messages/:id/read` refuses to
+ *   clear one — opened (and marked read) through the referral's own thread
+ *   instead.
+ * - `closed_session` — the session has since gone to `confirmed` or
+ *   `cancelled`. Nobody is running that session's screen any more, so this is
+ *   what makes it an administrator's job.
+ */
+export type SmsMessageLocation = 'unmatched' | 'active_session' | 'closed_session';
+
+export interface SmsInboxSession {
+  readonly id: string;
+  readonly sessionDate: string;
+  readonly startTime: string;
+  readonly status: SessionStatus;
+}
+
+export interface SmsInboxMessageResponse {
+  readonly id: string;
+  readonly referralId: string | null;
+  readonly kind: string;
+  readonly body: string;
+  readonly occurredAt: string;
+  readonly readAt: string | null;
+  readonly location: SmsMessageLocation;
+  readonly session: SmsInboxSession | null;
+  readonly phone?: string;
+}
+
+export function toInboxMessageResponse(row: {
+  message: SmsMessage;
+  session: Session | null;
+}): SmsInboxMessageResponse {
+  const { message, session } = row;
+
+  if (session === null) {
+    return {
+      id: message.id,
+      referralId: message.referralId,
+      kind: message.kind,
+      body: message.body,
+      occurredAt: message.occurredAt,
+      readAt: message.readAt,
+      location: 'unmatched',
+      session: null,
+      phone: message.phone,
+    };
+  }
+
+  const location: SmsMessageLocation =
+    session.status === 'planned' || session.status === 'in_progress'
+      ? 'active_session'
+      : 'closed_session';
+
+  return {
+    id: message.id,
+    referralId: message.referralId,
+    kind: message.kind,
+    body: message.body,
+    occurredAt: message.occurredAt,
+    readAt: message.readAt,
+    location,
+    session: {
+      id: session.id,
+      sessionDate: session.sessionDate,
+      startTime: session.startTime,
+      status: session.status,
+    },
+    // Deliberately no phone here — a linked-session row has a referral to open; only an
+    // unmatched reply has nothing else to act on it by. See INITIAL_SPEC1.txt / API.md.
+  };
 }

@@ -11,10 +11,14 @@ import type { SessionsRepository } from '../sessions/sessions.repository.ts';
 import { normalisePhone, phonesMatch } from '../../core/phone.ts';
 import { composeReminder } from './messages.ts';
 import { sendSms, type SmsProviderConfig } from './provider.ts';
+import { smsRetentionCutoffIso } from './retention.ts';
 import type { WebhookInboundMessage } from './sms.schema.ts';
 import type { SmsRepository } from './sms.repository.ts';
+import { toAttentionSummaryResponse, toInboxMessageResponse } from './sms.mapper.ts';
 import type {
+  SmsAttentionSummaryResponse,
   SmsHouseholdSummary,
+  SmsInboxMessageResponse,
   SmsSendResultResponse,
   SmsSessionSummaryResponse,
 } from './sms.mapper.ts';
@@ -102,6 +106,7 @@ export function createSmsService(deps: SmsServiceDeps) {
         repository.buildInsertMessage({
           id: crypto.randomUUID(),
           referralId: outcome.referralId,
+          sessionId: session.id,
           kind: outcome.success ? 'reminder' : 'failure',
           phone: outcome.phone,
           body: outcome.body,
@@ -266,6 +271,7 @@ export function createSmsService(deps: SmsServiceDeps) {
     const message = await repository.insert({
       id: crypto.randomUUID(),
       referralId,
+      sessionId: referral.sessionId,
       kind: 'staff_reply',
       phone: normalised,
       body,
@@ -292,7 +298,8 @@ export function createSmsService(deps: SmsServiceDeps) {
    */
   async function receiveInbound(payload: WebhookInboundMessage): Promise<void> {
     const now = clock.nowIso();
-    const referralId = await matchReferral(payload.phone, now);
+    const match = await matchReferral(payload.phone, now);
+    const referralId = match?.referralId ?? null;
     // Store whatever normalised form is available; an unnormalisable number
     // is still kept exactly as the provider sent it, same as a failure row.
     const phone = normalisePhone(payload.phone) ?? payload.phone;
@@ -301,6 +308,7 @@ export function createSmsService(deps: SmsServiceDeps) {
       await repository.insert({
         id: crypto.randomUUID(),
         referralId,
+        sessionId: match?.sessionId ?? null,
         kind: 'household_reply',
         phone,
         body: payload.body,
@@ -325,11 +333,14 @@ export function createSmsService(deps: SmsServiceDeps) {
     logger.info('sms received', referralId === null ? {} : { referralId });
   }
 
-  async function matchReferral(rawPhone: string, nowUtc: string): Promise<string | null> {
+  async function matchReferral(
+    rawPhone: string,
+    nowUtc: string,
+  ): Promise<{ referralId: string; sessionId: string } | null> {
     const candidates = await repository.referralsOnUpcomingSessions(nowUtc);
-    for (const { referral } of candidates) {
+    for (const { referral, session } of candidates) {
       if (referral.refereePhone !== null && phonesMatch(referral.refereePhone, rawPhone)) {
-        return referral.id;
+        return { referralId: referral.id, sessionId: session.id };
       }
     }
     return null;
@@ -340,15 +351,42 @@ export function createSmsService(deps: SmsServiceDeps) {
     return repository.listUnmatched();
   }
 
+  /** The one number the admin inbox screen makes prominent. */
+  async function attentionSummary(): Promise<SmsAttentionSummaryResponse> {
+    const cutoff = smsRetentionCutoffIso(clock.nowIso());
+    const unreadTotal = await repository.countAttentionNeeded(cutoff);
+    return toAttentionSummaryResponse(unreadTotal);
+  }
+
+  /** The admin inbox: every message within retention, newest first. */
+  async function listInbox(): Promise<SmsInboxMessageResponse[]> {
+    const cutoff = smsRetentionCutoffIso(clock.nowIso());
+    const rows = await repository.listInbox(cutoff);
+    return rows.map(toInboxMessageResponse);
+  }
+
   /**
-   * Marks one loose reply read. Scoped to loose replies deliberately: a
-   * matched message is marked read by opening its referral's thread instead,
-   * so applying this to one reports it as not found, the same way a team
-   * lead is refused a rejected referral by name.
+   * Clears one inbox item — a loose reply or a reply on a session that has
+   * since closed, not only an unmatched one as before. Deliberately refuses
+   * a reply still on a `planned`/`in_progress` session: that one remains the
+   * team leader's to read until the session closes, the same rule
+   * `SmsMessageLocation` uses to keep it out of the attention count, and
+   * this endpoint must not give an administrator a side door round it.
+   * Scoped to the one row named either way — this never marks a second
+   * message.
    */
-  async function markUnmatchedRead(id: string): Promise<SmsMessage> {
+  async function markMessageRead(id: string): Promise<SmsMessage> {
     const message = await repository.findById(id);
-    if (message?.referralId !== null) {
+    if (message?.kind !== 'household_reply') {
+      throw new NotFoundError('Message not found');
+    }
+
+    const session =
+      message.sessionId === null ? undefined : await sessions.findById(message.sessionId);
+    if (
+      session !== undefined &&
+      (session.status === 'planned' || session.status === 'in_progress')
+    ) {
       throw new NotFoundError('Message not found');
     }
 
@@ -375,7 +413,9 @@ export function createSmsService(deps: SmsServiceDeps) {
     sendStaffReply,
     receiveInbound,
     listUnmatched,
-    markUnmatchedRead,
+    markMessageRead,
+    attentionSummary,
+    listInbox,
   };
 }
 
