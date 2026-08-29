@@ -37,6 +37,7 @@ export function createStockService({ db, repository, clock, logger }: StockServi
     category: string;
     description?: string | undefined;
     shelfNumber: string;
+    lowStockThreshold?: number | null | undefined;
   }): Promise<StockItem> {
     const now = clock.nowIso();
 
@@ -49,6 +50,7 @@ export function createStockService({ db, repository, clock, logger }: StockServi
         description: emptyToNull(input.description),
         shelfNumber: input.shelfNumber,
         shelfSortKey: shelfSortKey(input.shelfNumber),
+        lowStockThreshold: input.lowStockThreshold ?? null,
         isActive: 1,
         createdAt: now,
         updatedAt: now,
@@ -183,6 +185,7 @@ export function createStockService({ db, repository, clock, logger }: StockServi
     createItem,
     updateItem,
     recordStockTake,
+    countLowStock: () => repository.countLowStock(),
   };
 }
 

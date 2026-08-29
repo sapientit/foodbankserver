@@ -21,7 +21,12 @@ interface StockItemResponse {
   readonly category: string;
   readonly description: string | null;
   readonly shelfNumber: string;
+  readonly lowStockThreshold: number | null;
   readonly isActive: boolean;
+}
+
+interface LowStockSummaryResponse {
+  readonly lowStockCount: number;
 }
 
 interface StockLevelResponse extends StockItemResponse {
@@ -71,6 +76,16 @@ export function stockRoutes(): Hono<AppEnv> {
     return c.json(toItemResponse(created), 201);
   });
 
+  /**
+   * A single server-computed count, for the admin dashboard. Admin only,
+   * unlike the rest of the stock routes: the underlying thresholds are a
+   * maintenance concern and a team lead never sees this figure.
+   */
+  routes.get('/stock/items/low-stock-summary', ...admins, async (c) => {
+    const lowStockCount = await serviceFor(c).countLowStock();
+    return c.json<LowStockSummaryResponse>({ lowStockCount });
+  });
+
   routes.patch('/stock/items/:id', ...admins, async (c) => {
     const { isActive, ...rest } = await parseJsonBody(c, stockItemPatchSchema);
     const updated = await serviceFor(c).updateItem(c.req.param('id'), {
@@ -104,6 +119,7 @@ function toItemResponse(item: {
   category: string;
   description: string | null;
   shelfNumber: string;
+  lowStockThreshold: number | null;
   isActive: number;
 }): StockItemResponse {
   return {
@@ -112,6 +128,7 @@ function toItemResponse(item: {
     category: item.category,
     description: item.description,
     shelfNumber: item.shelfNumber,
+    lowStockThreshold: item.lowStockThreshold,
     isActive: item.isActive === 1,
   };
 }

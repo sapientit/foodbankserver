@@ -1,4 +1,4 @@
-import { and, asc, eq, like, sum } from 'drizzle-orm';
+import { and, asc, eq, isNotNull, like, sql, sum } from 'drizzle-orm';
 import type { Database } from '../../db/client.ts';
 import { expectAtMostOne } from '../../db/expect.ts';
 import {
@@ -64,6 +64,38 @@ export function createStockRepository(db: Database) {
         .orderBy(...orderColumns(order));
 
       return rows.map((row) => ({ item: row.item, quantityOnHand: Number(row.total ?? 0) }));
+    },
+
+    /**
+     * How many active items are currently below their own threshold — the
+     * admin dashboard figure. One round trip: the ledger sum per item is a
+     * subquery, filtered by `HAVING` against that item's own
+     * `low_stock_threshold`, and the outer query only ever returns the count,
+     * never a row per item.
+     *
+     * An item with no threshold set is never "low" — that is what leaving the
+     * threshold unset means — so it is excluded before the sum is even taken.
+     *
+     * `SUM` over an item with no ledger rows at all (never counted) is SQL
+     * `NULL`, and `NULL < threshold` is `NULL`, which `HAVING` treats as
+     * false — silently dropping an uncounted item from the count even though
+     * `listLevels` reports it as `quantityOnHand: 0`. `COALESCE` to zero
+     * keeps the two in agreement.
+     */
+    async countLowStock(): Promise<number> {
+      const low = db
+        .select({ id: stockItems.id })
+        .from(stockItems)
+        .leftJoin(stockLedger, eq(stockLedger.stockItemId, stockItems.id))
+        .where(and(eq(stockItems.isActive, 1), isNotNull(stockItems.lowStockThreshold)))
+        .groupBy(stockItems.id, stockItems.lowStockThreshold)
+        .having(
+          sql`coalesce(${sum(stockLedger.quantityDelta)}, 0) < ${stockItems.lowStockThreshold}`,
+        )
+        .as('low_stock_items');
+
+      const rows = await db.select({ count: sql<number>`COUNT(*)` }).from(low);
+      return rows[0]?.count ?? 0;
     },
 
     async levelFor(stockItemId: string): Promise<number> {

@@ -472,6 +472,7 @@ describe('stockRequirementLines (pure)', () => {
       category: 'Tinned Goods',
       shelfNumber: 'A1',
       shelfSortKey: 'A00000001',
+      lowStockThreshold: null,
       isActive: 1,
       createdAt: '2026-01-01T00:00:00.000Z',
       updatedAt: '2026-01-01T00:00:00.000Z',

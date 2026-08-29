@@ -21,6 +21,7 @@ export const stockItemInputSchema = z.object({
   category: z.string().trim().min(1).max(MAX_CATEGORY),
   description: z.string().trim().max(MAX_DESCRIPTION).optional(),
   shelfNumber: z.string().trim().min(1).max(20),
+  lowStockThreshold: z.number().int().min(0).max(100000).nullable().optional(),
 });
 
 export const stockItemPatchSchema = z
@@ -32,6 +33,9 @@ export const stockItemPatchSchema = z
     description: z.string().trim().max(MAX_DESCRIPTION).nullable(),
     shelfNumber: z.string().trim().min(1).max(20),
     isActive: z.boolean(),
+    // Nullable too: clearing the threshold is how a client stops watching an
+    // item, and `null` is how it says so — same pattern as `description`.
+    lowStockThreshold: z.number().int().min(0).max(100000).nullable(),
   })
   .partial()
   .refine((value) => Object.keys(value).length > 0, 'at least one field must be supplied');

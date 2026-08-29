@@ -72,6 +72,7 @@ interface ItemFields {
   readonly category: string;
   readonly description: string | null;
   readonly shelfNumber: string;
+  readonly lowStockThreshold: number | null;
 }
 
 async function itemsResponse(testApp: TestApp, token: string, order?: string): Promise<Response> {
@@ -93,17 +94,38 @@ beforeEach(async () => {
 });
 
 describe('stock levels', () => {
-  it('does not expose units or low-stock warnings', async () => {
+  it('does not expose a unit, and reports no threshold as null', async () => {
     const { testApp, token } = await adminApp();
     await createItem(testApp, token, 'Beans', 'A2');
 
     const [level] = await levels(testApp, token);
     expect(level).toEqual(
-      expect.objectContaining({ name: 'Beans', shelfNumber: 'A2', quantityOnHand: 0 }),
+      expect.objectContaining({
+        name: 'Beans',
+        shelfNumber: 'A2',
+        quantityOnHand: 0,
+        lowStockThreshold: null,
+      }),
     );
     expect(level).not.toHaveProperty('unit');
-    expect(level).not.toHaveProperty('lowStockThreshold');
     expect(level).not.toHaveProperty('isLow');
+  });
+
+  it('carries a set low stock threshold through /stock/levels, not just /stock/items', async () => {
+    const { testApp, token } = await adminApp();
+    await testApp.request('/api/v1/stock/items', {
+      method: 'POST',
+      headers: json(token),
+      body: JSON.stringify({
+        name: 'Beans',
+        category: 'Tinned Goods',
+        shelfNumber: 'A2',
+        lowStockThreshold: 5,
+      }),
+    });
+
+    const [level] = await levels(testApp, token);
+    expect(level).toEqual(expect.objectContaining({ name: 'Beans', lowStockThreshold: 5 }));
   });
 
   it('derives the stock level as the sum of ledger entries', async () => {
@@ -503,6 +525,40 @@ describe('stock authorisation', () => {
 
     expect(duplicate.status).toBe(409);
   });
+
+  it('lets a team lead read /stock/items with the threshold field present, even though it cannot write it', async () => {
+    const { testApp, token } = await adminApp();
+    await createItem(testApp, token, 'Sugar', 'A1', 'Baking');
+
+    const { lead, accessToken } = await teamLeadApp();
+
+    const response = await lead.request('/api/v1/stock/items', {
+      headers: authHeaders(accessToken),
+    });
+    expect(response.status).toBe(200);
+    const body: { items: ItemFields[] } = await response.json();
+    expect(body.items[0]).toEqual(
+      expect.objectContaining({ name: 'Sugar', lowStockThreshold: null }),
+    );
+  });
+
+  it('refuses a team lead the low-stock summary, admin only unlike the rest of the stock routes', async () => {
+    const { testApp, token } = await adminApp();
+    await createItem(testApp, token, 'Sugar', 'A1', 'Baking');
+
+    const { lead, accessToken } = await teamLeadApp();
+
+    const asLead = await lead.request('/api/v1/stock/items/low-stock-summary', {
+      headers: authHeaders(accessToken),
+    });
+    expect(asLead.status).toBe(403);
+
+    const asAdmin = await testApp.request('/api/v1/stock/items/low-stock-summary', {
+      headers: authHeaders(token),
+    });
+    expect(asAdmin.status).toBe(200);
+    expect(await asAdmin.json()).toEqual({ lowStockCount: 0 });
+  });
 });
 
 describe('list ordering', () => {
@@ -723,5 +779,168 @@ describe('stock item fields', () => {
     // And the item is untouched by any of them.
     const [listed] = await items(testApp, token);
     expect(listed?.category).toBe('Baking');
+  });
+});
+
+describe('low stock threshold', () => {
+  it('round-trips a threshold through create and the item list, then clears it to null on patch', async () => {
+    const { testApp, token } = await adminApp();
+    const response = await testApp.request('/api/v1/stock/items', {
+      method: 'POST',
+      headers: json(token),
+      body: JSON.stringify({
+        name: 'Sugar',
+        category: 'Baking',
+        shelfNumber: 'A1',
+        lowStockThreshold: 5,
+      }),
+    });
+    expect(response.status).toBe(201);
+    const created: ItemFields = await response.json();
+    expect(created.lowStockThreshold).toBe(5);
+
+    const [listed] = await items(testApp, token);
+    expect(listed?.lowStockThreshold).toBe(5);
+
+    const patchedToEight = await testApp.request(`/api/v1/stock/items/${created.id}`, {
+      method: 'PATCH',
+      headers: json(token),
+      body: JSON.stringify({ lowStockThreshold: 8 }),
+    });
+    expect(patchedToEight.status).toBe(200);
+    const afterEight: ItemFields = await patchedToEight.json();
+    expect(afterEight.lowStockThreshold).toBe(8);
+
+    const patchedToNull = await testApp.request(`/api/v1/stock/items/${created.id}`, {
+      method: 'PATCH',
+      headers: json(token),
+      body: JSON.stringify({ lowStockThreshold: null }),
+    });
+    expect(patchedToNull.status).toBe(200);
+    const afterNull: ItemFields = await patchedToNull.json();
+    expect(afterNull.lowStockThreshold).toBeNull();
+
+    // Cleared on the persisted row too, not just in the response just handed back.
+    const [relisted] = await items(testApp, token);
+    expect(relisted?.lowStockThreshold).toBeNull();
+  });
+
+  it('defaults an omitted threshold on create to null, not zero or an error', async () => {
+    const { testApp, token } = await adminApp();
+    const id = await createItem(testApp, token, 'Sugar', 'A1', 'Baking');
+
+    const [listed] = await items(testApp, token);
+    expect(listed?.id).toBe(id);
+    expect(listed?.lowStockThreshold).toBeNull();
+  });
+});
+
+describe('the low-stock summary', () => {
+  async function lowStockCount(testApp: TestApp, token: string): Promise<number> {
+    const response = await testApp.request('/api/v1/stock/items/low-stock-summary', {
+      headers: authHeaders(token),
+    });
+    expect(response.status).toBe(200);
+    const body: { lowStockCount: number } = await response.json();
+    return body.lowStockCount;
+  }
+
+  async function createItemWithThreshold(
+    testApp: TestApp,
+    token: string,
+    name: string,
+    shelfNumber: string,
+    lowStockThreshold: number,
+  ): Promise<string> {
+    const response = await testApp.request('/api/v1/stock/items', {
+      method: 'POST',
+      headers: json(token),
+      body: JSON.stringify({ name, category: 'Tinned Goods', shelfNumber, lowStockThreshold }),
+    });
+    expect(response.status).toBe(201);
+    const { id }: { id: string } = await response.json();
+    return id;
+  }
+
+  it('reports zero when nothing is below its threshold', async () => {
+    const { testApp, token } = await adminApp();
+    await createItem(testApp, token, 'Sugar', 'A1', 'Baking');
+
+    expect(await lowStockCount(testApp, token)).toBe(0);
+  });
+
+  it('counts an item that has never been stock-taken as zero, not as excluded', async () => {
+    const { testApp, token } = await adminApp();
+    await createItemWithThreshold(testApp, token, 'Sugar', 'A1', 5);
+
+    // No `POST /stock/take` at all: the ledger has no rows for this item, so
+    // SUM(quantity_delta) is SQL NULL. `/stock/levels` coalesces that to a
+    // quantityOnHand of 0, which is below the threshold of 5 and must count.
+    expect(await lowStockCount(testApp, token)).toBe(1);
+  });
+
+  it('counts an item whose quantity on hand has fallen below its threshold', async () => {
+    const { testApp, token } = await adminApp();
+    const sugar = await createItemWithThreshold(testApp, token, 'Sugar', 'A1', 5);
+    await takeCount(testApp, token, [{ stockItemId: sugar, countedQuantity: 3 }]);
+
+    expect(await lowStockCount(testApp, token)).toBe(1);
+  });
+
+  it('does not count an item sitting exactly at its threshold, the strict less-than boundary', async () => {
+    const { testApp, token } = await adminApp();
+    const sugar = await createItemWithThreshold(testApp, token, 'Sugar', 'A1', 5);
+    await takeCount(testApp, token, [{ stockItemId: sugar, countedQuantity: 5 }]);
+
+    expect(await lowStockCount(testApp, token)).toBe(0);
+  });
+
+  it('counts an item one unit below its threshold, the other side of that boundary', async () => {
+    const { testApp, token } = await adminApp();
+    const sugar = await createItemWithThreshold(testApp, token, 'Sugar', 'A1', 5);
+    await takeCount(testApp, token, [{ stockItemId: sugar, countedQuantity: 4 }]);
+
+    expect(await lowStockCount(testApp, token)).toBe(1);
+  });
+
+  it('never counts an item with no threshold set, however low its quantity actually is', async () => {
+    const { testApp, token } = await adminApp();
+    const sugar = await createItem(testApp, token, 'Sugar', 'A1', 'Baking');
+    await takeCount(testApp, token, [{ stockItemId: sugar, countedQuantity: 1 }]);
+
+    expect(await lowStockCount(testApp, token)).toBe(0);
+  });
+
+  it('does not count an inactive item even though its quantity is below its threshold', async () => {
+    const { testApp, token } = await adminApp();
+    const sugar = await createItemWithThreshold(testApp, token, 'Sugar', 'A1', 5);
+    await takeCount(testApp, token, [{ stockItemId: sugar, countedQuantity: 3 }]);
+
+    const deactivated = await testApp.request(`/api/v1/stock/items/${sugar}`, {
+      method: 'PATCH',
+      headers: json(token),
+      body: JSON.stringify({ isActive: false }),
+    });
+    expect(deactivated.status).toBe(200);
+
+    expect(await lowStockCount(testApp, token)).toBe(0);
+  });
+
+  it('sums every low item, not just whether at least one exists', async () => {
+    const { testApp, token } = await adminApp();
+    const sugar = await createItemWithThreshold(testApp, token, 'Sugar', 'A1', 5);
+    const beans = await createItemWithThreshold(testApp, token, 'Beans', 'A2', 10);
+    const flour = await createItemWithThreshold(testApp, token, 'Flour', 'A3', 3);
+    // Not low: comfortably above its own threshold.
+    const rice = await createItemWithThreshold(testApp, token, 'Rice', 'A4', 2);
+
+    await takeCount(testApp, token, [
+      { stockItemId: sugar, countedQuantity: 3 }, // below 5: low
+      { stockItemId: beans, countedQuantity: 9 }, // below 10: low
+      { stockItemId: flour, countedQuantity: 3 }, // at 3: not low
+      { stockItemId: rice, countedQuantity: 20 }, // above 2: not low
+    ]);
+
+    expect(await lowStockCount(testApp, token)).toBe(2);
   });
 });

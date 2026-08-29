@@ -57,6 +57,15 @@ export const stockItems = sqliteTable(
     shelfNumber: text('shelf_number').notNull(),
     /** Zero-padded so 'A2' sorts before 'A10'. Computed on write in TypeScript. */
     shelfSortKey: text('shelf_sort_key').notNull(),
+
+    /**
+     * Below this, the item counts towards the low-stock summary. Optional,
+     * item by item: an item nobody wants watched is simply left without one
+     * rather than defaulting to a warning nobody set. `quantityOnHand <
+     * lowStockThreshold` (strict) is what "low" means.
+     */
+    lowStockThreshold: integer('low_stock_threshold'),
+
     isActive: integer('is_active').notNull().default(1),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),

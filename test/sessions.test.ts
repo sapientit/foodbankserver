@@ -370,10 +370,16 @@ describe('session occupancy', () => {
     const response = await testApp.request(`/api/v1/sessions/${built.sessionId}`, {
       headers: authHeaders(accessToken),
     });
-    const body: { capacity: number; booked: number } = await response.json();
+    const body: { capacity: number; booked: number; deliveryBooked: number } =
+      await response.json();
 
     expect(body.booked).toBe(0);
     expect(body.capacity).toBe(25);
+    // `bookedFor` queries `referrals` directly with no join, so zero matching
+    // rows means `SUM()` returns SQL `NULL`, not `0` — unlike `COUNT()`. This
+    // is what catches a regression where that `NULL` reaches the response as
+    // `null` instead of being coalesced to `0`.
+    expect(body.deliveryBooked).toBe(0);
   });
 
   it('counts households rather than people', async () => {
@@ -413,6 +419,58 @@ describe('session occupancy', () => {
     const body: { booked: number } = await response.json();
 
     expect(body.booked).toBe(1);
+  });
+
+  it('stops counting a delivery referral toward deliveryBooked once it is cancelled', async () => {
+    const testApp = buildTestApp({ clock: fixedClock('2026-08-04T09:00:00.000Z') });
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const built = await setUpReferralWorld(testApp, accessToken, { deliveryCapacity: 5 });
+
+    const first = await submitReferral(
+      testApp,
+      built,
+      { isDelivery: true },
+      { clientIp: '203.0.113.13' },
+    );
+    await submitReferral(testApp, built, { isDelivery: true }, { clientIp: '203.0.113.14' });
+
+    const cancelled = await testApp.request(`/api/v1/referrals/${first.id}/cancel`, {
+      method: 'POST',
+      headers: authHeaders(accessToken),
+    });
+    expect(cancelled.status).toBe(200);
+
+    const response = await testApp.request(`/api/v1/sessions/${built.sessionId}`, {
+      headers: authHeaders(accessToken),
+    });
+    const body: { booked: number; deliveryBooked: number } = await response.json();
+
+    // Cancelling a delivery referral gives its place back the same way a
+    // collection referral's does, not just from `booked` but from
+    // `deliveryBooked` too.
+    expect(body.booked).toBe(1);
+    expect(body.deliveryBooked).toBe(1);
+  });
+
+  it('reports a non-zero deliveryBooked on a single session response with a mix of referrals', async () => {
+    const testApp = buildTestApp({ clock: fixedClock('2026-08-04T09:00:00.000Z') });
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const built = await setUpReferralWorld(testApp, accessToken, { deliveryCapacity: 5 });
+
+    await submitReferral(testApp, built, { isDelivery: false }, { clientIp: '203.0.113.15' });
+    await submitReferral(testApp, built, { isDelivery: true }, { clientIp: '203.0.113.16' });
+    await submitReferral(testApp, built, { isDelivery: true }, { clientIp: '203.0.113.17' });
+
+    // Exercises `bookedFor`, the no-join query behind every single-session
+    // response (create/patch/cancel/get) — its zero case is covered above,
+    // this is its non-zero case.
+    const response = await testApp.request(`/api/v1/sessions/${built.sessionId}`, {
+      headers: authHeaders(accessToken),
+    });
+    const body: { booked: number; deliveryBooked: number } = await response.json();
+
+    expect(body.booked).toBe(3);
+    expect(body.deliveryBooked).toBe(2);
   });
 
   it('includes a full session in the staff list rather than hiding it', async () => {
@@ -474,6 +532,126 @@ describe('session occupancy', () => {
     // Every session carries a count, and only the referred-to one is non-zero.
     expect(body.sessions.every((s) => typeof s.booked === 'number')).toBe(true);
     expect(body.sessions.filter((s) => s.booked > 0).map((s) => s.id)).toEqual([built.sessionId]);
+  });
+
+  it('reports deliveryBooked separately from booked in the list when only some referrals are deliveries', async () => {
+    const testApp = buildTestApp({ clock: fixedClock('2026-08-04T09:00:00.000Z') });
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const built = await setUpReferralWorld(testApp, accessToken, { deliveryCapacity: 5 });
+
+    await submitReferral(testApp, built, { isDelivery: false }, { clientIp: '203.0.113.20' });
+    await submitReferral(testApp, built, { isDelivery: false }, { clientIp: '203.0.113.21' });
+    await submitReferral(testApp, built, { isDelivery: true }, { clientIp: '203.0.113.22' });
+
+    const response = await testApp.request('/api/v1/sessions', {
+      headers: authHeaders(accessToken),
+    });
+    const body: { sessions: { id: string; booked: number; deliveryBooked: number }[] } =
+      await response.json();
+    const session = body.sessions.find((s) => s.id === built.sessionId);
+
+    // Not equal to `booked` — a bug that copied one aggregate into the other
+    // would still pass a test that only checked `deliveryBooked` was a number.
+    expect(session).toMatchObject({ booked: 3, deliveryBooked: 1 });
+  });
+
+  it('reports deliveryBooked as zero in the list when a session has bookings but none are deliveries', async () => {
+    const testApp = buildTestApp({ clock: fixedClock('2026-08-04T09:00:00.000Z') });
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const built = await setUpReferralWorld(testApp, accessToken, { deliveryCapacity: 5 });
+
+    await submitReferral(testApp, built, { isDelivery: false }, { clientIp: '203.0.113.23' });
+    await submitReferral(testApp, built, { isDelivery: false }, { clientIp: '203.0.113.24' });
+
+    const response = await testApp.request('/api/v1/sessions', {
+      headers: authHeaders(accessToken),
+    });
+    const body: { sessions: { id: string; booked: number; deliveryBooked: number }[] } =
+      await response.json();
+    const session = body.sessions.find((s) => s.id === built.sessionId);
+
+    // `booked` is non-zero while `deliveryBooked` stays zero — the case a bug
+    // like "always report booked's value" would fail.
+    expect(session).toMatchObject({ booked: 2, deliveryBooked: 0 });
+  });
+
+  it('keeps each session’s own deliveryBooked count separate from the others in the same list', async () => {
+    const testApp = buildTestApp({ clock: fixedClock('2026-08-04T09:00:00.000Z') });
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const built = await setUpReferralWorld(testApp, accessToken, { deliveryCapacity: 5 });
+
+    const secondSession = await testApp.request('/api/v1/sessions', {
+      method: 'POST',
+      headers: { ...authHeaders(accessToken), 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sessionDate: '2026-08-12',
+        startTime: '10:00',
+        durationMinutes: 120,
+        location: 'Church Hall',
+        deliveryCapacity: 5,
+      }),
+    });
+    expect(secondSession.status).toBe(201);
+    const { id: secondSessionId }: { id: string } = await secondSession.json();
+
+    // First session: one delivery.
+    await submitReferral(testApp, built, { isDelivery: true }, { clientIp: '203.0.113.25' });
+    // Second session: two deliveries — a `GROUP BY` mistake that pooled every
+    // session's deliveries together would report the total (3) on both rows
+    // rather than each session's own count.
+    await submitReferral(
+      testApp,
+      built,
+      { sessionId: secondSessionId, isDelivery: true },
+      { clientIp: '203.0.113.26' },
+    );
+    await submitReferral(
+      testApp,
+      built,
+      { sessionId: secondSessionId, isDelivery: true },
+      { clientIp: '203.0.113.27' },
+    );
+
+    const response = await testApp.request('/api/v1/sessions', {
+      headers: authHeaders(accessToken),
+    });
+    const body: { sessions: { id: string; deliveryBooked: number }[] } = await response.json();
+
+    expect(body.sessions.find((s) => s.id === built.sessionId)).toMatchObject({
+      deliveryBooked: 1,
+    });
+    expect(body.sessions.find((s) => s.id === secondSessionId)).toMatchObject({
+      deliveryBooked: 2,
+    });
+  });
+
+  it('does not count a cancelled delivery referral toward deliveryBooked in the list', async () => {
+    const testApp = buildTestApp({ clock: fixedClock('2026-08-04T09:00:00.000Z') });
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const built = await setUpReferralWorld(testApp, accessToken, { deliveryCapacity: 5 });
+
+    const cancelledOne = await submitReferral(
+      testApp,
+      built,
+      { isDelivery: true },
+      { clientIp: '203.0.113.28' },
+    );
+    await submitReferral(testApp, built, { isDelivery: true }, { clientIp: '203.0.113.29' });
+
+    const cancelled = await testApp.request(`/api/v1/referrals/${cancelledOne.id}/cancel`, {
+      method: 'POST',
+      headers: authHeaders(accessToken),
+    });
+    expect(cancelled.status).toBe(200);
+
+    const response = await testApp.request('/api/v1/sessions', {
+      headers: authHeaders(accessToken),
+    });
+    const body: { sessions: { id: string; booked: number; deliveryBooked: number }[] } =
+      await response.json();
+    const session = body.sessions.find((s) => s.id === built.sessionId);
+
+    expect(session).toMatchObject({ booked: 1, deliveryBooked: 1 });
   });
 
   it('does not publish the booked count to the unauthenticated list', async () => {
@@ -730,9 +908,13 @@ describe('delivery fields', () => {
       id: string;
       deliveryWindowStart: string | null;
       deliveryWindowEnd: string | null;
+      deliveryBooked: number;
     } = await created.json();
     expect(body.deliveryWindowStart).toBe('17:00');
     expect(body.deliveryWindowEnd).toBe('17:30');
+    // A brand-new ad hoc session has no referrals yet, so `createAdHoc`
+    // reports it without querying — this is that create-response value.
+    expect(body.deliveryBooked).toBe(0);
 
     const fetched = await testApp.request(`/api/v1/sessions/${body.id}`, {
       headers: authHeaders(token),

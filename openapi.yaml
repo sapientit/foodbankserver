@@ -2300,7 +2300,7 @@ paths:
           application/json:
             schema:
               type: object
-              # Unit and low-stock controls are deliberately not part of stock maintenance.
+              # Unit is deliberately not part of stock maintenance.
               required: [name, category, shelfNumber]
               properties:
                 name: { type: string, maxLength: 120 }
@@ -2313,6 +2313,13 @@ paths:
                     `tinned goods` comes back as `Tinned Goods`.
                 description: { type: string, maxLength: 200 }
                 shelfNumber: { type: string, maxLength: 20, examples: ['A1', '12b'] }
+                lowStockThreshold:
+                  type: integer
+                  minimum: 0
+                  description: >-
+                    Optional. Below this figure the item counts towards the
+                    low-stock summary. Omitted or absent means the item is not
+                    watched.
       responses:
         '201':
           description: Created
@@ -2320,6 +2327,27 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/StockItem' }
         '409': { description: An item with that name already exists }
+
+  /api/v1/stock/items/low-stock-summary:
+    get:
+      tags: [Stock]
+      summary: Count of currently low-stock items
+      description: |
+        Admin only. A single server-computed figure — how many active items
+        with a threshold set currently have `quantityOnHand` below it — so an
+        administrator can see at a glance whether anything needs reordering
+        without reading down every row. An item with no threshold set never
+        counts, whatever its level.
+      responses:
+        '200':
+          description: The count
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [lowStockCount]
+                properties:
+                  lowStockCount: { type: integer, minimum: 0 }
 
   /api/v1/stock/items/{id}:
     parameters: [{ $ref: '#/components/parameters/Id' }]
@@ -2344,6 +2372,10 @@ paths:
                     `null` clears it, and so does an empty string — the two are
                     the same thing and both read back as `null`.
                 shelfNumber: { type: string }
+                lowStockThreshold:
+                  type: [integer, 'null']
+                  minimum: 0
+                  description: '`null` clears it, stopping the item being watched.'
                 isActive: { type: boolean }
       responses:
         '200':
@@ -3533,6 +3565,7 @@ components:
           deliveryCapacity,
           capacity,
           booked,
+          deliveryBooked,
           status,
           cancelledReason,
           isCustomised,
@@ -3593,6 +3626,13 @@ components:
             rejected referrals give their place back. An admin may
             deliberately exceed capacity when moving someone, so this can be
             greater than `capacity`.
+        deliveryBooked:
+          type: integer
+          description: >
+            Deliveries among `booked`'s referrals — directly comparable with
+            `deliveryCapacity`. Derived the same way `booked` is, off the
+            same referrals, so it can exceed `deliveryCapacity` for the same
+            reason `booked` can exceed `capacity`.
         status: { type: string, enum: [planned, in_progress, confirmed, cancelled] }
         cancelledReason: { type: [string, 'null'] }
         isCustomised: { type: boolean }
@@ -4479,8 +4519,8 @@ components:
 
     StockItem:
       type: object
-      # Unit and low-stock controls are deliberately not part of stock maintenance.
-      required: [id, name, category, description, shelfNumber, isActive]
+      # Unit is deliberately not part of stock maintenance.
+      required: [id, name, category, description, shelfNumber, lowStockThreshold, isActive]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
@@ -4502,6 +4542,13 @@ components:
             What the item is, in the charity's words. Printed on the pick list
             under the item name. `null` where the name says everything.
         shelfNumber: { type: string }
+        lowStockThreshold:
+          type: [integer, 'null']
+          minimum: 0
+          description: >-
+            Below this figure the item counts towards the low-stock summary.
+            `null` where nobody has asked for the item to be watched — that is
+            the default, not a warning level of zero.
         isActive: { type: boolean }
 
     StockLevel:

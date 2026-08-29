@@ -1,0 +1,17 @@
+-- `low_stock_threshold` returns to `stock_items`. `0010` dropped it alongside
+-- `unit` on the reasoning that the charity did not want low-stock warnings;
+-- the charity now does, but `unit` was never wanted back and stays dropped.
+-- See `INITIAL_SPEC1.txt`, "Stock maintenance".
+--
+-- Nullable, no default: the threshold is optional item by item, and an item
+-- nobody wants watched is simply left without one rather than defaulting to
+-- a warning nobody set. `quantityOnHand < lowStockThreshold` (strict) is what
+-- "low" means, computed from the ledger — there is nothing to backfill.
+--
+-- A plain add, not a rebuild: check `0010`'s header before accepting anything
+-- drizzle-kit proposes for this table. `stock_items` is a foreign-key parent
+-- to `stock_ledger`, `purchase_lines`, `stock_take_lines` and `parcel_lines`,
+-- and the drop-and-recreate drizzle-kit reaches for when it judges a rebuild
+-- necessary is justified by "the table is empty" — true only of a fresh
+-- database and the test run.
+ALTER TABLE `stock_items` ADD `low_stock_threshold` integer;

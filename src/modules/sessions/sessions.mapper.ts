@@ -24,6 +24,12 @@ export interface SessionResponse {
    * directly comparable with `capacity`. Derived, never stored.
    */
   readonly booked: number;
+  /**
+   * Deliveries among `booked`'s referrals — directly comparable with
+   * `deliveryCapacity`. Derived the same way `booked` is, off the same
+   * referrals.
+   */
+  readonly deliveryBooked: number;
   readonly status: string;
   readonly cancelledReason: string | null;
   readonly isCustomised: boolean;
@@ -45,7 +51,11 @@ export interface SessionResponse {
  * sensible default, and an optional parameter would let a call site quietly
  * omit it and report every session as empty.
  */
-export function toSessionResponse({ session, booked }: SessionWithBooked): SessionResponse {
+export function toSessionResponse({
+  session,
+  booked,
+  deliveryBooked,
+}: SessionWithBooked): SessionResponse {
   return {
     id: session.id,
     sessionDate: session.sessionDate,
@@ -55,6 +65,7 @@ export function toSessionResponse({ session, booked }: SessionWithBooked): Sessi
     location: session.location,
     capacity: session.capacity,
     booked,
+    deliveryBooked,
     status: session.status,
     cancelledReason: session.cancelledReason,
     isCustomised: session.isCustomised === 1,

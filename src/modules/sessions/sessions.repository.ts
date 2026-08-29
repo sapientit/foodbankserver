@@ -44,15 +44,17 @@ export interface SessionListFilter {
 }
 
 /**
- * A session plus how many households are booked onto it.
+ * A session plus how many households are booked onto it, and how many of
+ * those are deliveries.
  *
  * Carried as a pair rather than folded into `Session`, because `Session` is the
- * table row and `booked` is derived. Keeping them apart is what stops a derived
- * count being written back by accident.
+ * table row and both counts are derived. Keeping them apart is what stops a
+ * derived count being written back by accident.
  */
 export interface SessionWithBooked {
   readonly session: Session;
   readonly booked: number;
+  readonly deliveryBooked: number;
 }
 
 export function createSessionsRepository(db: Database) {
@@ -127,6 +129,10 @@ export function createSessionsRepository(db: Database) {
      * Cancelled and rejected referrals do not occupy a place, hence the status
      * condition inside the join rather than in the `WHERE`: putting it outside
      * would drop sessions whose only referrals are cancelled.
+     *
+     * `deliveryBooked` is the same join split further by `isDelivery`, not a
+     * second join — see `listPubliclyAvailable` below, which computes it the
+     * same way.
      */
     async list(filter: SessionListFilter): Promise<SessionWithBooked[]> {
       const conditions: SQL[] = [];
@@ -135,7 +141,11 @@ export function createSessionsRepository(db: Database) {
       if (filter.status !== undefined) conditions.push(eq(sessions.status, filter.status));
 
       return db
-        .select({ session: sessions, booked: count(referrals.id) })
+        .select({
+          session: sessions,
+          booked: count(referrals.id),
+          deliveryBooked: sql<number>`sum(case when ${referrals.isDelivery} = 1 then 1 else 0 end)`,
+        })
         .from(sessions)
         .leftJoin(referrals, and(eq(referrals.sessionId, sessions.id), holdsAPlace))
         .where(conditions.length === 0 ? undefined : and(...conditions))
@@ -143,13 +153,27 @@ export function createSessionsRepository(db: Database) {
         .orderBy(asc(sessions.startsAtUtc));
     },
 
-    /** Households booked onto one session. For single-resource responses. */
-    async bookedFor(sessionId: string): Promise<number> {
+    /**
+     * Households booked onto one session, and how many are deliveries. For
+     * single-resource responses.
+     *
+     * **No join here** — unlike `list()`, this queries `referrals` directly,
+     * so a session with zero matching referrals produces zero input rows.
+     * `count()` over zero rows is `0`, but `SUM()` over zero rows is SQL
+     * `NULL`, not `0` — the two aggregates do not agree on an empty group.
+     * The `?? 0` on `deliveryBooked` is what stops that `NULL` reaching a
+     * caller as `null`/`NaN`.
+     */
+    async bookedFor(sessionId: string): Promise<{ booked: number; deliveryBooked: number }> {
       const rows = await db
-        .select({ booked: count() })
+        .select({
+          booked: count(),
+          deliveryBooked: sql<number>`sum(case when ${referrals.isDelivery} = 1 then 1 else 0 end)`,
+        })
         .from(referrals)
         .where(and(eq(referrals.sessionId, sessionId), holdsAPlace));
-      return rows[0]?.booked ?? 0;
+      const row = rows[0];
+      return { booked: row?.booked ?? 0, deliveryBooked: row?.deliveryBooked ?? 0 };
     },
 
     /**

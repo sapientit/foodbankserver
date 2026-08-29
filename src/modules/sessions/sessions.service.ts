@@ -34,7 +34,8 @@ export function createSessionsService({ repository, clock }: SessionsServiceDeps
    * exists for the list, where query count would otherwise scale with results.
    */
   async function withBooked(session: Session): Promise<SessionWithBooked> {
-    return { session, booked: await repository.bookedFor(session.id) };
+    const { booked, deliveryBooked } = await repository.bookedFor(session.id);
+    return { session, booked, deliveryBooked };
   }
 
   async function createRecurring(input: RecurringSessionInput): Promise<RecurringSession> {
@@ -201,7 +202,7 @@ export function createSessionsService({ repository, clock }: SessionsServiceDeps
       throw new ConflictError('This session has been confirmed and can no longer be cancelled');
     }
 
-    const booked = await repository.bookedFor(id);
+    const { booked } = await repository.bookedFor(id);
     if (booked > 0) {
       throw new ConflictError(
         'Move or cancel the households on this session before cancelling the session itself',
@@ -230,10 +231,11 @@ export function createSessionsService({ repository, clock }: SessionsServiceDeps
     createRecurring,
     updateRecurring,
     // A session that has just been created can have no referrals yet, so this
-    // is the one path where the count is known without asking.
+    // is the one path where both counts are known without asking.
     createAdHoc: async (input: AdHocSessionInput): Promise<SessionWithBooked> => ({
       session: await createAdHoc(input),
       booked: 0,
+      deliveryBooked: 0,
     }),
     updateSession: async (id: string, patch: SessionPatch) =>
       withBooked(await updateSession(id, patch)),
