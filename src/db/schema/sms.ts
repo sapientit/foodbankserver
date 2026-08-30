@@ -102,6 +102,13 @@ export const smsMessages = sqliteTable(
     index('idx_sms_messages_referral').on(table.referralId, table.occurredAt),
     /** The purge scans this, nightly, on the whole table. */
     index('idx_sms_messages_occurred').on(table.occurredAt),
+    /**
+     * The administrator inbox's "does this number have anything besides a
+     * reminder" check, and its final scan once a number qualifies — both key
+     * off `phone` within the retention window. See `sms.repository.ts`,
+     * `listInbox`.
+     */
+    index('idx_sms_messages_phone').on(table.phone, table.occurredAt),
     /** The administrator inbox joins on this to classify a message's location. */
     index('idx_sms_messages_session').on(table.sessionId),
     /**

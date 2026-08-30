@@ -2093,15 +2093,19 @@ paths:
   /api/v1/sms-messages:
     get:
       tags: [SMS]
-      summary: Every retained text message
+      summary: Phone numbers with something on them besides a sent reminder
       description: >
-        **Admin only.** Every message still within the thirty-day retention
-        period, newest first, whichever household or session it belongs to —
-        the reminders, the replies, the failures and the loose replies alike.
+        **Admin only.** Newest first, within the thirty-day retention period —
+        but only for a phone number with at least one message that is not a
+        `reminder`. A number that was only ever reminded, and never heard
+        from, is not returned at all. A number that does qualify comes back
+        whole: every message within retention for that number, reminders
+        included, so grouping the response by `phone` gives a complete
+        conversation with no second call. See `SmsInboxMessage`.
 
-        Each row carries `location` so the client can group and label it
-        without working out the session-status rule itself; see
-        `SmsInboxMessage`. Viewing this list marks nothing read.
+        Each row also carries `location` so the client can group and label it
+        without working out the session-status rule itself. Viewing this list
+        marks nothing read.
       responses:
         '200':
           description: The inbox
@@ -3963,8 +3967,14 @@ components:
     SmsInboxMessage:
       type: object
       description: |
-        One row in the administrator inbox — every retained message, whichever
-        household or session it belongs to.
+        One row in the administrator inbox. **Not every retained message** —
+        only phone numbers with at least one message that is not a `reminder`
+        (a `staff_reply`, a `household_reply` or a `failure`) appear at all; a
+        number that was only ever reminded, and never heard from, has nothing
+        here for anybody to do. A number that does qualify is returned whole —
+        every message within retention for that number, its reminders
+        included — so grouping by `phone` gives the client a complete
+        conversation without a second call.
 
         `location` is derived from the session the message was snapshotted
         against when it arrived, not from wherever its referral sits now: a
@@ -3979,7 +3989,8 @@ components:
           counts towards `SmsAttentionSummary` when unread.
 
         `session` is null only when `location` is `unmatched`.
-      required: [id, referralId, kind, body, occurredAt, readAt, location, session, simulated]
+      required:
+        [id, referralId, kind, body, occurredAt, readAt, location, session, phone, simulated]
       properties:
         id: { type: string, format: uuid }
         referralId:
@@ -3998,16 +4009,16 @@ components:
           oneOf:
             - type: 'null'
             - $ref: '#/components/schemas/SmsInboxSession'
+        phone:
+          type: [string, 'null']
+          description: >-
+            On every row, not only `unmatched` ones — group a number's rows
+            into a thread by this. `null` means the household had no number
+            on file; a `null`-phone row is never the same thread as another
+            `null`-phone row, so group those by `referralId` instead.
         simulated:
           type: boolean
           description: See `SmsMessage.simulated`.
-        phone:
-          type: string
-          description: >-
-            Present only when `location` is `unmatched`. A linked-session row
-            has a referral to open instead, so there is nothing to act on a
-            phone number for; a loose reply has no referral, and the number is
-            the only way to act on it.
 
     ReferralReceipt:
       type: object

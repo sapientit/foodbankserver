@@ -788,6 +788,52 @@ describe('the inbound webhook', () => {
     expect(row?.referralId).toBe(soonerReferralId);
   });
 
+  it('matches a reply whose E.164 source matches a referral phone stored in local format', async () => {
+    const testApp = buildSmsTestApp({ SMS_WEBHOOK_SECRET: WEBHOOK_SECRET });
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world = await setUpReferralWorld(testApp, accessToken);
+
+    const { id: referralId } = await submitReferral(testApp, world, {
+      refereePhone: '07700 900123',
+    });
+
+    const response = await postWebhook(testApp, {
+      source: '+447700900123',
+      content: 'Can you confirm the time?',
+      messageid: 'match-e164-1',
+    });
+    expect(response.status).toBe(200);
+
+    const [row] = await db
+      .select()
+      .from(smsMessages)
+      .where(eq(smsMessages.providerMessageId, 'match-e164-1'));
+    expect(row?.referralId).toBe(referralId);
+  });
+
+  it('matches a reply whose local-format source matches a referral phone stored as E.164', async () => {
+    const testApp = buildSmsTestApp({ SMS_WEBHOOK_SECRET: WEBHOOK_SECRET });
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world = await setUpReferralWorld(testApp, accessToken);
+
+    const { id: referralId } = await submitReferral(testApp, world, {
+      refereePhone: '+447700900456',
+    });
+
+    const response = await postWebhook(testApp, {
+      source: '07700 900456',
+      content: 'Can you confirm the time?',
+      messageid: 'match-local-1',
+    });
+    expect(response.status).toBe(200);
+
+    const [row] = await db
+      .select()
+      .from(smsMessages)
+      .where(eq(smsMessages.providerMessageId, 'match-local-1'));
+    expect(row?.referralId).toBe(referralId);
+  });
+
   it('does not match a session that has already happened', async () => {
     const testApp = buildSmsTestApp({ SMS_WEBHOOK_SECRET: WEBHOOK_SECRET });
     const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
@@ -817,6 +863,72 @@ describe('the inbound webhook', () => {
       .from(smsMessages)
       .where(eq(smsMessages.providerMessageId, 'past-1'));
     expect(row?.referralId).toBeNull(); // a loose reply, not matched to the past session
+  });
+
+  it('matches a reply that arrives after the session has started but on the day it runs', async () => {
+    const testApp = buildSmsTestApp({ SMS_WEBHOOK_SECRET: WEBHOOK_SECRET });
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+
+    // Starts at 07:00 BST (06:00 UTC), well before `NOW` (09:00 UTC) — a
+    // session already under way, not "still to come" by start time alone.
+    // Deliveries running past their start time, and replies sent mid-session,
+    // both need this to still count as a candidate.
+    const todaySessionId = await createSession(testApp, accessToken, {
+      sessionDate: '2026-08-04',
+      startTime: '07:00',
+    });
+    const world = await setUpReferralWorld(testApp, accessToken);
+    const submittingApp = buildTestApp({ clock: fixedClock('2026-08-01T09:00:00.000Z') });
+    const { id: referralId } = await submitReferral(
+      submittingApp,
+      { ...world, sessionId: todaySessionId },
+      { refereePhone: '07700 900333' },
+    );
+
+    const response = await postWebhook(testApp, {
+      source: '07700900333',
+      content: 'Running a bit late',
+      messageid: 'today-1',
+    });
+    expect(response.status).toBe(200);
+
+    const [row] = await db
+      .select()
+      .from(smsMessages)
+      .where(eq(smsMessages.providerMessageId, 'today-1'));
+    expect(row?.referralId).toBe(referralId); // still open on the day it runs
+  });
+
+  it('does not match a reply once the session has been confirmed, even before its start time', async () => {
+    const testApp = buildSmsTestApp({ SMS_WEBHOOK_SECRET: WEBHOOK_SECRET });
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+
+    // Starts at 11:00 BST (10:00 UTC), after `NOW` — signed off early anyway.
+    const laterSessionId = await createSession(testApp, accessToken, {
+      sessionDate: '2026-08-04',
+      startTime: '11:00',
+    });
+    const world = await setUpReferralWorld(testApp, accessToken);
+    const submittingApp = buildTestApp({ clock: fixedClock('2026-08-01T09:00:00.000Z') });
+    await submitReferral(
+      submittingApp,
+      { ...world, sessionId: laterSessionId },
+      { refereePhone: '07700 900444' },
+    );
+    await confirmSession(testApp, accessToken, laterSessionId);
+
+    const response = await postWebhook(testApp, {
+      source: '07700900444',
+      content: 'Can I still come?',
+      messageid: 'confirmed-1',
+    });
+    expect(response.status).toBe(200);
+
+    const [row] = await db
+      .select()
+      .from(smsMessages)
+      .where(eq(smsMessages.providerMessageId, 'confirmed-1'));
+    expect(row?.referralId).toBeNull(); // signed off — a loose reply now
   });
 
   it('keeps a reply from an unknown number as a loose reply', async () => {
@@ -963,7 +1075,7 @@ interface InboxMessage {
   readonly readAt: string | null;
   readonly location: 'unmatched' | 'active_session' | 'closed_session';
   readonly session: { id: string; sessionDate: string; startTime: string; status: string } | null;
-  readonly phone?: string;
+  readonly phone: string | null;
 }
 
 /** Posts a household reply that the webhook will match to whatever referral holds `phone`. */
@@ -1175,6 +1287,7 @@ describe('the administrator inbox', () => {
 
     expect(closed).toMatchObject({
       location: 'closed_session',
+      phone: '+447700900222',
       session: {
         id: closedSessionId,
         sessionDate: '2026-08-18',
@@ -1182,19 +1295,110 @@ describe('the administrator inbox', () => {
         status: 'confirmed',
       },
     });
-    expect(closed?.phone).toBeUndefined(); // only an unmatched row carries a phone
 
     expect(active).toMatchObject({
       location: 'active_session',
+      phone: '+447700900111',
       session: { id: world.sessionId, status: 'planned' },
     });
-    expect(active?.phone).toBeUndefined();
 
     expect(unmatched).toMatchObject({
       location: 'unmatched',
       session: null,
       phone: '+447700900333',
     });
+  });
+
+  it('omits a phone number that was only ever reminded, and returns a qualifying number whole, reminder included', async () => {
+    const mainApp = buildSmsTestApp();
+    const { accessToken: adminToken } = await devLogin(mainApp, { email: 'admin@foodbank.org' });
+
+    const world = await setUpReferralWorld(mainApp, adminToken);
+    await submitReferral(mainApp, world, { refereePhone: '07700 900111' }); // will reply
+
+    const reminderOnlySessionId = await createSession(mainApp, adminToken, {
+      sessionDate: '2026-08-25',
+    });
+    await submitReferral(
+      mainApp,
+      { ...world, sessionId: reminderOnlySessionId },
+      { refereePhone: '07700 900444' }, // reminded, never heard from
+    );
+
+    // Each reminder needs its own provider message id — the unique index on
+    // `providerMessageId` would otherwise reject the second insert.
+    let providerCalls = 0;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(() =>
+      Promise.resolve(providerSuccess(`prov-${String(++providerCalls)}`)),
+    );
+    for (const sessionId of [world.sessionId, reminderOnlySessionId]) {
+      const remind = await mainApp.request(`${API_PREFIX}/sessions/${sessionId}/sms-reminders`, {
+        method: 'POST',
+        headers: authHeaders(adminToken),
+      });
+      expect(await remind.json()).toMatchObject({ reminded: 1, failed: 0 });
+    }
+
+    // Strictly after the reminders, so it never ties with them on `occurredAt`.
+    const replyApp = buildTestApp({ clock: fixedClock('2026-08-04T09:00:01.000Z') });
+    await postReply(replyApp, '07700 900111', 'Running late');
+
+    const response = await mainApp.request(`${API_PREFIX}/sms-messages`, {
+      headers: authHeaders(adminToken),
+    });
+    expect(response.status).toBe(200);
+    const body: { messages: InboxMessage[] } = await response.json();
+
+    // 900444 was only ever reminded — absent entirely, reminder and all.
+    expect(body.messages.some((m) => m.phone === '+447700900444')).toBe(false);
+
+    // 900111 qualifies (it replied), so its own reminder comes back too.
+    const forQualifying = body.messages.filter((m) => m.phone === '+447700900111');
+    expect(forQualifying.map((m) => m.kind).sort()).toEqual(['household_reply', 'reminder']);
+
+    // Newest first, robust to the two reminders sharing a timestamp.
+    const occurredAtValues = body.messages.map((m) => m.occurredAt);
+    expect(occurredAtValues).toEqual([...occurredAtValues].sort().reverse());
+  });
+
+  it('never treats two households with no phone on file as the same thread', async () => {
+    // Both referrals write their failure row with the same `phone: ''`
+    // sentinel — this proves that never surfaces as a shared, groupable
+    // "phone number" in the response.
+    const testApp = buildSmsTestApp();
+    const { accessToken: adminToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+
+    const world = await setUpReferralWorld(testApp, adminToken);
+    const { id: firstReferralId } = await submitReferral(testApp, world, {
+      refereePhone: undefined,
+    });
+
+    const secondSessionId = await createSession(testApp, adminToken, { sessionDate: '2026-08-18' });
+    const { id: secondReferralId } = await submitReferral(
+      testApp,
+      { ...world, sessionId: secondSessionId },
+      { refereePhone: undefined },
+    );
+
+    for (const sessionId of [world.sessionId, secondSessionId]) {
+      const remind = await testApp.request(`${API_PREFIX}/sessions/${sessionId}/sms-reminders`, {
+        method: 'POST',
+        headers: authHeaders(adminToken),
+      });
+      expect(await remind.json()).toMatchObject({ reminded: 0, failed: 1 });
+    }
+
+    const response = await testApp.request(`${API_PREFIX}/sms-messages`, {
+      headers: authHeaders(adminToken),
+    });
+    expect(response.status).toBe(200);
+    const body: { messages: InboxMessage[] } = await response.json();
+
+    expect(body.messages).toHaveLength(2);
+    expect(body.messages.every((m) => m.phone === null)).toBe(true);
+    expect(body.messages.map((m) => m.referralId).sort()).toEqual(
+      [firstReferralId, secondReferralId].sort(),
+    );
   });
 });
 

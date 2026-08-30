@@ -1391,11 +1391,19 @@ Two endpoints, both admin only, neither of which marks anything read:
   household name, phone number or referral data — a count and nothing else.
   This is the number to badge an admin nav item with; poll it the same way you
   poll `sms-summary`.
-- `GET /sms-messages` → `{ messages: [...] }`. Every message still within the
-  thirty-day retention window, newest first, whichever household or session it
-  belongs to.
+- `GET /sms-messages` → `{ messages: [...] }`. **Not every retained message.**
+  Only phone numbers with at least one message that is not a `reminder` — a
+  `staff_reply`, a `household_reply` or a `failure`, real or simulated makes
+  no difference — appear at all. A number that was only ever reminded, and
+  never heard from, is not on this list: there is nothing there for anybody
+  to do, and a food bank texting a session's worth of households would
+  otherwise bury the numbers that need attention under the ones that do not.
+  A number that does qualify is returned **whole** — every message within
+  retention for that number, newest first, its reminders included — so
+  grouping the response by `phone` gives a complete conversation with no
+  second call to expand it.
 
-Each row in the full list carries a `location`:
+Each row in the list carries a `location`:
 
 | `location`       | Meaning                                                | Counts towards `attention-summary`? |
 | ---------------- | ------------------------------------------------------ | ----------------------------------- |
@@ -1408,8 +1416,15 @@ Only unread `household_reply` rows are ever counted at all — a `reminder`,
 those, not a trigger for attention.
 
 `session` (session id, `sessionDate`, `startTime`, `status`) is included on
-every row except `unmatched`, where it is `null`. `phone` is included only on
-an `unmatched` row — a linked-session row has a referral to open instead.
+every row except `unmatched`, where it is `null`. `phone` is now on **every**
+row, not only `unmatched` ones — group by it client-side to build the
+per-number thread this endpoint's filtering is designed to support.
+
+**`phone` can be `null`.** That means the household had no number on file —
+`sms-reminders` still records the attempt as a `failure`, since a household
+nobody can text is still a household somebody may need to ring. Two different
+households with no number are not the same thread: never group two `null`-phone
+rows together, and use `referralId` to tell them apart instead.
 
 **`location` reflects the session a message actually arrived about, not
 wherever its referral sits now.** Moving a household to a later session

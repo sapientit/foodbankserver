@@ -127,9 +127,27 @@ export interface SmsInboxMessageResponse {
   readonly readAt: string | null;
   readonly location: SmsMessageLocation;
   readonly session: SmsInboxSession | null;
-  readonly phone?: string;
+  /**
+   * On every row, not only `unmatched` ones. `listInbox` now returns a
+   * phone number's whole history in one call rather than every retained
+   * message — see `sms.repository.ts` — so this is what the client groups
+   * a number's rows into a thread by, session-linked or not.
+   *
+   * `null` means the household had no number on file — `sms.service.ts`'s
+   * `attemptReminder` writes that as `''`, a sentinel rather than a real
+   * shared number, and two unconnected households with no number would
+   * otherwise look like the same phone number to a client grouping by this
+   * field. A `null`-phone row is never grouped with another; use `referralId`
+   * for it instead.
+   */
+  readonly phone: string | null;
   /** See `SmsMessageResponse.simulated`. */
   readonly simulated: boolean;
+}
+
+/** `''` is `attemptReminder`'s sentinel for "no number on file" — see `SmsInboxMessageResponse.phone`. */
+function inboxPhone(phone: string): string | null {
+  return phone === '' ? null : phone;
 }
 
 export function toInboxMessageResponse(row: {
@@ -148,7 +166,7 @@ export function toInboxMessageResponse(row: {
       readAt: message.readAt,
       location: 'unmatched',
       session: null,
-      phone: message.phone,
+      phone: inboxPhone(message.phone),
       simulated: message.simulated,
     };
   }
@@ -172,8 +190,7 @@ export function toInboxMessageResponse(row: {
       startTime: session.startTime,
       status: session.status,
     },
+    phone: inboxPhone(message.phone),
     simulated: message.simulated,
-    // Deliberately no phone here — a linked-session row has a referral to open; only an
-    // unmatched reply has nothing else to act on it by. See INITIAL_SPEC1.txt / API.md.
   };
 }

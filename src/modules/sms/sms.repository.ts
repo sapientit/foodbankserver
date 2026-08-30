@@ -1,6 +1,21 @@
-import { and, asc, desc, eq, gte, inArray, isNull, or, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  exists,
+  gte,
+  inArray,
+  isNull,
+  ne,
+  notInArray,
+  or,
+  sql,
+} from 'drizzle-orm';
+import { alias } from 'drizzle-orm/sqlite-core';
 import type { Database } from '../../db/client.ts';
 import { expectAtMostOne } from '../../db/expect.ts';
+import { instantToLondonWallClock } from '../../core/time/london.ts';
 import {
   smsMessages,
   SMS_INBOUND_KINDS,
@@ -118,13 +133,58 @@ export function createSmsRepository(db: Database) {
       return rows[0]?.count ?? 0;
     },
 
-    /** Every message within retention, newest first, with the session it was snapshotted against (null on a loose reply). */
+    /**
+     * The administrator inbox: every message, newest first, for a phone
+     * number that has at least one message within retention that is not a
+     * `reminder` — a `staff_reply`, a `household_reply` or a `failure`, real
+     * or simulated makes no difference to a `reminder` either way. A number
+     * that was only ever reminded, and never heard from, is not returned at
+     * all — see `INITIAL_SPEC1.txt`, "SMS reminders and replies".
+     *
+     * Once a number qualifies, its whole retained history comes back in this
+     * one call, reminders included, so opening one number's conversation
+     * client-side is a filter over what is already here rather than a second
+     * request. That is deliberate: the qualifying numbers are few (most
+     * households never reply), so returning their full — still small —
+     * threads costs far less than the reminder flood a `location`-only
+     * filter would still have to read and discard on every visit.
+     *
+     * One query — the `EXISTS` is a subquery, not a second round trip — with
+     * the session it was snapshotted against (null on a loose reply).
+     *
+     * A household with no number on file gets its `failure` rows written
+     * with `phone: ''` (see `sms.service.ts`'s `attemptReminder`) — a
+     * sentinel, not a real shared number, so two such households would look
+     * like the same "phone" to this query. It is harmless here: that branch
+     * never produces anything but a `failure`, which always qualifies on its
+     * own regardless of any other row, so no blank-phone row ever needs
+     * another blank-phone row's help to appear. It is not harmless in the
+     * *response*, though — see `sms.mapper.ts`'s `inboxPhone`, which is
+     * where this is actually handled.
+     */
     async listInbox(cutoff: string): Promise<{ message: SmsMessage; session: Session | null }[]> {
+      const otherMessage = alias(smsMessages, 'other_message');
       return db
         .select({ message: smsMessages, session: sessions })
         .from(smsMessages)
         .leftJoin(sessions, eq(smsMessages.sessionId, sessions.id))
-        .where(gte(smsMessages.occurredAt, cutoff))
+        .where(
+          and(
+            gte(smsMessages.occurredAt, cutoff),
+            exists(
+              db
+                .select({ one: sql`1` })
+                .from(otherMessage)
+                .where(
+                  and(
+                    eq(otherMessage.phone, smsMessages.phone),
+                    gte(otherMessage.occurredAt, cutoff),
+                    ne(otherMessage.kind, 'reminder'),
+                  ),
+                ),
+            ),
+          ),
+        )
         .orderBy(desc(smsMessages.occurredAt));
     },
 
@@ -163,22 +223,32 @@ export function createSmsRepository(db: Database) {
     },
 
     /**
-     * Every referral holding a place on a session that has not happened yet,
-     * soonest first, for matching an inbound reply by phone number. Phone
-     * comparison happens in memory (`phone.ts` normalises formats SQL cannot
-     * usefully compare), so this hands back full rows rather than filtering
-     * by number.
+     * Every referral holding a place on a session still open to a reply,
+     * soonest first, for matching an inbound reply by phone number.
+     *
+     * "Still open" is the session's own London calendar date not having
+     * passed yet, and it not being confirmed or cancelled — not its start
+     * time. A delivery running past its start time, or a reply sent
+     * mid-session, still has somewhere to land; only the day after, or a
+     * sign-off, closes it. See `INITIAL_SPEC1.txt`, "SMS reminders and
+     * replies".
+     *
+     * Phone comparison happens in memory (`phone.ts` normalises formats SQL
+     * cannot usefully compare), so this hands back full rows rather than
+     * filtering by number.
      */
     async referralsOnUpcomingSessions(
       nowUtc: string,
     ): Promise<{ referral: Referral; session: Session }[]> {
+      const today = instantToLondonWallClock(nowUtc).date;
       return db
         .select({ referral: referrals, session: sessions })
         .from(referrals)
         .innerJoin(sessions, eq(referrals.sessionId, sessions.id))
         .where(
           and(
-            gte(sessions.startsAtUtc, nowUtc),
+            gte(sessions.sessionDate, today),
+            notInArray(sessions.status, [...CLOSED_SESSION_STATUSES]),
             inArray(referrals.status, [...REFERRAL_STATUSES_HOLDING_A_PLACE]),
           ),
         )

@@ -211,6 +211,13 @@
       "when": 1788048016996,
       "tag": "0029_sms-messages-simulated",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "6",
+      "when": 1788116583885,
+      "tag": "0030_sms-messages-phone-index",
+      "breakpoints": true
     }
   ]
 }
