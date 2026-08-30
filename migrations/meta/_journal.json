@@ -204,6 +204,13 @@
       "when": 1787959940657,
       "tag": "0028_stock-items-regain-low-stock-threshold",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "6",
+      "when": 1788048016996,
+      "tag": "0029_sms-messages-simulated",
+      "breakpoints": true
     }
   ]
 }

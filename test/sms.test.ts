@@ -339,6 +339,208 @@ describe('sending reminders', () => {
   });
 });
 
+describe('the dev/test SMS simulator', () => {
+  /** The shape `toSmsMessageResponse` produces on the thread endpoint. */
+  interface ThreadMessage {
+    readonly kind: string;
+    readonly body: string;
+    readonly phone: string;
+    readonly simulated: boolean;
+  }
+
+  async function getThread(
+    testApp: TestApp,
+    token: string,
+    referralId: string,
+  ): Promise<ThreadMessage[]> {
+    const response = await testApp.request(`${API_PREFIX}/referrals/${referralId}/sms-messages`, {
+      headers: authHeaders(token),
+    });
+    expect(response.status).toBe(200);
+    const body: { messages: ThreadMessage[] } = await response.json();
+    return body.messages;
+  }
+
+  it('records a failure and leaves the flag unset when no provider is configured and simulate is off', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+
+    // The ambient dev env carries SMS_SIMULATE=true (see wrangler.jsonc); this
+    // is the plain pre-existing behaviour, so it has to turn simulate off and
+    // remove the provider `buildSmsTestApp` otherwise defaults on.
+    const testApp = buildSmsTestApp({
+      SMS_API_KEY: undefined,
+      SMS_SENDER: undefined,
+      SMS_SIMULATE: '',
+    });
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world = await setUpReferralWorld(testApp, accessToken);
+    const { id: referralId } = await submitReferral(testApp, world);
+
+    const response = await testApp.request(
+      `${API_PREFIX}/sessions/${world.sessionId}/sms-reminders`,
+      { method: 'POST', headers: authHeaders(accessToken) },
+    );
+    expect(await response.json()).toMatchObject({ reminded: 0, failed: 1, simulated: 0 });
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    const [referral] = await db.select().from(referrals).where(eq(referrals.id, referralId));
+    expect(referral?.smsReminderSentAt).toBeNull();
+
+    const [row] = await db.select().from(smsMessages).where(eq(smsMessages.referralId, referralId));
+    expect(row).toMatchObject({ kind: 'failure', body: 'SMS sending is not configured' });
+    expect(row?.simulated).toBe(false);
+  });
+
+  it('fakes a successful send and sets the flag when no provider is configured but simulate is on', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+
+    const testApp = buildSmsTestApp({
+      SMS_API_KEY: undefined,
+      SMS_SENDER: undefined,
+      SMS_SIMULATE: 'true',
+    });
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world = await setUpReferralWorld(testApp, accessToken);
+    const { id: referralId } = await submitReferral(testApp, world);
+
+    const response = await testApp.request(
+      `${API_PREFIX}/sessions/${world.sessionId}/sms-reminders`,
+      { method: 'POST', headers: authHeaders(accessToken) },
+    );
+    expect(await response.json()).toMatchObject({ reminded: 1, failed: 0, simulated: 1 });
+    expect(fetchSpy).not.toHaveBeenCalled(); // simulated — never reaches the real provider
+
+    const [referral] = await db.select().from(referrals).where(eq(referrals.id, referralId));
+    expect(referral?.smsReminderSentAt).not.toBeNull();
+
+    const messages = await getThread(testApp, accessToken, referralId);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({ kind: 'reminder', simulated: true });
+    expect(messages[0]?.body.length).toBeGreaterThan(0);
+  });
+
+  it('does not call the real provider for a destination outside SMS_LIVE_NUMBER, and records a simulated success', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+
+    const testApp = buildSmsTestApp({
+      // A number that is not the referral's own — see `submission()`'s default `07700 900123`.
+      SMS_LIVE_NUMBER: '07700 900999',
+      SMS_SIMULATE: 'true',
+    });
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world = await setUpReferralWorld(testApp, accessToken);
+    const { id: referralId } = await submitReferral(testApp, world);
+
+    const response = await testApp.request(
+      `${API_PREFIX}/sessions/${world.sessionId}/sms-reminders`,
+      { method: 'POST', headers: authHeaders(accessToken) },
+    );
+    expect(await response.json()).toMatchObject({ reminded: 1, failed: 0, simulated: 1 });
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    const messages = await getThread(testApp, accessToken, referralId);
+    expect(messages[0]).toMatchObject({ kind: 'reminder', simulated: true });
+  });
+
+  it('really calls the provider for a destination matching SMS_LIVE_NUMBER, even spelled differently', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(providerSuccess('prov-live'));
+
+    const testApp = buildSmsTestApp({
+      // The referral's own `07700 900123`, spelled as E.164 — proves the match
+      // is `phonesMatch`, not a naive string compare.
+      SMS_LIVE_NUMBER: '+447700900123',
+      SMS_SIMULATE: 'true',
+    });
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world = await setUpReferralWorld(testApp, accessToken);
+    const { id: referralId } = await submitReferral(testApp, world);
+
+    const response = await testApp.request(
+      `${API_PREFIX}/sessions/${world.sessionId}/sms-reminders`,
+      { method: 'POST', headers: authHeaders(accessToken) },
+    );
+    expect(await response.json()).toMatchObject({ reminded: 1, failed: 0, simulated: 0 });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    const messages = await getThread(testApp, accessToken, referralId);
+    expect(messages[0]).toMatchObject({ kind: 'reminder', simulated: false });
+  });
+
+  it('records a restricted-test-number failure for a non-live destination when simulate is off', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+
+    const testApp = buildSmsTestApp({
+      SMS_LIVE_NUMBER: '07700 900999',
+      SMS_SIMULATE: '',
+    });
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world = await setUpReferralWorld(testApp, accessToken);
+    const { id: referralId } = await submitReferral(testApp, world);
+
+    const response = await testApp.request(
+      `${API_PREFIX}/sessions/${world.sessionId}/sms-reminders`,
+      { method: 'POST', headers: authHeaders(accessToken) },
+    );
+    expect(await response.json()).toMatchObject({ reminded: 0, failed: 1, simulated: 0 });
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    const [row] = await db.select().from(smsMessages).where(eq(smsMessages.referralId, referralId));
+    expect(row).toMatchObject({
+      kind: 'failure',
+      body: 'SMS sending is restricted to a test number in this environment',
+    });
+    expect(row?.simulated).toBe(false);
+  });
+
+  it('lets a staff reply succeed as a simulated send rather than throwing, for a non-live destination', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+
+    const testApp = buildSmsTestApp({
+      SMS_LIVE_NUMBER: '07700 900999',
+      SMS_SIMULATE: 'true',
+    });
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world = await setUpReferralWorld(testApp, accessToken);
+    const { id: referralId } = await submitReferral(testApp, world);
+
+    const response = await testApp.request(`${API_PREFIX}/referrals/${referralId}/sms-messages`, {
+      method: 'POST',
+      headers: json(accessToken),
+      body: JSON.stringify({ body: 'We can still come to you' }),
+    });
+
+    expect(response.status).toBe(201);
+    const body: { kind: string; simulated: boolean } = await response.json();
+    expect(body).toMatchObject({ kind: 'staff_reply', simulated: true });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('records a real provider failure as a failure even when simulate is on', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('', { status: 500 }));
+
+    // A live, configured destination that actually reaches the provider —
+    // simulate must not mask a genuine provider failure as a fake success.
+    const testApp = buildSmsTestApp({ SMS_SIMULATE: 'true' });
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world = await setUpReferralWorld(testApp, accessToken);
+    const { id: referralId } = await submitReferral(testApp, world);
+
+    const response = await testApp.request(
+      `${API_PREFIX}/sessions/${world.sessionId}/sms-reminders`,
+      { method: 'POST', headers: authHeaders(accessToken) },
+    );
+    expect(await response.json()).toMatchObject({ reminded: 0, failed: 1, simulated: 0 });
+
+    const [referral] = await db.select().from(referrals).where(eq(referrals.id, referralId));
+    expect(referral?.smsReminderSentAt).toBeNull();
+
+    const [row] = await db.select().from(smsMessages).where(eq(smsMessages.referralId, referralId));
+    expect(row?.kind).toBe('failure');
+    expect(row?.body).toMatch(/^Send failed:/);
+    expect(row?.simulated).toBe(false);
+  });
+});
+
 describe('the session summary', () => {
   it('excludes outbound rows from the counts', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(providerSuccess('prov-1'));

@@ -25,6 +25,13 @@
     // deployment can never write into the charity's real spreadsheet.
     "GOOGLE_SHEETS_SPREADSHEET_ID": "1gQK_ore1UOeHY_CwONpua307GUbh5J0_4zt90hlmcs8",
     "GOOGLE_OAUTH_CLIENT_ID": "643990075975-48flcohql0sc2cekh3940uscrqflrbnn.apps.googleusercontent.com",
+    // Every SMS send in this environment is a fake success rather than a
+    // `failure` row, since this environment has no TheSMSWorks account
+    // configured either. config/env.ts refuses to boot with this set while
+    // ENVIRONMENT is production. See SMS_LIVE_NUMBER, set separately as a
+    // secret when a deployment of this environment needs to test a real
+    // account against one real number instead.
+    "SMS_SIMULATE": "true",
   },
 
   "d1_databases": [
@@ -99,6 +106,10 @@
         // unconfigured rather than failing at Google.
         "GOOGLE_SHEETS_SPREADSHEET_ID": "",
         "GOOGLE_OAUTH_CLIENT_ID": "",
+        // Must stay "" — config/env.ts refuses to boot otherwise. Declared
+        // here (rather than omitted) only so `wrangler types --strict-vars`
+        // keeps the key honest across every environment.
+        "SMS_SIMULATE": "",
       },
       "d1_databases": [
         {

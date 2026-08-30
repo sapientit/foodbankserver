@@ -1280,7 +1280,7 @@ inbox endpoints below.
 
 ```
 POST /api/v1/sessions/{sessionId}/sms-reminders   (no body)
-  → { reminded, failed, alreadyReminded }
+  → { reminded, failed, alreadyReminded, simulated }
 GET  /api/v1/sessions/{sessionId}/sms-summary
   → { unreadTotal, households: [{ referralId, reminderSentAt, messageCount, unreadCount }] }
 GET  /api/v1/referrals/{id}/sms-messages          → the thread, both directions
@@ -1311,6 +1311,28 @@ Show `failed` prominently. Those are households who do not know when to come.
 deliveries get date and the session's delivery window and no address. Both are
 server-side, because the wording is a data-protection constraint — the provider
 is given a phone number and nothing that identifies whose it is.
+
+### Simulated sends
+
+Every message — on the thread, in the admin inbox, everywhere `SmsMessage`
+appears — carries `simulated`. `true` means this environment's send never
+actually reached TheSMSWorks: a dev/test deployment with no provider account,
+or a staging one restricted to a single real test number. It still counts as
+`reminded`, sets `smsReminderSentAt`, and behaves exactly like a real send in
+every other respect — it exists so a `false` next to it is a genuine
+assurance, on an environment where that matters (a copy of real referral
+data), that a text really went to a real household. Decide for yourself how
+much to surface this in the UI; the server does not have an opinion beyond the
+flag.
+
+`failure` and `household_reply` always carry `simulated: false` — there is no
+simulated form of either.
+
+**The bulk send response carries the same idea as a count.** `simulated` on
+the `sms-reminders` response is how many of `reminded` were faked rather than
+really sent — a subset of `reminded`, not a fourth bucket alongside
+`failed`/`alreadyReminded`. It saves opening every household's thread just to
+see whether anything really went out; it is `0` in production, always.
 
 ### The counts
 

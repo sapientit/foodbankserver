@@ -109,6 +109,8 @@ export function smsServiceDeps(c: Context<AppEnv>): SmsServiceDeps {
       config.smsApiKey === undefined || config.smsSender === undefined
         ? undefined
         : { apiKey: config.smsApiKey, sender: config.smsSender },
+    simulate: config.smsSimulate,
+    liveNumber: config.smsLiveNumber,
   };
 }
 

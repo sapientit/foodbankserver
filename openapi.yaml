@@ -1926,7 +1926,7 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [reminded, failed, alreadyReminded]
+                required: [reminded, failed, alreadyReminded, simulated]
                 properties:
                   reminded: { type: integer, description: Texts that went. }
                   failed:
@@ -1937,6 +1937,14 @@ paths:
                   alreadyReminded:
                     type: integer
                     description: Skipped because they had already been texted for this session.
+                  simulated:
+                    type: integer
+                    description: >-
+                      Of `reminded`, how many never actually reached
+                      TheSMSWorks — this environment's dev/test simulator, or
+                      a destination outside its one live test number. A
+                      subset of `reminded`, not a fourth outcome. Always `0`
+                      in production.
         '404': { $ref: '#/components/responses/NotFound' }
 
   /api/v1/sessions/{sessionId}/sms-summary:
@@ -3886,7 +3894,7 @@ components:
         household's own words about why they need help. It is deleted thirty
         days after `occurredAt`, along with everything else on this table, so a
         client must not treat a thread as a permanent record.
-      required: [id, referralId, kind, body, occurredAt, readAt]
+      required: [id, referralId, kind, body, occurredAt, readAt, simulated]
       properties:
         id: { type: string, format: uuid }
         referralId:
@@ -3913,6 +3921,14 @@ components:
           description: 'For a `failure`, the reason rather than a message.'
         occurredAt: { type: string, format: date-time }
         readAt: { type: [string, 'null'], format: date-time }
+        simulated:
+          type: boolean
+          description: >-
+            True when this message was never actually sent through
+            TheSMSWorks — the environment is running its dev/test simulator,
+            or this destination fell outside its one live test number.
+            Always false in production. Meaningless on a `failure` (nothing
+            was sent either way) or a `household_reply` (always real).
         phone:
           type: string
           description: >-
@@ -3963,7 +3979,7 @@ components:
           counts towards `SmsAttentionSummary` when unread.
 
         `session` is null only when `location` is `unmatched`.
-      required: [id, referralId, kind, body, occurredAt, readAt, location, session]
+      required: [id, referralId, kind, body, occurredAt, readAt, location, session, simulated]
       properties:
         id: { type: string, format: uuid }
         referralId:
@@ -3982,6 +3998,9 @@ components:
           oneOf:
             - type: 'null'
             - $ref: '#/components/schemas/SmsInboxSession'
+        simulated:
+          type: boolean
+          description: See `SmsMessage.simulated`.
         phone:
           type: string
           description: >-

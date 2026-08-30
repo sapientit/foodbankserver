@@ -26,6 +26,13 @@ export interface SmsMessageResponse {
   readonly body: string;
   readonly occurredAt: string;
   readonly readAt: string | null;
+  /**
+   * True when this message was never actually sent through TheSMSWorks — the
+   * environment's dev/test simulator, or a destination outside its one live
+   * test number. Always false in production. Meaningless on a `failure`
+   * (nothing was sent either way) and a `household_reply` (always real).
+   */
+  readonly simulated: boolean;
 }
 
 export function toSmsMessageResponse(message: SmsMessage): SmsMessageResponse {
@@ -37,6 +44,7 @@ export function toSmsMessageResponse(message: SmsMessage): SmsMessageResponse {
     body: message.body,
     occurredAt: message.occurredAt,
     readAt: message.readAt,
+    simulated: message.simulated,
   };
 }
 
@@ -68,6 +76,14 @@ export interface SmsSendResultResponse {
   readonly reminded: number;
   readonly failed: number;
   readonly alreadyReminded: number;
+  /**
+   * How many of `reminded` never actually reached TheSMSWorks — this
+   * environment's dev/test simulator, or a destination outside its one live
+   * test number. A subset of `reminded`, not a fourth outcome: a simulated
+   * send still counts as a reminder sent. Always `0` in production. See
+   * `SmsMessage.simulated`.
+   */
+  readonly simulated: number;
 }
 
 /** The one number the admin inbox screen makes prominent. */
@@ -112,6 +128,8 @@ export interface SmsInboxMessageResponse {
   readonly location: SmsMessageLocation;
   readonly session: SmsInboxSession | null;
   readonly phone?: string;
+  /** See `SmsMessageResponse.simulated`. */
+  readonly simulated: boolean;
 }
 
 export function toInboxMessageResponse(row: {
@@ -131,6 +149,7 @@ export function toInboxMessageResponse(row: {
       location: 'unmatched',
       session: null,
       phone: message.phone,
+      simulated: message.simulated,
     };
   }
 
@@ -153,6 +172,7 @@ export function toInboxMessageResponse(row: {
       startTime: session.startTime,
       status: session.status,
     },
+    simulated: message.simulated,
     // Deliberately no phone here — a linked-session row has a referral to open; only an
     // unmatched reply has nothing else to act on it by. See INITIAL_SPEC1.txt / API.md.
   };

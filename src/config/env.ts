@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { normalisePhone } from '../core/phone.ts';
 
 /**
  * Configuration comes from Worker bindings, not `process.env` — there is no
@@ -84,6 +85,31 @@ const configSchema = z
     SMS_WEBHOOK_SECRET: z.string().min(16).optional(),
 
     /**
+     * Turns a send that is not actually going to reach TheSMSWorks into a
+     * fake success instead of a `failure` row — the dev/test simulator. Not
+     * a credential: a plain `var`, declared `""` in production so `wrangler
+     * types --strict-vars` stays honest that the key exists in every
+     * environment. See `SMS_LIVE_NUMBER` below and `sms.service.ts`, which
+     * is where the two combine. Refused in production, same reasoning as
+     * `AUTH_MODE=dummy`.
+     */
+    SMS_SIMULATE: z
+      .string()
+      .trim()
+      .optional()
+      .transform((value) => value === 'true'),
+
+    /**
+     * The one destination that is still actually sent through TheSMSWorks
+     * when set — every other destination falls back to `SMS_SIMULATE` (or a
+     * `failure`, if that is also off). For testing a real account without
+     * texting real households from a copy of live referral data. A Worker
+     * secret like the three above: a phone number is not committed to
+     * source any more readily than a credential is. Refused in production.
+     */
+    SMS_LIVE_NUMBER: z.string().min(1).optional(),
+
+    /**
      * The spreadsheet extract's two settings. **Neither is a secret and
      * neither is a credential**, because the server does not have one: the
      * administrator's browser obtains Google consent against their own Google
@@ -138,6 +164,36 @@ const configSchema = z
         message: 'SMS_WEBHOOK_SECRET is required in production.',
       });
     }
+
+    // A real deployment must never silently pretend to text a household.
+    if (value.ENVIRONMENT === 'production' && value.SMS_SIMULATE) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['SMS_SIMULATE'],
+        message: 'SMS_SIMULATE is refused in production.',
+      });
+    }
+
+    // Same reasoning: restricting real sends to one number in production
+    // would mean the food bank silently not texting most of its households.
+    if (value.ENVIRONMENT === 'production' && value.SMS_LIVE_NUMBER !== undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['SMS_LIVE_NUMBER'],
+        message: 'SMS_LIVE_NUMBER is refused in production.',
+      });
+    }
+
+    // Comparison at send time is by `phonesMatch`, which quietly returns
+    // false for anything unparseable — a typo here would otherwise mean the
+    // "live" number is never live, silently, rather than refusing to boot.
+    if (value.SMS_LIVE_NUMBER !== undefined && normalisePhone(value.SMS_LIVE_NUMBER) === null) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['SMS_LIVE_NUMBER'],
+        message: 'SMS_LIVE_NUMBER must be a recognisable UK number.',
+      });
+    }
   });
 
 type RawConfig = z.infer<typeof configSchema>;
@@ -153,6 +209,8 @@ export interface AppConfig {
   readonly smsApiKey: string | undefined;
   readonly smsSender: string | undefined;
   readonly smsWebhookSecret: string | undefined;
+  readonly smsSimulate: boolean;
+  readonly smsLiveNumber: string | undefined;
   readonly googleSpreadsheetId: string | undefined;
   readonly googleOauthClientId: string | undefined;
   readonly isProduction: boolean;
@@ -190,6 +248,8 @@ export function loadConfig(bindings: object): AppConfig {
     smsApiKey: result.data.SMS_API_KEY,
     smsSender: result.data.SMS_SENDER,
     smsWebhookSecret: result.data.SMS_WEBHOOK_SECRET,
+    smsSimulate: result.data.SMS_SIMULATE,
+    smsLiveNumber: result.data.SMS_LIVE_NUMBER,
     googleSpreadsheetId: result.data.GOOGLE_SHEETS_SPREADSHEET_ID,
     googleOauthClientId: result.data.GOOGLE_OAUTH_CLIENT_ID,
     isProduction: result.data.ENVIRONMENT === 'production',

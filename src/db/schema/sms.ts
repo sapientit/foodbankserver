@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { check, index, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { check, index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 import { referrals } from './referrals.ts';
 import { sessions } from './sessions.ts';
 import { users } from './users.ts';
@@ -85,6 +85,16 @@ export const smsMessages = sqliteTable(
     readAt: text('read_at'),
     /** Who sent a `staff_reply`, or who pressed the button for a `reminder`. */
     sentByUserId: text('sent_by_user_id').references(() => users.id),
+    /**
+     * True when this row was never actually sent through TheSMSWorks —
+     * `SMS_SIMULATE`'s dev/test simulator, or a destination outside
+     * `SMS_LIVE_NUMBER` in a restricted test environment. Only meaningful on
+     * `reminder` and `staff_reply`; a `household_reply` has no simulated
+     * form, and a `failure` already says nothing was sent. Always false in
+     * production, where both settings are refused at boot — see
+     * `config/env.ts`.
+     */
+    simulated: integer('simulated', { mode: 'boolean' }).notNull().default(false),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
   },

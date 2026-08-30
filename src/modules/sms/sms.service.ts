@@ -34,10 +34,26 @@ export interface SmsServiceDeps {
    *
    * Development and CI run without a provider account. Rather than refusing
    * to send, an absent provider makes every attempted household a `failure`
-   * row — the same outcome a bad number produces — so the feature is fully
-   * exercisable end to end without one. See `config/env.ts`.
+   * row — the same outcome a bad number produces — unless `simulate` is on.
+   * See `config/env.ts`.
    */
   readonly provider: SmsProviderConfig | undefined;
+  /**
+   * Fakes a successful send for any destination that is not going to be
+   * really sent — see `liveNumber` — instead of recording a `failure`. The
+   * dev/test simulator: exercises the success path (thread, counts,
+   * `smsReminderSentAt`) with no provider account at all. `SMS_SIMULATE`,
+   * refused in production.
+   */
+  readonly simulate: boolean;
+  /**
+   * When set, only this one destination is ever actually handed to
+   * `sendSms`; every other destination falls through to `simulate` (or to a
+   * `failure`, if that is also off). Lets a staging environment run against
+   * a real TheSMSWorks account without texting real households from a copy
+   * of live referral data. `SMS_LIVE_NUMBER`, refused in production.
+   */
+  readonly liveNumber: string | undefined;
 }
 
 /** Outbound fetches in flight at once, so a session of 25+ does not open 25+ concurrent requests. */
@@ -50,6 +66,7 @@ type ReminderOutcome =
       readonly phone: string;
       readonly body: string;
       readonly providerMessageId: string;
+      readonly simulated: boolean;
     }
   | {
       readonly referralId: string;
@@ -58,8 +75,20 @@ type ReminderOutcome =
       readonly body: string;
     };
 
+const NOT_CONFIGURED_REASON = 'SMS sending is not configured';
+const RESTRICTED_REASON = 'SMS sending is restricted to a test number in this environment';
+
 export function createSmsService(deps: SmsServiceDeps) {
-  const { db, repository, sessions, clock, logger, provider } = deps;
+  const { db, repository, sessions, clock, logger, provider, simulate, liveNumber } = deps;
+
+  /** Unrestricted when no `liveNumber` is set — see `SmsServiceDeps.liveNumber`. */
+  function isLive(destination: string): boolean {
+    return liveNumber === undefined || phonesMatch(destination, liveNumber);
+  }
+
+  function simulatedProviderMessageId(): string {
+    return `sim-${crypto.randomUUID()}`;
+  }
 
   /**
    * Sends a reminder to every household on the session holding a place that
@@ -87,7 +116,7 @@ export function createSmsService(deps: SmsServiceDeps) {
     const alreadyReminded = households.length - candidates.length;
 
     if (candidates.length === 0) {
-      return { sessionId, reminded: 0, failed: 0, alreadyReminded };
+      return { sessionId, reminded: 0, failed: 0, alreadyReminded, simulated: 0 };
     }
 
     const now = clock.nowIso();
@@ -100,6 +129,7 @@ export function createSmsService(deps: SmsServiceDeps) {
       | ReturnType<SmsRepository['buildMarkReminderSent']>
     )[] = [];
     let sentCount = 0;
+    let simulatedCount = 0;
 
     for (const outcome of outcomes) {
       statements.push(
@@ -115,6 +145,7 @@ export function createSmsService(deps: SmsServiceDeps) {
           // Outbound and failures are read on arrival — only a household_reply is ever unread.
           readAt: now,
           sentByUserId: actor.userId,
+          simulated: outcome.success && outcome.simulated,
           createdAt: now,
           updatedAt: now,
         }),
@@ -123,6 +154,9 @@ export function createSmsService(deps: SmsServiceDeps) {
       if (outcome.success) {
         statements.push(repository.buildMarkReminderSent(outcome.referralId, now));
         sentCount += 1;
+        if (outcome.simulated) {
+          simulatedCount += 1;
+        }
       }
     }
 
@@ -145,6 +179,7 @@ export function createSmsService(deps: SmsServiceDeps) {
       reminded: sentCount,
       failed: candidates.length - sentCount,
       alreadyReminded,
+      simulated: simulatedCount,
     };
   }
 
@@ -168,33 +203,44 @@ export function createSmsService(deps: SmsServiceDeps) {
       };
     }
 
-    if (provider === undefined) {
+    const content = composeReminder(session, referral.isDelivery === 1);
+
+    if (provider !== undefined && isLive(normalised)) {
+      const result = await sendSms(provider, normalised, content, logger);
+      if (!result.ok) {
+        return {
+          referralId: referral.id,
+          success: false,
+          phone: normalised,
+          body: `Send failed: ${result.reason}`,
+        };
+      }
       return {
         referralId: referral.id,
-        success: false,
+        success: true,
         phone: normalised,
-        body: 'SMS sending is not configured',
+        body: content,
+        providerMessageId: result.providerMessageId,
+        simulated: false,
       };
     }
 
-    const content = composeReminder(session, referral.isDelivery === 1);
-    const result = await sendSms(provider, normalised, content, logger);
-
-    if (!result.ok) {
+    if (simulate) {
       return {
         referralId: referral.id,
-        success: false,
+        success: true,
         phone: normalised,
-        body: `Send failed: ${result.reason}`,
+        body: content,
+        providerMessageId: simulatedProviderMessageId(),
+        simulated: true,
       };
     }
 
     return {
       referralId: referral.id,
-      success: true,
+      success: false,
       phone: normalised,
-      body: content,
-      providerMessageId: result.providerMessageId,
+      body: provider === undefined ? NOT_CONFIGURED_REASON : RESTRICTED_REASON,
     };
   }
 
@@ -258,13 +304,24 @@ export function createSmsService(deps: SmsServiceDeps) {
     if (normalised === null) {
       throw new UnprocessableError('This household has no number to reply to');
     }
-    if (provider === undefined) {
-      throw new UnprocessableError('SMS sending is not configured');
-    }
 
-    const result = await sendSms(provider, normalised, body, logger);
-    if (!result.ok) {
-      throw new UnprocessableError('The reply could not be sent. Please try again.');
+    let providerMessageId: string;
+    let simulated: boolean;
+
+    if (provider !== undefined && isLive(normalised)) {
+      const result = await sendSms(provider, normalised, body, logger);
+      if (!result.ok) {
+        throw new UnprocessableError('The reply could not be sent. Please try again.');
+      }
+      providerMessageId = result.providerMessageId;
+      simulated = false;
+    } else if (simulate) {
+      providerMessageId = simulatedProviderMessageId();
+      simulated = true;
+    } else {
+      throw new UnprocessableError(
+        provider === undefined ? NOT_CONFIGURED_REASON : RESTRICTED_REASON,
+      );
     }
 
     const now = clock.nowIso();
@@ -275,10 +332,11 @@ export function createSmsService(deps: SmsServiceDeps) {
       kind: 'staff_reply',
       phone: normalised,
       body,
-      providerMessageId: result.providerMessageId,
+      providerMessageId,
       occurredAt: now,
       readAt: now, // Outbound — read on arrival, like a reminder or a failure.
       sentByUserId: actor.userId,
+      simulated,
       createdAt: now,
       updatedAt: now,
     });
@@ -316,6 +374,7 @@ export function createSmsService(deps: SmsServiceDeps) {
         occurredAt: now,
         readAt: null, // The only kind that is ever unread.
         sentByUserId: null,
+        simulated: false, // No such thing as a simulated household_reply — see the column comment.
         createdAt: now,
         updatedAt: now,
       });

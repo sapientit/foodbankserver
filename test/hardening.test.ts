@@ -379,6 +379,9 @@ describe('security headers', () => {
         AUTH_MODE: 'google',
         TURNSTILE_SECRET_KEY: 'secret',
         SMS_WEBHOOK_SECRET: 'sms-webhook-secret-long-enough',
+        // The ambient env carries wrangler.jsonc's dev-only SMS_SIMULATE=true;
+        // clear it so this production config passes its own tripwire.
+        SMS_SIMULATE: '',
       },
     });
 
