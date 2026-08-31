@@ -209,6 +209,8 @@ Three roles. Use them for menus; **never for access control.**
 | Create or amend sessions and referrals                   | ✅      | ❌          | ❌           |
 | Maintain the stock item list                             | ✅      | ❌          | ❌           |
 | Model parcels and the household grid (**incl. reading**) | ✅      | ❌          | ❌           |
+| Target stock lists: maintain (create / amend / delete)   | ✅      | ❌          | ❌           |
+| Target stock lists: read                                 | ✅      | ✅          | ❌           |
 | Referrers and reasons for referral                       | ✅      | ❌          | ❌           |
 | User maintenance                                         | ✅      | ❌          | ❌           |
 | **See why someone was referred**                         | ✅      | ❌          | ❌           |
@@ -218,6 +220,18 @@ Three roles. Use them for menus; **never for access control.**
 one will be wrong for it.** It reaches `GET /api/v1/fuel-help-list` and
 `GET /api/v1/auth/me` and nothing else at all — every other endpoint answers
 `403`. Its whole screen is one list. See §5e.
+
+**`GET /api/v1/target-stock-lists` is the one maintenance resource a team lead
+can read, settled 2026-08-31 (was Q48).** Everything else that says "admin
+only" above means admin only for reading too — model parcels above all, which
+this otherwise resembles, and precisely because "a team lead having no reason
+to see this" turned out to matter there. Target stock lists are different: a
+team lead already counts the shelves each week and stands in the stock room,
+so a target figure for an item — even one already well stocked — tells them
+nothing a walk around would not. Do not build a menu or guard on "team lead =
+admin minus the maintenance screens" from this row either way — that already
+got this resource backwards once, and reads that way in reverse just as
+easily.
 
 The server re-checks the role on every request from the signed token. If someone
 edits `role` in your app's state they will see extra menu items and get `403` on

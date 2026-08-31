@@ -17,6 +17,7 @@ import { publicSessionRoutes } from './modules/sessions/public.routes.ts';
 import { smsRoutes } from './modules/sms/sms.routes.ts';
 import { webhookRoutes } from './modules/sms/webhook.routes.ts';
 import { stockRoutes } from './modules/stock/stock.routes.ts';
+import { targetStockListRoutes } from './modules/target-stock-lists/target-stock-lists.routes.ts';
 import { sessionRoutes } from './modules/sessions/sessions.routes.ts';
 import { userRoutes } from './modules/users/users.routes.ts';
 import type { AppEnv } from './http/types.ts';
@@ -56,6 +57,7 @@ export function buildApp(config: AppConfig, options: ContextOptions = {}): Hono<
   app.route(API_PREFIX, fuelHelpRoutes());
   app.route(API_PREFIX, exportRoutes());
   app.route(API_PREFIX, stockRoutes());
+  app.route(API_PREFIX, targetStockListRoutes());
   app.route(API_PREFIX, ruleRoutes());
   app.route(API_PREFIX, pickListRoutes());
   app.route(API_PREFIX, userRoutes());

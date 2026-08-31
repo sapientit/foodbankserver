@@ -218,6 +218,13 @@
       "when": 1788116583885,
       "tag": "0030_sms-messages-phone-index",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "6",
+      "when": 1788171934096,
+      "tag": "0031_target-stock-lists",
+      "breakpoints": true
     }
   ]
 }

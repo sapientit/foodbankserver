@@ -55,6 +55,10 @@ tags:
       back. Messages are deleted after thirty days.
   - name: Stock
   - name: Parcel rules
+  - name: Target stock lists
+    description: >-
+      Named standing target stock lists an administrator maintains, and a team
+      lead shops against, reading the raw list along the way.
   - name: Pick lists
   - name: Admin setup
   - name: Ops
@@ -2715,6 +2719,95 @@ paths:
                     items: { $ref: '#/components/schemas/ParcelContentLine' }
         '422': { description: No model parcel is defined for that household size }
 
+  # ------------------------------------------------------ target stock lists --
+  /api/v1/target-stock-lists:
+    get:
+      tags: [Target stock lists]
+      summary: List target stock lists
+      description: >-
+        Admin and team lead, settled (2026-08-31, was Q48). A team lead sees
+        the list whole, target quantities and all, not only the shopping list
+        worked out from one — unlike a model parcel, there is nothing on a
+        target stock list a team lead does not already see for themselves in
+        the stock room.
+      responses:
+        '200':
+          description: Target stock lists
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [targetStockLists]
+                properties:
+                  targetStockLists:
+                    type: array
+                    items: { $ref: '#/components/schemas/TargetStockList' }
+    post:
+      tags: [Target stock lists]
+      summary: Create a target stock list
+      description: |
+        Admin only. `lines` is stored **exactly as sent** — the server does
+        not check `stockItemId` against the stock item catalogue and does not
+        overwrite `name`, settled 2026-08-31 (was Q46).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, lines]
+              properties:
+                name: { type: string, maxLength: 80 }
+                lines:
+                  type: array
+                  description: The same `stockItemId` may not appear twice.
+                  items: { $ref: '#/components/schemas/TargetStockLine' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TargetStockList' }
+        '409': { description: A target stock list with that name already exists }
+
+  /api/v1/target-stock-lists/{id}:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    patch:
+      tags: [Target stock lists]
+      summary: Amend a target stock list
+      description: |
+        Admin only. `name` is amendable, settled 2026-08-31 (was Q44) —
+        unlike a model parcel's, nothing else refers to a target stock list by
+        name. `lines`, if sent, **replaces the array wholesale**, like
+        `PUT /parcel-grid` — there is no line-by-line merge.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              properties:
+                name: { type: string, maxLength: 80 }
+                lines:
+                  type: array
+                  description: The same `stockItemId` may not appear twice.
+                  items: { $ref: '#/components/schemas/TargetStockLine' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TargetStockList' }
+        '404': { description: No target stock list with that id }
+        '409': { description: A target stock list with that name already exists }
+    delete:
+      tags: [Target stock lists]
+      summary: Delete a target stock list
+      description: Admin only. Idempotent — deleting an id that is already gone still returns `204`.
+      responses:
+        '204': { description: Deleted }
+
   # ------------------------------------------------------------ pick lists --
   /api/v1/sessions/{sessionId}/pick-list:
     parameters: [{ $ref: '#/components/parameters/SessionId' }]
@@ -4932,6 +5025,39 @@ components:
         contents:
           type: array
           items: { $ref: '#/components/schemas/ParcelContentLine' }
+
+    TargetStockLine:
+      type: object
+      required: [stockItemId, name, targetQuantity]
+      properties:
+        stockItemId:
+          type: string
+          description: >-
+            A stock item id, as a snapshot rather than a live reference — see
+            `TargetStockList`. Not validated against the stock item catalogue
+            on write: settled 2026-08-31 (was Q46), because that is what the
+            server has to tolerate in order to store the discrepancies it
+            catches for the administrator.
+        name:
+          type: string
+          maxLength: 120
+          description: The stock item's name as it stood when this line was saved.
+        targetQuantity:
+          type: integer
+          minimum: 1
+          description: >-
+            `0` is never valid, settled 2026-08-31 (was Q45) — the same as not
+            entered. Absence from the list is how "not on this list" is said.
+
+    TargetStockList:
+      type: object
+      required: [id, name, lines]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, maxLength: 80 }
+        lines:
+          type: array
+          items: { $ref: '#/components/schemas/TargetStockLine' }
 
     PickList:
       type: object

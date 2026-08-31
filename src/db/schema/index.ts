@@ -19,4 +19,5 @@ export * from './rules.ts';
 export * from './sessions.ts';
 export * from './sms.ts';
 export * from './stock.ts';
+export * from './target-stock-lists.ts';
 export * from './users.ts';
