@@ -28,6 +28,7 @@ import {
   acceptReferralSchema,
   cancelReferralSchema,
   copyReferralSchema,
+  firstTimeReviewSchema,
   referralAdminAmendSchema,
   referralListQuerySchema,
   referralSearchSchema,
@@ -259,6 +260,26 @@ export function referralRoutes(): Hono<AppEnv> {
     const service = serviceFor(c);
     const reviewed = await service.markReviewed(c.req.param('id'), actor);
     return c.json(await oneReferral(service, reviewed, actor));
+  });
+
+  /**
+   * The dedicated first-time review screen's Save action —
+   * `INITIAL_SPEC1.txt`, `#Christmas voucher and first-time selection`. The
+   * candidate previous-session dates come from the unchanged
+   * `GET /referrals/{id}/repeat-referrals`; this route only stores the
+   * client's choice.
+   */
+  routes.post('/referrals/:id/first-time-review', ...admins, async (c) => {
+    const actor = actorOf(c);
+    const service = serviceFor(c);
+    const { previousSessionDate } = await parseJsonBody(c, firstTimeReviewSchema);
+    const updated = await service.setFirstTimeReview(
+      c.req.param('id'),
+      previousSessionDate === undefined ? { noPreviousReferral: true } : { previousSessionDate },
+      actor,
+    );
+
+    return c.json(await oneReferral(service, updated, actor));
   });
 
   routes.post('/referrals/:id/cancel', ...admins, async (c) => {

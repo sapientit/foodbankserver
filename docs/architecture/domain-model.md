@@ -9,16 +9,18 @@ each one serves.
 
 Use these words in code, tests and API paths. Do not invent synonyms.
 
-| Term                  | Meaning                                                                                                             |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| **Session**           | A scheduled distribution slot. Standard ones repeat weekly; occurrences can be re-timed, cancelled or added ad hoc. |
-| **Recurring session** | The template a session is generated from.                                                                           |
-| **Referral**          | A request to feed a household, made by an authorised organisation or person, **without authentication**.            |
-| **Household**         | The people a referral feeds. Its size drives parcel contents.                                                       |
-| **Parcel**            | One household's food for one session.                                                                               |
-| **Pick list**         | The set of parcels for a session, generated on first view.                                                          |
-| **Stock item**        | A food line held in inventory: a name, a description, a category and a shelf number.                                |
-| **Attendance**        | Whether a referred household turned up.                                                                             |
+| Term                  | Meaning                                                                                                                                                                           |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Session**           | A scheduled distribution slot. Standard ones repeat weekly; occurrences can be re-timed, cancelled or added ad hoc.                                                               |
+| **Recurring session** | The template a session is generated from.                                                                                                                                         |
+| **Referral**          | A request to feed a household, made by an authorised organisation or person, **without authentication**.                                                                          |
+| **Household**         | The people a referral feeds. Its size drives parcel contents.                                                                                                                     |
+| **Parcel**            | One household's food for one session.                                                                                                                                             |
+| **Pick list**         | The set of parcels for a session, generated on first view.                                                                                                                        |
+| **Stock item**        | A food line held in inventory: a name, a description, a category and a shelf number.                                                                                              |
+| **Attendance**        | Whether a referred household turned up.                                                                                                                                           |
+| **First-time review** | An administrator's dedicated decision, per referral, about whether the household has been fed before — `unreviewed`, `no_previous_referral`, or a recorded previous-session date. |
+| **Voucher range**     | The one administrator-maintained Christmas-voucher date range. Applies to a session inclusively, by session date.                                                                 |
 
 ## Lifecycles
 
@@ -80,6 +82,14 @@ that do not. Twelve months on there is nothing left to act on — `INITIAL_SPEC1
 day. A cancelled referral reads `status: cancelled` with `outcome: booked`, deliberately: nothing
 happened on the day, and the cancellation is recorded on the status. One vocabulary serves both
 `Referral.outcome` and `RepeatReferralMatch.outcome`.
+
+**`firstTimeReviewStatus` is not `status` either, and moves on its own separate, one-way track.**
+Every referral starts `unreviewed` regardless of where it sits on the `status` pipeline above;
+`POST /referrals/{id}/first-time-review` is the only route that moves it, to `no_previous_referral`
+or to `previous_session` with a recorded date, and never back. Nothing here is gated on the
+referral's own `status` — settled by Pete, closed Q49: this will not come up in practice, since the
+screen is never offered against a referral that isn't open to it. `INITIAL_SPEC1.txt`,
+`#Christmas voucher and first-time selection`.
 
 **The household's own details are amendable; the referrer's are not.** Name, date of birth, address,
 postcode, referee phone, household counts, delivery and fuel flags, reason and answers can all be
@@ -231,6 +241,25 @@ Because cancellation has to reach `parcels` in the **same** `db.batch()` as the 
 `referrals.service.ts` takes the pick-lists _repository_, not its service: a service cannot hand
 back an unexecuted statement, and a second write outside the batch would be free to fail on its own,
 leaving exactly the state this removes with nothing recording it.
+
+**The voucher instruction is calculated at print time and never stored.** `PrintParcel.voucherInstruction`
+(`modules/voucher-config/derivations.ts#voucherInstructionFor`) reads the session's date, the
+voucher range and the referral's `firstTimeReviewStatus`/`firstTimeReviewDate` fresh on every call to
+`GET /pick-lists/{id}/print` — nothing is written onto `parcels` and nothing is computed at
+generation. An administrator may make the first-time-review decision after a pick list already
+exists, and the spec is explicit that printing must reflect the decision as it stands **now**, not as
+it stood when the list was made. `Parcel.firstTimeMarker`
+(`derivations.ts#firstTimeMarkerFor`) is the same kind of derivation for the Run a session screen,
+computed in the mapper rather than the print service, and deliberately narrower: `first_time` or
+`admin` or no marker at all, never the historic date — that is what makes it safe to hand to a team
+lead when `firstTimeReview` itself is admin-only.
+
+**`referrals.first_time_review_status` carries no `CHECK` constraint**, the same deliberate omission
+`collection_method` made in migration `0032`: `referrals` is a foreign-key parent (`parcels`,
+`sms_messages`), so a `CHECK` added to it forces the drop-and-recreate rebuild `migrations/0008`
+exists to explain. Validity is enforced in `referrals.schema.ts` only. `voucher_config`, a brand new
+table nothing references, carries real `CHECK`s: the same singleton pattern `parcel_grid` uses, plus
+`end_date >= start_date`.
 
 **Moving deletes the parcel; cancelling keeps it.** The two look alike and are opposites. A cancelled
 household really was one that session prepared a parcel for, so the parcel stays and says

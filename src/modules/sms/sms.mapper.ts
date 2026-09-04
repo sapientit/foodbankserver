@@ -1,4 +1,4 @@
-import type { SmsMessage } from '../../db/schema/sms.ts';
+import type { SmsMessage, SmsRecipientRole } from '../../db/schema/sms.ts';
 import type { Session, SessionStatus } from '../../db/schema/sessions.ts';
 
 /**
@@ -16,6 +16,15 @@ import type { Session, SessionStatus } from '../../db/schema/sessions.ts';
  * `requireRole('admin')` only and a team lead's token never reaches this
  * mapper for one. So once a caller is allowed to see a message at all, they
  * may see the whole of it.
+ *
+ * **A `referrer_reply` reaches only the admin routes above, structurally.**
+ * It always has `referralId: null` — see `db/schema/sms.ts` — and the team
+ * lead-reachable routes (`GET /referrals/:id/sms-messages`, `POST
+ * /referrals/:id/sms-messages`) are queries scoped to one `referralId`, so a
+ * `referrer_reply` row cannot be returned by them whatever this mapper does.
+ * `toSmsMessageResponse`, which those routes use, therefore carries no
+ * `candidateParcels` field at all — there is nothing that role split needs to
+ * hide.
  */
 
 export interface SmsMessageResponse {
@@ -26,6 +35,14 @@ export interface SmsMessageResponse {
   readonly body: string;
   readonly occurredAt: string;
   readonly readAt: string | null;
+  /**
+   * Whose number `phone` actually is. `null` on a genuinely loose reply —
+   * nothing to derive it from. A `referrer_reply` can never reach this
+   * mapper: it always has `referralId: null`, and every route this mapper
+   * serves is scoped to one referral's own thread. See `sms.mapper.ts`'s
+   * module comment and `SmsCandidateParcel`.
+   */
+  readonly recipientRole: SmsRecipientRole | null;
   /**
    * True when this message was never actually sent through TheSMSWorks — the
    * environment's dev/test simulator, or a destination outside its one live
@@ -44,6 +61,7 @@ export function toSmsMessageResponse(message: SmsMessage): SmsMessageResponse {
     body: message.body,
     occurredAt: message.occurredAt,
     readAt: message.readAt,
+    recipientRole: message.recipientRole,
     simulated: message.simulated,
   };
 }
@@ -118,6 +136,20 @@ export interface SmsInboxSession {
   readonly status: SessionStatus;
 }
 
+/**
+ * One of a referrer's currently open `referrer_collect` parcels, for an
+ * administrator to tell a `referrer_reply` apart by. No name, no address, no
+ * reason — `INITIAL_SPEC1.txt`, "SMS reminders and replies" is explicit that
+ * a referrer message carries nothing about the household beyond what
+ * identifies which one it might be.
+ */
+export interface SmsCandidateParcel {
+  readonly referralId: string;
+  readonly sessionId: string;
+  readonly sessionDate: string;
+  readonly startTime: string;
+}
+
 export interface SmsInboxMessageResponse {
   readonly id: string;
   readonly referralId: string | null;
@@ -125,8 +157,17 @@ export interface SmsInboxMessageResponse {
   readonly body: string;
   readonly occurredAt: string;
   readonly readAt: string | null;
+  readonly recipientRole: SmsRecipientRole | null;
   readonly location: SmsMessageLocation;
   readonly session: SmsInboxSession | null;
+  /**
+   * Present only on a `kind: 'referrer_reply'` row — every currently open
+   * `referrer_collect` referral for the referrer this message came from,
+   * computed fresh by `sms.service.ts`'s `listInbox` rather than stored, so
+   * it never goes stale as a candidate referral closes. Absent, not an empty
+   * array, on every other kind.
+   */
+  readonly candidateParcels?: readonly SmsCandidateParcel[] | undefined;
   /**
    * On every row, not only `unmatched` ones. `listInbox` now returns a
    * phone number's whole history in one call rather than every retained
@@ -150,11 +191,19 @@ function inboxPhone(phone: string): string | null {
   return phone === '' ? null : phone;
 }
 
-export function toInboxMessageResponse(row: {
-  message: SmsMessage;
-  session: Session | null;
-}): SmsInboxMessageResponse {
+export function toInboxMessageResponse(
+  row: {
+    message: SmsMessage;
+    session: Session | null;
+  },
+  candidateParcels?: readonly SmsCandidateParcel[],
+): SmsInboxMessageResponse {
   const { message, session } = row;
+  // Spread rather than assigned: absent on every kind but `referrer_reply`,
+  // not an empty array a client would have to tell apart from "computed and
+  // found nothing".
+  const candidates =
+    message.kind === 'referrer_reply' && candidateParcels !== undefined ? { candidateParcels } : {};
 
   if (session === null) {
     return {
@@ -164,10 +213,12 @@ export function toInboxMessageResponse(row: {
       body: message.body,
       occurredAt: message.occurredAt,
       readAt: message.readAt,
+      recipientRole: message.recipientRole,
       location: 'unmatched',
       session: null,
       phone: inboxPhone(message.phone),
       simulated: message.simulated,
+      ...candidates,
     };
   }
 
@@ -183,6 +234,7 @@ export function toInboxMessageResponse(row: {
     body: message.body,
     occurredAt: message.occurredAt,
     readAt: message.readAt,
+    recipientRole: message.recipientRole,
     location,
     session: {
       id: session.id,
@@ -192,5 +244,6 @@ export function toInboxMessageResponse(row: {
     },
     phone: inboxPhone(message.phone),
     simulated: message.simulated,
+    ...candidates,
   };
 }

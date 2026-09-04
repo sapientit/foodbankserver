@@ -1,7 +1,24 @@
 import type { Actor } from '../../core/actor.ts';
 import { parseAnswers } from '../../core/answers.ts';
-import type { Referral } from '../../db/schema/referrals.ts';
+import type {
+  CollectionMethod,
+  FirstTimeReviewStatus,
+  Referral,
+} from '../../db/schema/referrals.ts';
 import type { MatchKind } from './matching.ts';
+
+/**
+ * `referral.collectionMethod` is nullable in SQL for the reason given on the
+ * column itself, but every write path sets it and the backfill migration
+ * gave every pre-existing row one, so it should never actually be null by
+ * the time a response is built. The fallback re-applies that same migration
+ * rule rather than trusting the column blindly — `delivery` where
+ * `isDelivery` is set, `collection` otherwise, **never** `referrer_collect`,
+ * which nothing here can recover once lost.
+ */
+function collectionMethodOf(referral: Referral): CollectionMethod {
+  return referral.collectionMethod ?? (referral.isDelivery === 1 ? 'delivery' : 'collection');
+}
 
 /**
  * Response mappers are the output allowlist — and for referrals they are also
@@ -36,6 +53,17 @@ export interface ReferralResponse {
   readonly adults: number;
   readonly children: number;
   readonly householdSize: number;
+  /**
+   * `collection`, `delivery` or `referrer_collect` — the sole source of truth
+   * for whether this referral is a delivery. See `db/schema/referrals.ts`.
+   */
+  readonly collectionMethod: CollectionMethod;
+  /**
+   * Derived from `collectionMethod` (`delivery` means `true`, every other
+   * method `false`), kept for callers that only care whether this is a
+   * delivery. `referrer_collect` reads `false` here, the same as `collection`
+   * — it is a collection in every respect except who walks in.
+   */
   readonly isDelivery: boolean;
   readonly needsFuelHelp: boolean;
   readonly referrerOrganisation: string;
@@ -86,6 +114,27 @@ export interface ReferralResponse {
    * team lead's request costs no extra query.
    */
   readonly repeatReferrals?: RepeatReferralSummaryResponse | undefined;
+  /**
+   * The dedicated first-time review screen's own state — `INITIAL_SPEC1.txt`,
+   * `#Christmas voucher and first-time selection`. Admin-only, like
+   * `reasonId`: a team lead gets only the derived, dateless marker on a
+   * parcel (`ParcelResponse.firstTimeMarker`), never this.
+   */
+  readonly firstTimeReview?: FirstTimeReviewResponse | undefined;
+}
+
+/** `{ status, previousSessionDate }` — admin-only, embedded in `ReferralResponse`. */
+export interface FirstTimeReviewResponse {
+  readonly status: FirstTimeReviewStatus;
+  /** Set only when `status` is `previous_session`. */
+  readonly previousSessionDate: string | null;
+}
+
+function toFirstTimeReviewResponse(referral: Referral): FirstTimeReviewResponse {
+  return {
+    status: referral.firstTimeReviewStatus,
+    previousSessionDate: referral.firstTimeReviewDate,
+  };
 }
 
 /**
@@ -139,6 +188,7 @@ export function toReferralResponse(
     adults: referral.adults,
     children: referral.children,
     householdSize: referral.adults + referral.children,
+    collectionMethod: collectionMethodOf(referral),
     isDelivery: referral.isDelivery === 1,
     needsFuelHelp: referral.needsFuelHelp === 1,
     referrerOrganisation: referral.referrerOrganisation,
@@ -167,6 +217,7 @@ export function toReferralResponse(
     referrerEmail: referral.referrerEmail,
     referrerPhone: referral.referrerPhone,
     reviewComment: referral.reviewComment,
+    firstTimeReview: toFirstTimeReviewResponse(referral),
     // Spread rather than assigned, so an unasked-for field is absent rather
     // than null — a client cannot tell "you may not see this" from "there is
     // no note" if both arrive as null.
@@ -194,6 +245,7 @@ export interface ReferralReceiptResponse {
   readonly status: string;
   readonly adults: number;
   readonly children: number;
+  readonly collectionMethod: CollectionMethod;
   readonly isDelivery: boolean;
   readonly needsFuelHelp: boolean;
   readonly refereeFirstName: string | null;
@@ -210,6 +262,7 @@ export function toReceiptResponse(referral: Referral): ReferralReceiptResponse {
     status: referral.status,
     adults: referral.adults,
     children: referral.children,
+    collectionMethod: collectionMethodOf(referral),
     isDelivery: referral.isDelivery === 1,
     needsFuelHelp: referral.needsFuelHelp === 1,
     refereeFirstName: referral.refereeFirstName,

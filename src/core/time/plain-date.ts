@@ -84,6 +84,11 @@ export function nextWeekdayOnOrAfter(from: PlainDate, weekday: number): PlainDat
   return addDays(from, shift);
 }
 
+/** The Monday on or before `date` (ISO week; `weekdayOf` returns 1 for Monday). */
+export function startOfWeek(date: PlainDate): PlainDate {
+  return addDays(date, -(weekdayOf(date) - 1));
+}
+
 /** Negative if a < b, zero if equal, positive if a > b. Lexicographic works for YYYY-MM-DD. */
 export function comparePlainDates(a: PlainDate, b: PlainDate): number {
   return a < b ? -1 : a > b ? 1 : 0;

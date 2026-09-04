@@ -58,6 +58,7 @@
 // loader writing straight to the database would be the one path that skips
 // them.
 import { readFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 
 const HELP = `
 Load stock items and model parcels from a CSV.
@@ -74,14 +75,15 @@ Load stock items and model parcels from a CSV.
                       stops the load before anything is written.
   --help
 
-The CSV's first four columns are the stock item: name, shelf, category,
-description. Every column after the blank spacer is a model parcel, named by
-its header, holding a quantity per stock item row.
+The CSV's first five columns are the stock item: name, shelf, low-stock
+threshold, category, description. Leave a threshold blank to leave that item
+unwatched. Every column after the blank spacer is a model parcel, named by its
+header, holding a quantity per stock item row.
 `;
 
-const COLUMN = { name: 0, shelf: 1, category: 2, description: 3 };
-/** Columns 0-3 are the item and column 4 is the spacer the spreadsheet uses. */
-const FIRST_PARCEL_COLUMN = 5;
+const COLUMN = { name: 0, shelf: 1, lowStockThreshold: 2, category: 3, description: 4 };
+/** Columns 0-4 are the item and column 5 is the spacer the spreadsheet uses. */
+const FIRST_PARCEL_COLUMN = 6;
 
 function parseArgs(argv) {
   const args = {
@@ -167,8 +169,8 @@ const blankToNull = (value) => {
   return trimmed === '' ? null : trimmed;
 };
 
-function readCsv(path) {
-  const rows = parseCsv(readFileSync(path, 'utf8'));
+export function readCsvText(text, path = 'CSV') {
+  const rows = parseCsv(text);
   const header = rows[0];
   if (header === undefined) fail(`${path} is empty.`);
 
@@ -211,6 +213,18 @@ function readCsv(path) {
       continue;
     }
 
+    const rawThreshold = (cells[COLUMN.lowStockThreshold] ?? '').trim();
+    const lowStockThreshold = rawThreshold === '' ? null : Number(rawThreshold);
+    if (
+      lowStockThreshold !== null &&
+      (!Number.isInteger(lowStockThreshold) || lowStockThreshold < 0 || lowStockThreshold > 100000)
+    ) {
+      warnings.push(
+        `line ${line}: "${name}" has low-stock threshold "${rawThreshold}", not a whole number from 0 to 100000 — row skipped`,
+      );
+      continue;
+    }
+
     const quantities = new Map();
     for (const { column, name: parcelName } of parcelColumns) {
       const raw = (cells[column] ?? '').trim();
@@ -230,11 +244,16 @@ function readCsv(path) {
       shelfNumber: shelf,
       category,
       description: blankToNull(cells[COLUMN.description]),
+      lowStockThreshold,
       quantities,
     });
   }
 
   return { items, parcelColumns, warnings };
+}
+
+function readCsv(path) {
+  return readCsvText(readFileSync(path, 'utf8'), path);
 }
 
 // ---------------------------------------------------------------- the API --
@@ -357,7 +376,7 @@ function checkOrphans(orphans, { force, dryRun }) {
 
 // ------------------------------------------------------------- the loading --
 
-async function loadStockItems(call, items, existing, dryRun) {
+export async function loadStockItems(call, items, existing, dryRun) {
   const byName = new Map(existing.map((item) => [key(item.name), item]));
   const tally = { created: 0, updated: 0, unchanged: 0 };
   const idsByName = new Map();
@@ -377,6 +396,7 @@ async function loadStockItems(call, items, existing, dryRun) {
           name: item.name,
           category: item.category,
           shelfNumber: item.shelfNumber,
+          lowStockThreshold: item.lowStockThreshold,
           ...(item.description === null ? {} : { description: item.description }),
         });
         idsByName.set(key(item.name), created.id);
@@ -395,6 +415,9 @@ async function loadStockItems(call, items, existing, dryRun) {
     if (found.shelfNumber !== item.shelfNumber) changes.shelfNumber = item.shelfNumber;
     if (key(found.category) !== key(item.category)) changes.category = item.category;
     if ((found.description ?? null) !== item.description) changes.description = item.description;
+    if (found.lowStockThreshold !== item.lowStockThreshold) {
+      changes.lowStockThreshold = item.lowStockThreshold;
+    }
 
     if (Object.keys(changes).length === 0) {
       tally.unchanged += 1;
@@ -466,59 +489,70 @@ function sameContents(before, after) {
 
 // --------------------------------------------------------------------------
 
-const args = parseArgs(process.argv.slice(2));
-if (args.help) {
-  console.log(HELP);
-  process.exit(0);
+export async function main(argv = process.argv.slice(2)) {
+  const args = parseArgs(argv);
+  if (args.help) {
+    console.log(HELP);
+    process.exit(0);
+  }
+
+  const { items, parcelColumns, warnings } = readCsv(args.file);
+
+  console.log(`\n${args.file}: ${items.length} stock items, ${parcelColumns.length} model parcels`);
+  console.log(
+    `into ${args.baseUrl}${args.dryRun ? '  (dry run — nothing will be written)' : ''}\n`,
+  );
+
+  if (warnings.length > 0) {
+    console.log('Warnings:');
+    for (const warning of warnings) console.log(`  ! ${warning}`);
+    console.log('');
+  }
+
+  const token = await signIn(args.baseUrl, args.email);
+  const call = createClient(args.baseUrl, token);
+
+  // Both lists are read before anything is written, so that the check below can
+  // refuse a load whole rather than half-way through one.
+  const { items: existingItems } = await call(
+    'GET',
+    '/stock/items?includeInactive=true&order=shelf',
+  );
+  const { modelParcels: existingParcels } = await call('GET', '/model-parcels');
+
+  checkOrphans(findOrphans({ existingItems, existingParcels, items, parcelColumns }), {
+    force: args.force,
+    dryRun: args.dryRun,
+  });
+
+  console.log('Stock items');
+  const { tally: itemTally, idsByName } = await loadStockItems(
+    call,
+    items,
+    existingItems,
+    args.dryRun,
+  );
+  console.log(
+    `  ${itemTally.created} created, ${itemTally.updated} updated, ${itemTally.unchanged} unchanged\n`,
+  );
+
+  console.log('Model parcels');
+  const parcelTally = await loadModelParcels(
+    call,
+    items,
+    parcelColumns,
+    existingParcels,
+    idsByName,
+    args.dryRun,
+  );
+  console.log(
+    `  ${parcelTally.created} created, ${parcelTally.updated} updated, ` +
+      `${parcelTally.unchanged} unchanged, ${parcelTally.skipped} skipped\n`,
+  );
+
+  if (args.dryRun) console.log('Nothing was written. Run again without --dry-run to load.\n');
 }
 
-const { items, parcelColumns, warnings } = readCsv(args.file);
-
-console.log(`\n${args.file}: ${items.length} stock items, ${parcelColumns.length} model parcels`);
-console.log(`into ${args.baseUrl}${args.dryRun ? '  (dry run — nothing will be written)' : ''}\n`);
-
-if (warnings.length > 0) {
-  console.log('Warnings:');
-  for (const warning of warnings) console.log(`  ! ${warning}`);
-  console.log('');
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await main();
 }
-
-const token = await signIn(args.baseUrl, args.email);
-const call = createClient(args.baseUrl, token);
-
-// Both lists are read before anything is written, so that the check below can
-// refuse a load whole rather than half-way through one.
-const { items: existingItems } = await call('GET', '/stock/items?includeInactive=true&order=shelf');
-const { modelParcels: existingParcels } = await call('GET', '/model-parcels');
-
-checkOrphans(findOrphans({ existingItems, existingParcels, items, parcelColumns }), {
-  force: args.force,
-  dryRun: args.dryRun,
-});
-
-console.log('Stock items');
-const { tally: itemTally, idsByName } = await loadStockItems(
-  call,
-  items,
-  existingItems,
-  args.dryRun,
-);
-console.log(
-  `  ${itemTally.created} created, ${itemTally.updated} updated, ${itemTally.unchanged} unchanged\n`,
-);
-
-console.log('Model parcels');
-const parcelTally = await loadModelParcels(
-  call,
-  items,
-  parcelColumns,
-  existingParcels,
-  idsByName,
-  args.dryRun,
-);
-console.log(
-  `  ${parcelTally.created} created, ${parcelTally.updated} updated, ` +
-    `${parcelTally.unchanged} unchanged, ${parcelTally.skipped} skipped\n`,
-);
-
-if (args.dryRun) console.log('Nothing was written. Run again without --dry-run to load.\n');

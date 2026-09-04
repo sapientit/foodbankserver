@@ -75,6 +75,7 @@ export function submission(world: ReferralWorld, overrides: Record<string, unkno
     refereePhone: '07700 900123',
     adults: 2,
     children: 3,
+    collectionMethod: 'collection',
     answers: { Dietary: 'no pork' },
     ...overrides,
   };

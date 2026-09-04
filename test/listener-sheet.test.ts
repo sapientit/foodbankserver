@@ -221,7 +221,7 @@ describe('the listener sheet', () => {
     const delivering = await submitReferral(
       testApp,
       world,
-      { isDelivery: true },
+      { collectionMethod: 'delivery' },
       { clientIp: '203.0.113.5' },
     );
     expect(delivering.status).toBe(201);

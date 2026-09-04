@@ -240,8 +240,11 @@ every one of them — harmless, but show the right menu anyway.
 ### Field-level visibility
 
 A **team lead does not receive** `reasonId`, `referrerEmail`, `referrerPhone`,
-`reviewComment` or `adminInfo` on a referral. The fields are absent, not null.
-Treat them as optional in your types — `openapi-typescript` already will.
+`reviewComment`, `adminInfo` or `firstTimeReview` on a referral. The fields are
+absent, not null. Treat them as optional in your types — `openapi-typescript`
+already will. `firstTimeReview` is new — see **5j** — and a team lead's
+equivalent is the dateless `Parcel.firstTimeMarker` on a pick list, not a
+thinner version of this field.
 
 Why: the reason for referral is the most sensitive thing in the system. It can
 mean financial hardship, domestic abuse, or immigration status. A picker needs
@@ -471,6 +474,39 @@ affected, however full delivery is. This replaces the boolean
 `deliveriesAllowed` this file used to describe here, which the form and
 server both left unenforced; that is no longer the case. Settled by Pete on
 2026-08-19.
+
+### `collectionMethod` replaces `isDelivery` as input — breaking
+
+`ReferralSubmission` and `ReferralAmend` no longer accept `isDelivery`.
+**Send `collectionMethod` instead** — `'collection'`, `'delivery'` or
+`'referrer_collect'` — required on submission, optional on amendment like
+every other field there. It is now the sole source of truth for whether a
+parcel is a delivery; there is no longer a separate flag for the two to
+disagree on.
+
+`referrer_collect` is new: **the referrer, not the referee, is coming to
+collect the parcel.** It counts as a collection everywhere delivery capacity,
+the driver's round or the delivery address matter — a session's
+`deliveryAvailability` never sees it, and it goes out at the session the same
+as an ordinary collection. What changes is who a parcel-related text message
+goes to; see "Referrer collection and SMS" under §5d.
+
+`isDelivery` still comes back on every referral response, `ReferralReceipt`
+included — derived (`true` only for `collectionMethod: 'delivery'`), read-only,
+kept for anything that only cares whether a parcel is a delivery and does not
+need to tell `collection` from `referrer_collect` apart.
+
+A referral submitted before this shipped has its `collectionMethod` read
+across from whatever `isDelivery` used to say — `delivery` where that was
+`true`, `collection` where it was not. Nothing already held can say whether a
+referrer was collecting, so no existing referral is ever `referrer_collect`.
+
+### `referrerPhone` is now required — breaking
+
+`ReferralSubmission.referrerPhone` is required on **every** referral, not only
+a `referrer_collect` one — the food bank may need to ring the person who sent
+a household regardless of how the parcel itself is collected. It was
+previously optional; omitting it is now a `400`.
 
 ### A session's delivery window
 
@@ -762,7 +798,7 @@ next referral from that address is not held up. Three things to build around:
 ```
 refereeFirstName   refereeSurname     refereeDateOfBirth
 refereeAddress     refereePostcode    refereePhone (nullable)
-adults             children           isDelivery      needsFuelHelp
+adults             children           collectionMethod   needsFuelHelp
 reasonId           answers            adminInfo (nullable)
 sessionId (a move)
 ```
@@ -861,7 +897,8 @@ not copied, and the two are never alternatives for the same referral. Gate on
 who has already collected is a `409` too.
 
 **What the copy carries:** the referee's name, date of birth, address, postcode
-and phone; `adults`, `children`, `householdSize`, `isDelivery`, `needsFuelHelp`;
+and phone; `adults`, `children`, `householdSize`, `collectionMethod` (and the
+`isDelivery` it derives), `needsFuelHelp`;
 `reasonId`; `answers` whole; and the referrer's name, organisation, email and
 phone.
 
@@ -1168,6 +1205,35 @@ distinction never arises.
 
 Team leads and admins both. Defaults to shelf order.
 
+### What is every session still to come going to need?
+
+```
+GET /pick-lists/stock-requirement-summary?upTo=YYYY-MM-DD&order=shelf|category
+  → { items: [{ …StockItem, requiredQuantity }] }
+```
+
+**Admin only**, and a different figure from the per-session one above: it sums
+`requiredQuantity` across **every** pick list whose session is not confirmed and
+whose `sessionDate` is on or before `upTo`, not just one session's. `upTo` is
+required.
+
+- A `-1` line is skipped rather than causing a `409` — left out of the total,
+  never subtracted from it, the same as the fresh-food shopping list treats it.
+- Cancelled parcels are left out too.
+- **Does not wait for every parcel to be reviewed** — deliberately different
+  from the per-session endpoint. It looks across many sessions at once, most
+  not yet picked, and a total that only appeared once picking was finished
+  would be too late for the planning it is for.
+- **No comparison against stock on hand.** There is no `quantityOnHand` and no
+  `shortfall` here — just the total required. A referral with no pick list
+  generated yet for its session has nothing here to add to the total.
+- **The window also has a floor: the start of the current week, Europe/London
+  — not a parameter.** `upTo` is the only date you choose. This report is
+  about sessions still being planned for, so a session dated before the
+  current week does not add to the total however long it has sat unconfirmed.
+
+Defaults to shelf order.
+
 ---
 
 ## 5. Printing
@@ -1425,9 +1491,9 @@ Each row in the list carries a `location`:
 | `active_session` | Its session is still `planned` or `in_progress`.       | No — the team lead's to read.       |
 | `closed_session` | Its session has since been `confirmed` or `cancelled`. | Yes, if unread.                     |
 
-Only unread `household_reply` rows are ever counted at all — a `reminder`,
-`staff_reply` or `failure` is never unread, so `location` is informational for
-those, not a trigger for attention.
+Only unread `household_reply` and `referrer_reply` rows are ever counted at
+all — a `reminder`, `staff_reply` or `failure` is never unread, so `location`
+is informational for those, not a trigger for attention.
 
 `session` (session id, `sessionDate`, `startTime`, `status`) is included on
 every row except `unmatched`, where it is `null`. `phone` is now on **every**
@@ -1456,6 +1522,43 @@ endpoint does not offer a way around that; open and mark it read through the
 referral's own thread instead. It is idempotent and touches only the message
 named: it never marks another message and never clears a session's own
 `sms-summary` count.
+
+### Referrer collection and SMS
+
+When a referral's `collectionMethod` is `referrer_collect`, **every
+parcel-related message about it goes to `referrerPhone`, never
+`refereePhone`** — the reminder, and a staff reply sent from that referral's
+thread. `kind: 'reminder'` and `kind: 'staff_reply'` rows now carry a new
+field, `recipientRole`: `'referrer'` or `'referee'`, telling you which number
+a given message actually reached without you having to cross-reference the
+referral's current `collectionMethod` (which can itself be corrected later).
+
+**The reminder text for a `referrer_collect` message is a placeholder**,
+`"SMS wording for referrer collection is to be agreed."`, until the charity
+settles the real wording — see `OPEN-QUESTIONS.md` in the server repo. It is
+never a variant of the ordinary collection/delivery text. A staff reply is
+unaffected — staff still type their own words, only the recipient changes.
+
+**Inbound texts from a referrer are a new, distinct kind: `referrer_reply`.**
+When an inbound number matches a referrer currently collecting one or more
+open `referrer_collect` parcels, the message is categorised this way instead
+of `household_reply` — checked first, ahead of the ordinary household
+matching, which only runs when the sender is _not_ an active referrer
+collector. A `referrer_reply` always has `referralId: null` and no `session`:
+a referrer may be collecting for more than one household, so it is never
+guessed down to one.
+
+**`referrer_reply` reaches only the two admin-only inbox endpoints above —
+never a referral's own thread, and never a team lead.** `GET /sms-messages`
+is where you find one: its `candidateParcels` field (present only on this
+`kind`) lists every one of that referrer's currently **open**
+`referrer_collect` referrals — `{ referralId, sessionId, sessionDate,
+startTime }`, nothing else about the household — computed fresh on every
+read, not fixed at the moment the message arrived, so a parcel that closes in
+the meantime drops off the list on its own. An administrator reads
+`candidateParcels` to work out by hand which household a reply was about;
+nothing here assigns one automatically, and there is no separate "assign"
+call — that judgement stays outside the API.
 
 ### Thirty days
 
@@ -1881,6 +1984,101 @@ they read today. Render the parcel's note; do not recompose it from
 `Parcel.answers` on the maintenance screen either, or a team leader's edit will
 appear to have been thrown away. `PrintParcel` still carries no `answers` and
 never the reason for referral — see **5**.
+
+---
+
+## 5j. Christmas voucher and first-time review
+
+Two admin-maintained pieces of state, and two derived, read-only values built
+from them — `INITIAL_SPEC1.txt`, `#Christmas voucher and first-time
+selection`. Nothing here changes the shape of pick-list generation.
+
+### The voucher date range (admin only)
+
+`GET /voucher-config` / `PUT /voucher-config`:
+
+```json
+{ "startDate": "2026-12-01", "endDate": "2026-12-24" }
+```
+
+Both dates are `null` until an administrator sets a range. `PUT` always
+replaces both together — there is no way to move one end alone. The range is
+**inclusive at both ends**: a session dated on either boundary is in range.
+
+Nobody but an administrator reads this directly. A team lead never sees the
+raw range, only the two derived values below.
+
+### The first-time review screen (admin only)
+
+Every referral carries `firstTimeReview` — admin-only, absent for a team
+lead, the same visibility rule as `reasonId`:
+
+```json
+{ "status": "unreviewed", "previousSessionDate": null }
+```
+
+`status` is one of `unreviewed`, `no_previous_referral` or
+`previous_session`. Every referral starts `unreviewed`; referrals that
+existed before this feature shipped were backfilled once to
+`no_previous_referral` rather than left as a backlog for an administrator to
+work through. `previousSessionDate` is set only when `status` is
+`previous_session`.
+
+**The dedicated review screen's candidate list is not a new endpoint.** Reuse
+the unchanged `GET /referrals/{id}/repeat-referrals` for the candidate
+previous sessions — it already returns every match with its `outcome`. Show
+every candidate; a `No Show` or `Not In` match stays visible but you decide
+not to make it selectable, and a still-pending match is selectable whatever
+it is pending on (its own review, its referrer's, or the session itself).
+
+Save the choice with `POST /referrals/{id}/first-time-review`, exactly one of:
+
+```json
+{ "noPreviousReferral": true }
+```
+
+```json
+{ "previousSessionDate": "2026-01-05" }
+```
+
+It responds with the updated `Referral`. It does not check the date you send
+against the candidate list — the candidates are for your screen to offer, not
+for the server to validate against — and it does not require the referral
+being reviewed to be in any particular `status`; only a referral whose
+details have been forgotten refuses it, with a `409`. Settled by Pete
+(closed Q49): a rejected, cancelled or confirmed-session referral can still
+be marked, since the screen is never offered against one in practice.
+
+### Derived value 1: the Run a session marker
+
+`Parcel.firstTimeMarker`, on `GET /sessions/{sessionId}/pick-list` and
+`GET /pick-lists/{id}` — safe for a team lead, unlike `firstTimeReview`
+itself:
+
+- `"first_time"` — `no_previous_referral`.
+- `"admin"` — still `unreviewed`.
+- `null` — a previous-session date is recorded. No marker at all, and never
+  the date.
+
+### Derived value 2: the printed voucher instruction
+
+`PrintParcel.voucherInstruction`, on `GET /pick-lists/{id}/print`, **worked
+out fresh on every print** — never stored on the parcel, never generated
+with the pick list, so a first-time-review decision made after the pick list
+already exists still reaches the sheet next time it is printed:
+
+- `null` — no instruction on the sheet. The session's date is outside the
+  configured range, or nothing has been configured.
+- `"refer_to_admin"` — in range, `unreviewed`.
+- `"provide_voucher"` — in range, and either no previous referral or a
+  recorded previous-session date that itself falls outside the range.
+- `"already_received"` — in range, and the recorded previous-session date
+  falls inside the range too.
+
+Print exactly one instruction where this is non-null; render nothing where it
+is `null`. As with the marker above, this is never the historic date and
+carries nothing else about the referral — `PrintParcel` still has no
+`answers` and no reason for referral, see **5**.
 
 ---
 

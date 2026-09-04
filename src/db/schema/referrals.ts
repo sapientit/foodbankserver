@@ -46,6 +46,36 @@ export type ReferralStatus = (typeof REFERRAL_STATUSES)[number];
 export const REFERRAL_STATUSES_HOLDING_A_PLACE = ['pending_review', 'active', 'reviewed'] as const;
 
 /**
+ * `collection`, `delivery` or `referrer_collect` — see `collectionMethod` below.
+ *
+ * Not a `CHECK` constraint, unlike `status`. `referrals` is a foreign-key
+ * parent (`parcels`, `sms_messages`), so adding one here means the same
+ * drop-and-recreate rebuild `migrations/0008` had to work around — the trade
+ * this codebase already made once for `deliveryWindowStart`/`End` on
+ * `sessions` and `recurring_sessions` (`STATUS.md`, "delivery windows").
+ * Requiredness lives in `referrals.schema.ts` instead, the same asymmetry the
+ * PII columns use and for the same reason: SQLite has no `ALTER COLUMN`.
+ */
+export const COLLECTION_METHODS = ['collection', 'delivery', 'referrer_collect'] as const;
+export type CollectionMethod = (typeof COLLECTION_METHODS)[number];
+
+/**
+ * `unreviewed`, `no_previous_referral` or `previous_session` — see
+ * `firstTimeReviewStatus` below.
+ *
+ * Not a `CHECK` constraint, for the same reason `COLLECTION_METHODS` is not
+ * one: `referrals` is a foreign-key parent, so adding a `CHECK` here forces
+ * the same drop-and-recreate rebuild `migrations/0008` had to work around.
+ * Requiredness and validity live in `referrals.schema.ts` instead.
+ */
+export const FIRST_TIME_REVIEW_STATUSES = [
+  'unreviewed',
+  'no_previous_referral',
+  'previous_session',
+] as const;
+export type FirstTimeReviewStatus = (typeof FIRST_TIME_REVIEW_STATUSES)[number];
+
+/**
  * A request to feed a household at a session.
  *
  * ## The PII rule, and why it looks wrong
@@ -58,11 +88,14 @@ export const REFERRAL_STATUSES_HOLDING_A_PLACE = ['pending_review', 'active', 'r
  *
  * ## What survives a purge, and why
  *
- * `adults`, `children`, `isDelivery`, `needsFuelHelp` and `reasonId` sit
+ * `adults`, `children`, `isDelivery`, `collectionMethod`, `needsFuelHelp`,
+ * `reasonId`, `firstTimeReviewStatus` and `firstTimeReviewDate` sit
  * **outside** the purged set on purpose. Once the referee's own columns are
  * nulled they are no longer identifiable, so these become statistics rather
  * than personal data — and they are exactly what the charity needs to answer
- * "we fed 340 households, 890 people, 22% for benefit delay, in Q3".
+ * "we fed 340 households, 890 people, 22% for benefit delay, in Q3". A
+ * previous-session date is no more identifying on its own than `reasonId` is;
+ * it is only personal data in combination with the columns that are purged.
  *
  * That is only safe because the reason is a **dropdown**, not free text.
  * Someone always eventually types a name into a free-text field.
@@ -117,8 +150,58 @@ export const referrals = sqliteTable(
      * Delivered rather than collected. There is no second address: a delivery
      * goes to the referee's own address, so `refereeAddress` is the one the
      * driver uses.
+     *
+     * **Derived, not client-supplied, since `collectionMethod` arrived.**
+     * `referrals.service.ts` writes this from `collectionMethod === 'delivery'`
+     * on every write path rather than accepting it directly — kept as a real
+     * column, not computed on read, because delivery capacity, pick-lists,
+     * exports and the SMS reminder wording all still query and join on it
+     * directly and none of them needed to change for `referrer_collect` to
+     * exist alongside it.
      */
     isDelivery: integer('is_delivery').notNull().default(0),
+    /**
+     * `collection`, `delivery` or `referrer_collect` — see `COLLECTION_METHODS`.
+     *
+     * The structured replacement for what used to be an answer buried in
+     * `answersJson`. **The sole source of truth for whether a parcel is a
+     * delivery** — `isDelivery` above is derived from it, never the other way
+     * round.
+     *
+     * Nullable in SQL for the reason given on `COLLECTION_METHODS`, and
+     * required in Zod on every path that creates or amends a referral. A
+     * referral captured before this column existed reads `null` here until
+     * the backfill migration sets it from the old `isDelivery` flag —
+     * `delivery` where that was `1`, `collection` where it was `0`. Nothing
+     * already held can say whether a referrer was collecting, so a backfilled
+     * row is never `referrer_collect` — see `INITIAL_SPEC1.txt`, "#referral".
+     */
+    collectionMethod: text('collection_method').$type<CollectionMethod | null>(),
+    /**
+     * `unreviewed`, `no_previous_referral` or `previous_session` — see
+     * `FIRST_TIME_REVIEW_STATUSES`. `INITIAL_SPEC1.txt`, `#Christmas voucher
+     * and first-time selection`.
+     *
+     * Every referral starts `unreviewed`; the dedicated first-time review
+     * screen sets it to one of the other two, never back. **Existing
+     * referrals were a one-off exception**: the migration that added this
+     * column backfilled every row that already existed to
+     * `no_previous_referral` rather than leaving a historic backlog every
+     * administrator has to work through — see the migration for why that
+     * differs from the column's own default.
+     */
+    firstTimeReviewStatus: text('first_time_review_status')
+      .$type<FirstTimeReviewStatus>()
+      .notNull()
+      .default('unreviewed'),
+    /**
+     * The client's last-session date, set only when
+     * `firstTimeReviewStatus` is `previous_session`. `null` otherwise — the
+     * status column is what a reader checks, not whether this is null,
+     * because `unreviewed` and `no_previous_referral` are both represented
+     * by a null date and must stay distinguishable from each other.
+     */
+    firstTimeReviewDate: text('first_time_review_date'),
     reasonId: text('reason_id')
       .notNull()
       .references(() => referralReasons.id),

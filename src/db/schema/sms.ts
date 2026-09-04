@@ -8,23 +8,52 @@ import { users } from './users.ts';
  * One column carries what a message is, rather than a direction plus a type.
  *
  * Direction is derivable from the kind, and two columns saying overlapping
- * things is two columns that can disagree. The four values are the ones
- * `INITIAL_SPEC1.txt` names and no more — this is a `CHECK` constraint, and a
- * fifth costs a table rebuild, which is how `stock_ledger.movement_type` came
- * to be rebuilt three times.
+ * things is two columns that can disagree. This is a `CHECK` constraint, and
+ * a new value costs a table rebuild, which is how `stock_ledger.movement_type`
+ * came to be rebuilt three times — `referrer_reply` below is the second time
+ * this table has paid it. Unlike `referrals`, nothing holds a foreign key
+ * *to* `sms_messages`, so the rebuild carries none of `migrations/0008`'s
+ * deferred-FK-counter complications; it is a plain drizzle-kit recreate.
  *
  * - `reminder` — what the food bank sent about a session.
  * - `staff_reply` — a person answering the household from the session screen.
  * - `household_reply` — what the household texted back.
+ * - `referrer_reply` — an inbound text from a phone number that is currently
+ *   a referrer collecting one or more open `referrer_collect` parcels.
+ *   **Never carries a `referralId`** — see the column comment — because it is
+ *   a set of candidate households, not one, and is never a match for it to
+ *   have made. Admin-only; see `sms.service.ts` and `sms.routes.ts`.
  * - `failure` — the reminder did not go: no number held, a number that is not
  *   a mobile, or the provider refused it. Not a message anybody sent, but it
  *   belongs on the household's line where somebody will see it.
  */
-export const SMS_MESSAGE_KINDS = ['reminder', 'staff_reply', 'household_reply', 'failure'] as const;
+export const SMS_MESSAGE_KINDS = [
+  'reminder',
+  'staff_reply',
+  'household_reply',
+  'referrer_reply',
+  'failure',
+] as const;
 export type SmsMessageKind = (typeof SMS_MESSAGE_KINDS)[number];
 
 /** The kinds that count towards the numbers on the run-session screen. */
 export const SMS_INBOUND_KINDS = ['household_reply', 'failure'] as const;
+
+/**
+ * Whose phone number `phone` actually is, on this one message — not who
+ * `referralId` belongs to, which is a different question `referrer_reply`
+ * makes visible: that column can be a referee's own referral while this one
+ * says the number reached was the referrer's.
+ *
+ * Audit information only, alongside `phone` itself: `INITIAL_SPEC1.txt`,
+ * "SMS reminders and replies" now sends a `referrer_collect` referral's
+ * messages to the referrer rather than the referee, and this is what records
+ * which one actually happened for a given row, without a reader having to
+ * cross-reference the referral's current `collectionMethod` — which can
+ * itself be corrected later — to work it out.
+ */
+export const SMS_RECIPIENT_ROLES = ['referee', 'referrer'] as const;
+export type SmsRecipientRole = (typeof SMS_RECIPIENT_ROLES)[number];
 
 /**
  * Text messages to and from households, and the failures to send them.
@@ -42,12 +71,19 @@ export const SMS_INBOUND_KINDS = ['household_reply', 'failure'] as const;
  * statistic underneath worth keeping. That is the charity's decision — see
  * `INITIAL_SPEC1.txt`, "SMS reminders and replies".
  *
- * ## A null `referralId` is a loose reply
+ * ## A null `referralId` is a loose reply — or a referrer message
  *
  * Somebody texted a number the food bank holds no upcoming referral for. The
  * row is still written — a reply is never dropped — and only administrators
  * see it. The thirty days apply to these too, which is the only thing stopping
  * them accumulating with no referral to count a period from.
+ *
+ * A `referrer_reply` row is also always null here, for a different reason: a
+ * referrer can be collecting for more than one open `referrer_collect`
+ * referral, so there is no single one to snapshot. `sms.service.ts` looks up
+ * that referrer's currently open candidates fresh whenever an administrator
+ * reads the row, rather than fixing a set at insert time that would go stale
+ * the moment one of those referrals closed.
  *
  * ## `sessionId` is a snapshot, not a lookup
  *
@@ -86,6 +122,11 @@ export const smsMessages = sqliteTable(
     /** Who sent a `staff_reply`, or who pressed the button for a `reminder`. */
     sentByUserId: text('sent_by_user_id').references(() => users.id),
     /**
+     * Whose number `phone` is — see `SmsRecipientRole`. Null on a genuinely
+     * loose reply, where nothing is known to derive it from.
+     */
+    recipientRole: text('recipient_role').$type<SmsRecipientRole | null>(),
+    /**
      * True when this row was never actually sent through TheSMSWorks —
      * `SMS_SIMULATE`'s dev/test simulator, or a destination outside
      * `SMS_LIVE_NUMBER` in a restricted test environment. Only meaningful on
@@ -120,7 +161,11 @@ export const smsMessages = sqliteTable(
     uniqueIndex('idx_sms_messages_provider').on(table.providerMessageId),
     check(
       'sms_messages_kind_valid',
-      sql`${table.kind} IN ('reminder', 'staff_reply', 'household_reply', 'failure')`,
+      sql`${table.kind} IN ('reminder', 'staff_reply', 'household_reply', 'referrer_reply', 'failure')`,
+    ),
+    check(
+      'sms_messages_recipient_role_valid',
+      sql`${table.recipientRole} IS NULL OR ${table.recipientRole} IN ('referee', 'referrer')`,
     ),
   ],
 );

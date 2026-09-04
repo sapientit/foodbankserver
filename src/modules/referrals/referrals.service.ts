@@ -578,7 +578,10 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
    * subject to this.
    *
    * A collection referral returns immediately: it is never affected by
-   * delivery capacity, however full deliveries are on that session.
+   * delivery capacity, however full deliveries are on that session. Neither
+   * is a `referrer_collect` one — it is a collection in every respect except
+   * who walks in, so the caller passes `collectionMethod === 'delivery'`,
+   * never the raw collection method.
    *
    * `deliveryCapacity: 0` is not a separate "not offered" branch — a session
    * offering no delivery places is a session for which `booked` is always
@@ -647,7 +650,7 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
 
     const session = await assertSessionAccepts(input.sessionId, false);
     assertBookingCutoffNotPassed(session, clock.nowIso());
-    await assertDeliveryCapacityAvailable(session, input.isDelivery);
+    await assertDeliveryCapacityAvailable(session, input.collectionMethod === 'delivery');
 
     const reason = await referrers.findActiveReasonById(input.reasonId);
     if (reason === undefined) {
@@ -674,12 +677,16 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
       authorisedReferrerId: authorisation.matchedId,
       adults: input.adults,
       children: input.children,
-      isDelivery: input.isDelivery ? 1 : 0,
+      // Derived, not taken from the client — `collectionMethod` is the sole
+      // source of truth for whether this is a delivery. See its column
+      // comment in `db/schema/referrals.ts`.
+      isDelivery: input.collectionMethod === 'delivery' ? 1 : 0,
+      collectionMethod: input.collectionMethod,
       reasonId: input.reasonId,
       needsFuelHelp: input.needsFuelHelp ? 1 : 0,
       referrerName: input.referrerName,
       referrerEmail: input.referrerEmail.trim().toLowerCase(),
-      referrerPhone: input.referrerPhone ?? null,
+      referrerPhone: input.referrerPhone,
       refereeFirstName: input.refereeFirstName,
       refereeSurname: input.refereeSurname,
       refereeDateOfBirth: input.refereeDateOfBirth,
@@ -881,6 +888,50 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
   }
 
   /**
+   * The dedicated first-time review screen's Save action —
+   * `INITIAL_SPEC1.txt`, `#Christmas voucher and first-time selection`.
+   * Records either that this household has no previous referral, or the
+   * date of their last session; a referral starts `unreviewed` and this is
+   * the only route that moves it off that value.
+   *
+   * **Gated only on the referral not having been forgotten, not on its own
+   * `status`.** Settled by Pete on 2026-09-03 (closed Q49): a rejected or
+   * cancelled referral, or one on a confirmed session, can still be marked
+   * here — this will not come up in practice, since the screen is not
+   * offered against a referral in that state, so this route does not need
+   * to guard for it.
+   */
+  async function setFirstTimeReview(
+    referralId: string,
+    input: { noPreviousReferral: true } | { previousSessionDate: string },
+    actor: Actor,
+  ): Promise<Referral> {
+    const referral = await getReferral(referralId);
+    assertNotPurged(referral);
+
+    const patch: Patch<NewReferral> =
+      'noPreviousReferral' in input
+        ? {
+            firstTimeReviewStatus: 'no_previous_referral',
+            firstTimeReviewDate: null,
+            updatedAt: clock.nowIso(),
+          }
+        : {
+            firstTimeReviewStatus: 'previous_session',
+            firstTimeReviewDate: input.previousSessionDate,
+            updatedAt: clock.nowIso(),
+          };
+
+    const updated = await repository.update(referralId, patch);
+    if (updated === undefined) {
+      throw new NotFoundError('Referral not found');
+    }
+
+    logger.info('first-time review recorded', { referralId, userId: actor.userId });
+    return updated;
+  }
+
+  /**
    * A referral whose details have been forgotten cannot be acted on at all.
    *
    * Twelve months on there is no name, no address and no answers left, so
@@ -1022,10 +1073,14 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     assign('children', input.children, 'children');
     assign('reasonId', input.reasonId, 'reasonId');
 
-    // Booleans are integers in SQLite, so they cannot go through `assign`.
-    if (input.isDelivery !== undefined) {
-      patch.isDelivery = input.isDelivery ? 1 : 0;
-      changed.push('isDelivery');
+    // `isDelivery` is derived, not amended directly — set alongside
+    // `collectionMethod` rather than through `assign`, so only
+    // `collectionMethod` appears in `changed`. Booleans are integers in
+    // SQLite either way, so `assign` could not carry this one on its own.
+    if (input.collectionMethod !== undefined) {
+      patch.collectionMethod = input.collectionMethod;
+      patch.isDelivery = input.collectionMethod === 'delivery' ? 1 : 0;
+      changed.push('collectionMethod');
     }
     if (input.needsFuelHelp !== undefined) {
       patch.needsFuelHelp = input.needsFuelHelp ? 1 : 0;
@@ -1386,6 +1441,7 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
       adults: referral.adults,
       children: referral.children,
       isDelivery: referral.isDelivery,
+      collectionMethod: referral.collectionMethod,
       reasonId: referral.reasonId,
       needsFuelHelp: referral.needsFuelHelp,
       referrerName: referral.referrerName,
@@ -1450,6 +1506,7 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     listReferrals,
     review,
     markReviewed,
+    setFirstTimeReview,
     applyAmendment,
     cancel,
     move,

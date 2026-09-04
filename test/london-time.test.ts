@@ -5,7 +5,7 @@ import {
   isBritishSummerTime,
   londonWallClockToInstant,
 } from '../src/core/time/london.ts';
-import { addDays, weeklyOccurrences, weekdayOf } from '../src/core/time/plain-date.ts';
+import { addDays, startOfWeek, weeklyOccurrences, weekdayOf } from '../src/core/time/plain-date.ts';
 
 describe('London wall clock', () => {
   it('keeps a session at 10:00 local across the BST boundary', () => {
@@ -94,5 +94,16 @@ describe('plain date arithmetic', () => {
       '2026-04-21',
     ]);
     expect(occurrences.every((date) => weekdayOf(date) === 2)).toBe(true);
+  });
+
+  it('finds the Monday on or before any day of the week', () => {
+    expect(startOfWeek('2026-08-03')).toBe('2026-08-03'); // Monday itself
+    expect(startOfWeek('2026-08-04')).toBe('2026-08-03'); // Tuesday
+    expect(startOfWeek('2026-08-09')).toBe('2026-08-03'); // Sunday, same week
+    expect(startOfWeek('2026-08-10')).toBe('2026-08-10'); // next Monday
+  });
+
+  it('carries a Monday-start week across a month boundary', () => {
+    expect(startOfWeek('2026-02-01')).toBe('2026-01-26'); // Sunday, prior month's Monday
   });
 });

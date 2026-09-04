@@ -5,16 +5,20 @@ import type { Logger } from '../../core/log.ts';
 import type { Database } from '../../db/client.ts';
 import type { Referral } from '../../db/schema/referrals.ts';
 import type { Session } from '../../db/schema/sessions.ts';
-import type { SmsMessage } from '../../db/schema/sms.ts';
+import type { SmsMessage, SmsRecipientRole } from '../../db/schema/sms.ts';
 import { isUniqueViolation } from '../../db/unique-violation.ts';
 import type { SessionsRepository } from '../sessions/sessions.repository.ts';
 import { normalisePhone, phonesMatch } from '../../core/phone.ts';
-import { composeReminder } from './messages.ts';
+import { composeReminder, REFERRER_COLLECT_PLACEHOLDER } from './messages.ts';
 import { sendSms, type SmsProviderConfig } from './provider.ts';
 import { smsRetentionCutoffIso } from './retention.ts';
 import type { WebhookInboundMessage } from './sms.schema.ts';
 import type { SmsRepository } from './sms.repository.ts';
-import { toAttentionSummaryResponse, toInboxMessageResponse } from './sms.mapper.ts';
+import {
+  toAttentionSummaryResponse,
+  toInboxMessageResponse,
+  type SmsCandidateParcel,
+} from './sms.mapper.ts';
 import type {
   SmsAttentionSummaryResponse,
   SmsHouseholdSummary,
@@ -67,13 +71,30 @@ type ReminderOutcome =
       readonly body: string;
       readonly providerMessageId: string;
       readonly simulated: boolean;
+      readonly recipientRole: SmsRecipientRole;
     }
   | {
       readonly referralId: string;
       readonly success: false;
       readonly phone: string;
       readonly body: string;
+      readonly recipientRole: SmsRecipientRole | null;
     };
+
+/**
+ * Who a parcel-related message goes to, and whose number that is —
+ * `INITIAL_SPEC1.txt`, "SMS reminders and replies": a `referrer_collect`
+ * referral is texted on the referrer's own number, never the referee's.
+ * `null` phone means there is nothing on file for the role this referral
+ * actually uses, which `attemptReminder`/`sendStaffReply` report exactly as
+ * they already did for a missing `refereePhone`.
+ */
+function recipientFor(referral: Referral): { phone: string | null; role: SmsRecipientRole } {
+  if (referral.collectionMethod === 'referrer_collect') {
+    return { phone: referral.referrerPhone, role: 'referrer' };
+  }
+  return { phone: referral.refereePhone, role: 'referee' };
+}
 
 const NOT_CONFIGURED_REASON = 'SMS sending is not configured';
 const RESTRICTED_REASON = 'SMS sending is restricted to a test number in this environment';
@@ -145,6 +166,7 @@ export function createSmsService(deps: SmsServiceDeps) {
           // Outbound and failures are read on arrival — only a household_reply is ever unread.
           readAt: now,
           sentByUserId: actor.userId,
+          recipientRole: outcome.recipientRole,
           simulated: outcome.success && outcome.simulated,
           createdAt: now,
           updatedAt: now,
@@ -184,26 +206,34 @@ export function createSmsService(deps: SmsServiceDeps) {
   }
 
   async function attemptReminder(referral: Referral, session: Session): Promise<ReminderOutcome> {
-    if (referral.refereePhone === null) {
+    const recipient = recipientFor(referral);
+    if (recipient.phone === null) {
       return {
         referralId: referral.id,
         success: false,
         phone: '',
         body: 'No phone number on file',
+        recipientRole: recipient.role,
       };
     }
 
-    const normalised = normalisePhone(referral.refereePhone);
+    const normalised = normalisePhone(recipient.phone);
     if (normalised === null) {
       return {
         referralId: referral.id,
         success: false,
-        phone: referral.refereePhone,
+        phone: recipient.phone,
         body: 'The number on file could not be recognised',
+        recipientRole: recipient.role,
       };
     }
 
-    const content = composeReminder(session, referral.isDelivery === 1);
+    // A referrer_collect message never reuses the household's own wording —
+    // see `REFERRER_COLLECT_PLACEHOLDER` and `OPEN-QUESTIONS.md`, Q1.
+    const content =
+      recipient.role === 'referrer'
+        ? REFERRER_COLLECT_PLACEHOLDER
+        : composeReminder(session, referral.isDelivery === 1);
 
     if (provider !== undefined && isLive(normalised)) {
       const result = await sendSms(provider, normalised, content, logger);
@@ -213,6 +243,7 @@ export function createSmsService(deps: SmsServiceDeps) {
           success: false,
           phone: normalised,
           body: `Send failed: ${result.reason}`,
+          recipientRole: recipient.role,
         };
       }
       return {
@@ -222,6 +253,7 @@ export function createSmsService(deps: SmsServiceDeps) {
         body: content,
         providerMessageId: result.providerMessageId,
         simulated: false,
+        recipientRole: recipient.role,
       };
     }
 
@@ -233,6 +265,7 @@ export function createSmsService(deps: SmsServiceDeps) {
         body: content,
         providerMessageId: simulatedProviderMessageId(),
         simulated: true,
+        recipientRole: recipient.role,
       };
     }
 
@@ -241,6 +274,7 @@ export function createSmsService(deps: SmsServiceDeps) {
       success: false,
       phone: normalised,
       body: provider === undefined ? NOT_CONFIGURED_REASON : RESTRICTED_REASON,
+      recipientRole: recipient.role,
     };
   }
 
@@ -299,10 +333,14 @@ export function createSmsService(deps: SmsServiceDeps) {
   ): Promise<SmsMessage> {
     const referral = await requireReferral(referralId);
 
-    const normalised =
-      referral.refereePhone === null ? null : normalisePhone(referral.refereePhone);
+    const recipient = recipientFor(referral);
+    const normalised = recipient.phone === null ? null : normalisePhone(recipient.phone);
     if (normalised === null) {
-      throw new UnprocessableError('This household has no number to reply to');
+      throw new UnprocessableError(
+        recipient.role === 'referrer'
+          ? 'This referral has no referrer number to reply to'
+          : 'This household has no number to reply to',
+      );
     }
 
     let providerMessageId: string;
@@ -336,6 +374,7 @@ export function createSmsService(deps: SmsServiceDeps) {
       occurredAt: now,
       readAt: now, // Outbound — read on arrival, like a reminder or a failure.
       sentByUserId: actor.userId,
+      recipientRole: recipient.role,
       simulated,
       createdAt: now,
       updatedAt: now,
@@ -349,47 +388,101 @@ export function createSmsService(deps: SmsServiceDeps) {
    * A household's reply, matched by phone to the referral for the soonest
    * session still to come. No match keeps the row as a loose reply.
    *
+   * **A referrer match is checked first and, when found, wins outright** —
+   * the household matching below is the fallback for a sender **not**
+   * identified as an active referrer collector, not a second pass run
+   * alongside it. `INITIAL_SPEC1.txt`, "SMS reminders and replies".
+   *
    * **Idempotent against a retried webhook.** TheSMSWorks retries a delivery
    * it did not get a `200` for, so the same `providerMessageId` can arrive
-   * twice; the unique index catches the second insert and this reports
-   * success rather than a duplicate row.
+   * twice; the unique index catches the second insert and `insertInbound`
+   * reports back whether it actually wrote a row, so a retried delivery logs
+   * only `'duplicate sms webhook delivery'` rather than also claiming a
+   * fresh `'sms received'`.
    */
   async function receiveInbound(payload: WebhookInboundMessage): Promise<void> {
     const now = clock.nowIso();
-    const match = await matchReferral(payload.phone, now);
-    const referralId = match?.referralId ?? null;
     // Store whatever normalised form is available; an unnormalisable number
     // is still kept exactly as the provider sent it, same as a failure row.
     const phone = normalisePhone(payload.phone) ?? payload.phone;
 
-    try {
-      await repository.insert({
-        id: crypto.randomUUID(),
-        referralId,
-        sessionId: match?.sessionId ?? null,
-        kind: 'household_reply',
+    const referrerCandidates = await matchReferrerCollectors(payload.phone, now);
+    if (referrerCandidates.length > 0) {
+      const inserted = await insertInbound({
+        referralId: null,
+        sessionId: null,
+        kind: 'referrer_reply',
         phone,
         body: payload.body,
         providerMessageId: payload.providerMessageId,
-        occurredAt: now,
-        readAt: null, // The only kind that is ever unread.
-        sentByUserId: null,
-        simulated: false, // No such thing as a simulated household_reply — see the column comment.
-        createdAt: now,
-        updatedAt: now,
+        recipientRole: 'referrer',
+        now,
       });
+      if (inserted) logger.info('referrer sms received', {});
+      return;
+    }
+
+    const match = await matchReferral(payload.phone, now);
+    const referralId = match?.referralId ?? null;
+
+    const inserted = await insertInbound({
+      referralId,
+      sessionId: match?.sessionId ?? null,
+      kind: 'household_reply',
+      phone,
+      body: payload.body,
+      providerMessageId: payload.providerMessageId,
+      recipientRole: match === null ? null : 'referee',
+      now,
+    });
+
+    if (inserted) logger.info('sms received', referralId === null ? {} : { referralId });
+  }
+
+  /**
+   * Shared by both inbound branches: the insert itself, plus the retried-
+   * webhook idempotency guard neither branch should have to repeat. Returns
+   * whether a row was actually written — `false` on a duplicate delivery —
+   * so a caller logging "received" does not also claim a duplicate as new.
+   */
+  async function insertInbound(row: {
+    readonly referralId: string | null;
+    readonly sessionId: string | null;
+    readonly kind: 'household_reply' | 'referrer_reply';
+    readonly phone: string;
+    readonly body: string;
+    readonly providerMessageId: string | null;
+    readonly recipientRole: SmsRecipientRole | null;
+    readonly now: string;
+  }): Promise<boolean> {
+    try {
+      await repository.insert({
+        id: crypto.randomUUID(),
+        referralId: row.referralId,
+        sessionId: row.sessionId,
+        kind: row.kind,
+        phone: row.phone,
+        body: row.body,
+        providerMessageId: row.providerMessageId,
+        occurredAt: row.now,
+        readAt: null, // The only kinds that are ever unread.
+        sentByUserId: null,
+        recipientRole: row.recipientRole,
+        simulated: false, // No such thing as a simulated inbound row — see the column comment.
+        createdAt: row.now,
+        updatedAt: row.now,
+      });
+      return true;
     } catch (error) {
       if (
-        payload.providerMessageId !== null &&
+        row.providerMessageId !== null &&
         isUniqueViolation(error, 'sms_messages.provider_message_id')
       ) {
         logger.info('duplicate sms webhook delivery', {});
-        return;
+        return false;
       }
       throw error;
     }
-
-    logger.info('sms received', referralId === null ? {} : { referralId });
   }
 
   async function matchReferral(
@@ -405,6 +498,54 @@ export function createSmsService(deps: SmsServiceDeps) {
     return null;
   }
 
+  /**
+   * Filters an already-fetched candidate set to one phone — pure, no I/O.
+   * Every caller with more than one phone to check (`listInbox`) must fetch
+   * the candidate set **once** and call this per phone, never re-query per
+   * phone: `.claude/rules/database.md`, "No N+1, ever".
+   */
+  function filterReferrerCollectors(
+    candidates: readonly { referral: Referral; session: Session }[],
+    rawPhone: string,
+  ): { referral: Referral; session: Session }[] {
+    return candidates.filter(
+      ({ referral }) =>
+        referral.referrerPhone !== null && phonesMatch(referral.referrerPhone, rawPhone),
+    );
+  }
+
+  function toCandidateParcel({
+    referral,
+    session,
+  }: {
+    referral: Referral;
+    session: Session;
+  }): SmsCandidateParcel {
+    return {
+      referralId: referral.id,
+      sessionId: session.id,
+      sessionDate: session.sessionDate,
+      startTime: session.startTime,
+    };
+  }
+
+  /**
+   * Every currently open `referrer_collect` referral whose `referrerPhone`
+   * matches, for a given raw phone — plural, deliberately: a referrer may be
+   * collecting for several households and on several days, and this is never
+   * collapsed to one. **One query, for one phone** — used by `receiveInbound`,
+   * which only ever has one phone to check per webhook. `listInbox` fetches
+   * the candidate set itself instead, once for every phone it needs, rather
+   * than calling this in a loop — see its own comment.
+   */
+  async function matchReferrerCollectors(
+    rawPhone: string,
+    nowUtc: string,
+  ): Promise<{ referral: Referral; session: Session }[]> {
+    const candidates = await repository.referrerCollectReferralsOnUpcomingSessions(nowUtc);
+    return filterReferrerCollectors(candidates, rawPhone);
+  }
+
   /** Loose replies — admin only, enforced at the route. */
   async function listUnmatched(): Promise<SmsMessage[]> {
     return repository.listUnmatched();
@@ -417,11 +558,38 @@ export function createSmsService(deps: SmsServiceDeps) {
     return toAttentionSummaryResponse(unreadTotal);
   }
 
-  /** The admin inbox: every message within retention, newest first. */
+  /**
+   * The admin inbox: every message within retention, newest first.
+   *
+   * A `referrer_reply` row gets its candidate parcels computed **fresh here**
+   * rather than read off anything stored on the row — see the "currently
+   * open" note on `matchReferrerCollectors`. **One query for the whole
+   * inbox**, not one per qualifying referrer number: the candidate set does
+   * not depend on which phone is asking, so it is fetched once — if there
+   * are any `referrer_reply` rows at all — and filtered per phone in memory
+   * with `filterReferrerCollectors`. `.claude/rules/database.md`, "No N+1,
+   * ever".
+   */
   async function listInbox(): Promise<SmsInboxMessageResponse[]> {
-    const cutoff = smsRetentionCutoffIso(clock.nowIso());
+    const now = clock.nowIso();
+    const cutoff = smsRetentionCutoffIso(now);
     const rows = await repository.listInbox(cutoff);
-    return rows.map(toInboxMessageResponse);
+
+    const hasReferrerReply = rows.some(({ message }) => message.kind === 'referrer_reply');
+    const openReferrerCollectors = hasReferrerReply
+      ? await repository.referrerCollectReferralsOnUpcomingSessions(now)
+      : [];
+
+    const candidatesByPhone = new Map<string, SmsCandidateParcel[]>();
+    for (const { message } of rows) {
+      if (message.kind !== 'referrer_reply' || candidatesByPhone.has(message.phone)) continue;
+      candidatesByPhone.set(
+        message.phone,
+        filterReferrerCollectors(openReferrerCollectors, message.phone).map(toCandidateParcel),
+      );
+    }
+
+    return rows.map((row) => toInboxMessageResponse(row, candidatesByPhone.get(row.message.phone)));
   }
 
   /**
@@ -436,7 +604,7 @@ export function createSmsService(deps: SmsServiceDeps) {
    */
   async function markMessageRead(id: string): Promise<SmsMessage> {
     const message = await repository.findById(id);
-    if (message?.kind !== 'household_reply') {
+    if (message?.kind !== 'household_reply' && message?.kind !== 'referrer_reply') {
       throw new NotFoundError('Message not found');
     }
 

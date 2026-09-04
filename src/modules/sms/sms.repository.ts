@@ -109,10 +109,13 @@ export function createSmsRepository(db: Database) {
     },
 
     /**
-     * Unread household replies needing an administrator, within retention:
-     * unmatched (no session snapshot) or on a session that has since closed
-     * (confirmed or cancelled). A reply still on a planned/in-progress session
-     * is the team leader's business and is deliberately excluded.
+     * Unread household replies and referrer messages needing an
+     * administrator, within retention: unmatched or a `referrer_reply` (no
+     * session snapshot, either way), or a household reply on a session that
+     * has since closed (confirmed or cancelled). A household reply still on
+     * a planned/in-progress session is the team leader's business and is
+     * deliberately excluded — a `referrer_reply` has no session to be
+     * excluded by, since it is never one household's business to begin with.
      */
     async countAttentionNeeded(cutoff: string): Promise<number> {
       const rows = await db
@@ -121,7 +124,7 @@ export function createSmsRepository(db: Database) {
         .leftJoin(sessions, eq(smsMessages.sessionId, sessions.id))
         .where(
           and(
-            eq(smsMessages.kind, 'household_reply'),
+            inArray(smsMessages.kind, ['household_reply', 'referrer_reply']),
             isNull(smsMessages.readAt),
             gte(smsMessages.occurredAt, cutoff),
             or(
@@ -247,6 +250,35 @@ export function createSmsRepository(db: Database) {
         .innerJoin(sessions, eq(referrals.sessionId, sessions.id))
         .where(
           and(
+            gte(sessions.sessionDate, today),
+            notInArray(sessions.status, [...CLOSED_SESSION_STATUSES]),
+            inArray(referrals.status, [...REFERRAL_STATUSES_HOLDING_A_PLACE]),
+          ),
+        )
+        .orderBy(asc(sessions.startsAtUtc));
+    },
+
+    /**
+     * Every currently open `referrer_collect` referral, across every referrer
+     * — not filtered by phone number in SQL, for the same reason
+     * `referralsOnUpcomingSessions` is not: `phone.ts` normalises formats SQL
+     * cannot usefully compare, so matching happens in memory. "Open" is the
+     * same test `referralsOnUpcomingSessions` uses for a household reply —
+     * holding a place, and the session neither past nor closed — because a
+     * referrer's candidate parcels should never include one a household
+     * reply could not land on either.
+     */
+    async referrerCollectReferralsOnUpcomingSessions(
+      nowUtc: string,
+    ): Promise<{ referral: Referral; session: Session }[]> {
+      const today = instantToLondonWallClock(nowUtc).date;
+      return db
+        .select({ referral: referrals, session: sessions })
+        .from(referrals)
+        .innerJoin(sessions, eq(referrals.sessionId, sessions.id))
+        .where(
+          and(
+            eq(referrals.collectionMethod, 'referrer_collect'),
             gte(sessions.sessionDate, today),
             notInArray(sessions.status, [...CLOSED_SESSION_STATUSES]),
             inArray(referrals.status, [...REFERRAL_STATUSES_HOLDING_A_PLACE]),

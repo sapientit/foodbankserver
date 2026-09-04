@@ -28,6 +28,30 @@ where a reader would look for it anyway.
 
 Q0 stays as the permanent worked example. Everything else leaves when it closes.
 
+---
+
+## Q43 — Which fresh-food items may use stock already on hand?
+
+`Status: open`
+`Raised by: Pete`
+
+The fresh-food shopping list aggregates the requirements of pick lists whose sessions are not yet complete. Normally it subtracts the non-negative stock level from that requirement. Some fresh items may instead need to be bought for the coming sessions even when the stock take records stock on hand, because the older stock should not be used. At Christmas the food bank shops more often, so the same stock may be suitable then.
+
+**Question:** How does the food bank decide, for each fresh-food item and for the relevant period, whether to use the stock already on hand or buy fresh? Is this a stock-item setting, a selected shopping-period/list policy (including Christmas), an explicit per-run choice, or something else? What is the required default and who may change it?
+
+**A:**
+
+---
+
+## Q42 — What exact SMS wording is sent when a referrer collects a parcel?
+
+`Status: open`
+`Raised by: Codex`
+
+When a referral's collection method is `referrer_collect`, every parcel-related outbound SMS goes to the referrer's phone number rather than the client's. The text must be different from the client-facing message, because one referrer can collect parcels for several households and sessions. Until Pete supplies the agreed wording, the server response/template uses the visible placeholder: `SMS wording for referrer collection is to be agreed.`
+
+**Question:** What is the exact approved text for each parcel-related SMS sent to a referrer collecting on someone else's behalf, including the identifying information needed where they have more than one open parcel?
+
 `x-assumed` in `openapi.yaml` marks the operations and fields resting on an open entry:
 
 ```

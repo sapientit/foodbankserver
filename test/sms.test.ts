@@ -14,6 +14,7 @@ import { smsMessages } from '../src/db/schema/sms.ts';
 import { stockItems, stockLedger } from '../src/db/schema/stock.ts';
 import { refreshTokens, users } from '../src/db/schema/users.ts';
 import { purgeSmsMessages } from '../src/modules/jobs/purge-sms.ts';
+import { composeReminder, REFERRER_COLLECT_PLACEHOLDER } from '../src/modules/sms/messages.ts';
 import { authHeaders, buildTestApp, devLogin, type TestApp } from './helpers/app.ts';
 import { generatePickList, setUpPickingWorld } from './helpers/picking-fixtures.ts';
 import {
@@ -1640,6 +1641,331 @@ describe('marking one inbox message read', () => {
     );
     const body: { unreadTotal: number } = await summary.json();
     expect(body.unreadTotal).toBe(1); // untouched by clearing the unrelated closed-session item
+  });
+});
+
+/** `toInboxMessageResponse`'s `SmsCandidateParcel` shape — admin inbox only. */
+interface CandidateParcel {
+  readonly referralId: string;
+  readonly sessionId: string;
+  readonly sessionDate: string;
+  readonly startTime: string;
+}
+
+/** `InboxMessage` plus the fields new to `referrer_reply`. */
+interface ReferrerInboxMessage extends InboxMessage {
+  readonly recipientRole: 'referee' | 'referrer' | null;
+  readonly candidateParcels?: CandidateParcel[];
+}
+
+describe('referrer_collect: parcel SMS routes to the referrer, not the referee', () => {
+  it('sends a referrer_collect reminder to the referrer phone, with the placeholder wording, recipientRole referrer', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(providerSuccess('prov-referrer-1'));
+
+    const testApp = buildSmsTestApp();
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world = await setUpReferralWorld(testApp, accessToken);
+    const { id: referralId } = await submitReferral(testApp, world, {
+      collectionMethod: 'referrer_collect',
+      referrerPhone: '07700 900555',
+      refereePhone: '07700 900123',
+    });
+
+    const response = await testApp.request(
+      `${API_PREFIX}/sessions/${world.sessionId}/sms-reminders`,
+      { method: 'POST', headers: authHeaders(accessToken) },
+    );
+    expect(await response.json()).toMatchObject({ reminded: 1, failed: 0 });
+
+    const [row] = await db.select().from(smsMessages).where(eq(smsMessages.referralId, referralId));
+    expect(row).toMatchObject({
+      kind: 'reminder',
+      phone: '+447700900555', // the referrer's number, never the referee's
+      body: REFERRER_COLLECT_PLACEHOLDER,
+      recipientRole: 'referrer',
+    });
+
+    // The referral's own thread, which the mapper also serves, agrees.
+    const threadResponse = await testApp.request(
+      `${API_PREFIX}/referrals/${referralId}/sms-messages`,
+      { headers: authHeaders(accessToken) },
+    );
+    const thread: {
+      messages: { phone: string; body: string; recipientRole: string | null }[];
+    } = await threadResponse.json();
+    expect(thread.messages[0]).toMatchObject({
+      phone: '+447700900555',
+      body: REFERRER_COLLECT_PLACEHOLDER,
+      recipientRole: 'referrer',
+    });
+  });
+
+  it('still sends an ordinary collection referral its own composed reminder to the referee, recipientRole referee', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(providerSuccess('prov-referee-1'));
+
+    const testApp = buildSmsTestApp();
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world = await setUpReferralWorld(testApp, accessToken);
+    const { id: referralId } = await submitReferral(testApp, world, {
+      collectionMethod: 'collection',
+      refereePhone: '07700 900123',
+    });
+
+    await testApp.request(`${API_PREFIX}/sessions/${world.sessionId}/sms-reminders`, {
+      method: 'POST',
+      headers: authHeaders(accessToken),
+    });
+
+    const [session] = await db.select().from(sessions).where(eq(sessions.id, world.sessionId));
+    if (session === undefined) throw new Error('session not found in test setup');
+    const expectedBody = composeReminder(session, false);
+
+    const [row] = await db.select().from(smsMessages).where(eq(smsMessages.referralId, referralId));
+    expect(row).toMatchObject({
+      kind: 'reminder',
+      phone: '+447700900123',
+      body: expectedBody,
+      recipientRole: 'referee',
+    });
+    expect(row?.body).not.toBe(REFERRER_COLLECT_PLACEHOLDER);
+  });
+
+  it('sends a staff reply on a referrer_collect thread to the referrer, the staff text verbatim, not the placeholder', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(providerSuccess('prov-staff-1'));
+
+    const testApp = buildSmsTestApp();
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world = await setUpReferralWorld(testApp, accessToken);
+    const { id: referralId } = await submitReferral(testApp, world, {
+      collectionMethod: 'referrer_collect',
+      referrerPhone: '07700 900555',
+      refereePhone: '07700 900123',
+    });
+
+    const response = await testApp.request(`${API_PREFIX}/referrals/${referralId}/sms-messages`, {
+      method: 'POST',
+      headers: json(accessToken),
+      body: JSON.stringify({ body: 'We can still come to you' }),
+    });
+
+    expect(response.status).toBe(201);
+    const body: { phone: string; body: string; recipientRole: string | null } =
+      await response.json();
+    expect(body).toMatchObject({
+      phone: '+447700900555',
+      body: 'We can still come to you', // typed verbatim — only the recipient changes
+      recipientRole: 'referrer',
+    });
+  });
+});
+
+describe('referrer_reply: inbound texts from a referrer collecting a parcel', () => {
+  it('records an inbound text from a referrer with exactly one open referrer_collect referral, naming that one candidate', async () => {
+    const testApp = buildSmsTestApp();
+    const { accessToken: adminToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world = await setUpReferralWorld(testApp, adminToken);
+    const { id: referralId } = await submitReferral(testApp, world, {
+      collectionMethod: 'referrer_collect',
+      referrerPhone: '07700 900555',
+    });
+
+    const webhookResponse = await postReply(
+      testApp,
+      '07700 900555',
+      'Can I collect at 2pm instead?',
+    );
+    expect(webhookResponse.status).toBe(200);
+
+    const response = await testApp.request(`${API_PREFIX}/sms-messages`, {
+      headers: authHeaders(adminToken),
+    });
+    expect(response.status).toBe(200);
+    const body: { messages: ReferrerInboxMessage[] } = await response.json();
+
+    const referrerReply = body.messages.find((m) => m.kind === 'referrer_reply');
+    expect(referrerReply).toMatchObject({ referralId: null, recipientRole: 'referrer' });
+    expect(referrerReply?.candidateParcels).toEqual([
+      { referralId, sessionId: world.sessionId, sessionDate: '2026-08-11', startTime: '10:00' },
+    ]);
+  });
+
+  it('never collapses a referrer with multiple open referrer_collect referrals to one candidate', async () => {
+    const testApp = buildSmsTestApp();
+    const { accessToken: adminToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world = await setUpReferralWorld(testApp, adminToken);
+    const { id: referralA } = await submitReferral(testApp, world, {
+      collectionMethod: 'referrer_collect',
+      referrerPhone: '07700 900555',
+    });
+
+    const secondSessionId = await createSession(testApp, adminToken, { sessionDate: '2026-08-18' });
+    const { id: referralB } = await submitReferral(
+      testApp,
+      { ...world, sessionId: secondSessionId },
+      { collectionMethod: 'referrer_collect', referrerPhone: '07700 900555' },
+    );
+
+    await postReply(testApp, '07700 900555', 'Which one is today?');
+
+    const response = await testApp.request(`${API_PREFIX}/sms-messages`, {
+      headers: authHeaders(adminToken),
+    });
+    const body: { messages: ReferrerInboxMessage[] } = await response.json();
+
+    // One text in, one row — never auto-split into two messages either.
+    const referrerReplies = body.messages.filter((m) => m.kind === 'referrer_reply');
+    expect(referrerReplies).toHaveLength(1);
+
+    const candidateIds = (referrerReplies[0]?.candidateParcels ?? [])
+      .map((c) => c.referralId)
+      .sort();
+    expect(candidateIds).toEqual([referralA, referralB].sort());
+  });
+
+  it('excludes a cancelled referrer_collect referral from a referrer candidate list', async () => {
+    const testApp = buildSmsTestApp();
+    const { accessToken: adminToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world = await setUpReferralWorld(testApp, adminToken);
+    const { id: stillOpen } = await submitReferral(testApp, world, {
+      collectionMethod: 'referrer_collect',
+      referrerPhone: '07700 900555',
+    });
+
+    const secondSessionId = await createSession(testApp, adminToken, { sessionDate: '2026-08-18' });
+    const { id: toCancel } = await submitReferral(
+      testApp,
+      { ...world, sessionId: secondSessionId },
+      { collectionMethod: 'referrer_collect', referrerPhone: '07700 900555' },
+    );
+    const cancelResponse = await testApp.request(`${API_PREFIX}/referrals/${toCancel}/cancel`, {
+      method: 'POST',
+      headers: authHeaders(adminToken),
+    });
+    expect(cancelResponse.status).toBe(200);
+
+    await postReply(testApp, '07700 900555', 'Still coming for the other one');
+
+    const response = await testApp.request(`${API_PREFIX}/sms-messages`, {
+      headers: authHeaders(adminToken),
+    });
+    const body: { messages: ReferrerInboxMessage[] } = await response.json();
+    const referrerReply = body.messages.find((m) => m.kind === 'referrer_reply');
+
+    expect(referrerReply?.candidateParcels).toEqual([
+      {
+        referralId: stillOpen,
+        sessionId: world.sessionId,
+        sessionDate: '2026-08-11',
+        startTime: '10:00',
+      },
+    ]);
+  });
+
+  it("does not appear on the referral's own thread, even though it was prompted by that referral's referrer number", async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(providerSuccess('prov-thread-1'));
+
+    const testApp = buildSmsTestApp();
+    const { accessToken: adminToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world = await setUpReferralWorld(testApp, adminToken);
+    const { id: referralId } = await submitReferral(testApp, world, {
+      collectionMethod: 'referrer_collect',
+      referrerPhone: '07700 900555',
+    });
+
+    await testApp.request(`${API_PREFIX}/sessions/${world.sessionId}/sms-reminders`, {
+      method: 'POST',
+      headers: authHeaders(adminToken),
+    });
+    await postReply(testApp, '07700 900555', 'Which day again?');
+
+    const threadResponse = await testApp.request(
+      `${API_PREFIX}/referrals/${referralId}/sms-messages`,
+      { headers: authHeaders(adminToken) },
+    );
+    const thread: { messages: { kind: string }[] } = await threadResponse.json();
+
+    // Only the reminder this referral was itself sent. The referrer_reply
+    // always has referralId: null, so it structurally cannot be here — this
+    // proves it, rather than asserting on the mapper's allowlist alone.
+    expect(thread.messages.map((m) => m.kind)).toEqual(['reminder']);
+  });
+
+  it('still matches an ordinary referee reply to its own referral when an unrelated referrer_collect referral exists', async () => {
+    const testApp = buildSmsTestApp();
+    const { accessToken: adminToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world = await setUpReferralWorld(testApp, adminToken);
+
+    // An unrelated referrer_collect referral in the same world — proves
+    // referrer matching runs first, finds nothing for this sender, and
+    // correctly falls through to the ordinary household match rather than
+    // producing a loose or referrer_reply row instead.
+    await submitReferral(testApp, world, {
+      collectionMethod: 'referrer_collect',
+      referrerPhone: '07700 900555',
+      refereePhone: '07700 900556',
+    });
+    const { id: ordinaryReferralId } = await submitReferral(testApp, world, {
+      collectionMethod: 'collection',
+      refereePhone: '07700 900123',
+    });
+
+    const response = await postReply(testApp, '07700 900123', 'Running late');
+    expect(response.status).toBe(200);
+
+    const [row] = await db
+      .select()
+      .from(smsMessages)
+      .where(eq(smsMessages.referralId, ordinaryReferralId));
+    expect(row).toMatchObject({ kind: 'household_reply', recipientRole: 'referee' });
+
+    const kinds = (await db.select().from(smsMessages)).map((m) => m.kind);
+    expect(kinds).not.toContain('referrer_reply');
+  });
+
+  it("marks a referrer_reply read via POST /sms-messages/:id/read, which previously 404'd on anything but household_reply", async () => {
+    const testApp = buildSmsTestApp();
+    const { accessToken: adminToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world = await setUpReferralWorld(testApp, adminToken);
+    await submitReferral(testApp, world, {
+      collectionMethod: 'referrer_collect',
+      referrerPhone: '07700 900555',
+    });
+
+    await postReply(testApp, '07700 900555', 'Can I collect early?');
+
+    const [referrerReplyRow] = await db
+      .select()
+      .from(smsMessages)
+      .where(eq(smsMessages.kind, 'referrer_reply'));
+    expect(referrerReplyRow?.readAt).toBeNull();
+
+    const response = await testApp.request(
+      `${API_PREFIX}/sms-messages/${referrerReplyRow?.id ?? ''}/read`,
+      { method: 'POST', headers: authHeaders(adminToken) },
+    );
+    expect(response.status).toBe(200);
+    const body: { readAt: string | null } = await response.json();
+    expect(body.readAt).not.toBeNull();
+
+    const [updated] = await db
+      .select()
+      .from(smsMessages)
+      .where(eq(smsMessages.id, referrerReplyRow?.id ?? ''));
+    expect(updated?.readAt).not.toBeNull();
+  });
+
+  it('counts an unread referrer_reply in the administrator attention summary', async () => {
+    const testApp = buildSmsTestApp();
+    const { accessToken: adminToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world = await setUpReferralWorld(testApp, adminToken);
+    await submitReferral(testApp, world, {
+      collectionMethod: 'referrer_collect',
+      referrerPhone: '07700 900555',
+    });
+
+    await postReply(testApp, '07700 900555', 'On my way');
+
+    expect(await attentionTotal(testApp, adminToken)).toEqual({ unreadTotal: 1 });
   });
 });
 

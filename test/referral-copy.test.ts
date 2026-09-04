@@ -300,7 +300,7 @@ describe('what the copy carries', () => {
       testApp,
       token,
       w,
-      { adults: 4, children: 1, isDelivery: true, needsFuelHelp: true },
+      { adults: 4, children: 1, collectionMethod: 'delivery', needsFuelHelp: true },
       comment,
     );
     const target = await createSession(testApp, token);
@@ -312,7 +312,7 @@ describe('what the copy carries', () => {
       ...UNKNOWN_REFERRER,
       adults: 4,
       children: 1,
-      isDelivery: true,
+      collectionMethod: 'delivery',
       needsFuelHelp: true,
     });
     expect(copy).toMatchObject({
@@ -448,6 +448,25 @@ describe('what the copy carries', () => {
       pickNumber: parcelBefore?.pickNumber,
       referralId: parcelBefore?.referralId,
     });
+  });
+
+  it('carries collectionMethod referrer_collect across unchanged, with isDelivery false', async () => {
+    const { testApp, token, world: w } = await world();
+    const id = await rejectedOriginal(testApp, token, w, {
+      collectionMethod: 'referrer_collect',
+    });
+    const target = await createSession(testApp, token);
+
+    const { status, body: copy } = await copyReferral(testApp, token, id, { sessionId: target });
+    expect(status).toBe(201);
+    expect(copy).toMatchObject({ collectionMethod: 'referrer_collect', isDelivery: false });
+
+    const [storedCopy] = await db
+      .select()
+      .from(referrals)
+      .where(eq(referrals.id, copy.id as string));
+    expect(storedCopy?.collectionMethod).toBe('referrer_collect');
+    expect(storedCopy?.isDelivery).toBe(0);
   });
 
   it('carries the reason for referral even after the charity retires it', async () => {

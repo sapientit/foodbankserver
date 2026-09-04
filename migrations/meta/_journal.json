@@ -225,6 +225,20 @@
       "when": 1788171934096,
       "tag": "0031_target-stock-lists",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1788396198778,
+      "tag": "0032_moaning_baron_zemo",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "6",
+      "when": 1788430858161,
+      "tag": "0033_voucher-and-first-time-review",
+      "breakpoints": true
     }
   ]
 }

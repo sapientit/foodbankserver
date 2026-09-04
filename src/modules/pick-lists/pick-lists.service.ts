@@ -8,6 +8,11 @@ import {
   type PickList,
 } from '../../db/schema/pick-lists.ts';
 import { REFERRAL_STATUSES_HOLDING_A_PLACE, type Referral } from '../../db/schema/referrals.ts';
+import type { Session } from '../../db/schema/sessions.ts';
+import { instantToLondonWallClock } from '../../core/time/london.ts';
+import { startOfWeek } from '../../core/time/plain-date.ts';
+import type { VoucherConfigRepository } from '../voucher-config/voucher-config.repository.ts';
+import type { VoucherDateRange } from '../voucher-config/derivations.ts';
 import {
   generatePickList,
   type GenerationDeps,
@@ -16,10 +21,16 @@ import {
 import type { ParcelWithLines, PickListsRepository } from './pick-lists.repository.ts';
 import type { PickListInformationSet, PreferenceLineSet } from './pick-lists.schema.ts';
 import type { StockOrder } from '../stock/stock.schema.ts';
-import { stockRequirementLines, type StockRequirementLine } from './stock-requirement.ts';
+import {
+  stockRequirementLines,
+  stockRequirementSummaryLines,
+  type StockRequirementLine,
+  type StockRequirementSummaryLine,
+} from './stock-requirement.ts';
 
 export interface PickListsServiceDeps extends GenerationDeps {
   readonly repository: PickListsRepository;
+  readonly voucherConfig: VoucherConfigRepository;
   readonly clock: Clock;
   readonly logger: Logger;
 }
@@ -52,7 +63,7 @@ export interface PickListDivergence {
 const UNREVIEWED_PARCEL = 'Review every parcel on this pick list before printing it';
 
 export function createPickListsService(deps: PickListsServiceDeps) {
-  const { repository, referrals, sessions, stock, clock } = deps;
+  const { repository, referrals, sessions, stock, voucherConfig, clock } = deps;
 
   async function getPickList(id: string): Promise<PickList> {
     const pickList = await repository.findById(id);
@@ -219,6 +230,28 @@ export function createPickListsService(deps: PickListsServiceDeps) {
   }
 
   /**
+   * What `toPrintParcelResponse` needs beyond the parcels themselves: the
+   * session's own date, to compare against the voucher range, and the range
+   * itself. Read fresh on every call — see `PrintParcelResponse` on why this
+   * is never cached alongside the pick list.
+   */
+  async function printContext(
+    pickList: PickList,
+  ): Promise<{ session: Session; voucherRange: VoucherDateRange | undefined }> {
+    const session = await sessions.findById(pickList.sessionId);
+    if (session === undefined) {
+      throw new NotFoundError('Session not found');
+    }
+    const config = await voucherConfig.find();
+
+    return {
+      session,
+      voucherRange:
+        config === undefined ? undefined : { startDate: config.startDate, endDate: config.endDate },
+    };
+  }
+
+  /**
    * Records that the list has been printed.
    *
    * Only the *first* print is stamped — reprinting a smudged sheet is not a
@@ -336,6 +369,46 @@ export function createPickListsService(deps: PickListsServiceDeps) {
     };
   }
 
+  /**
+   * The running total of what every session still to come, up to a cut-off
+   * date, is going to need — `INITIAL_SPEC1.txt`, `#Stock requirement report`.
+   *
+   * An admin's planning report, not the per-session comparison above, and
+   * deliberately simpler in three ways: it spans every not-yet-confirmed
+   * session in the window rather than one, it does not wait for every parcel
+   * to be reviewed — most of the sessions it covers have not been picked
+   * yet, so a review gate would mean the total never appears in time to plan
+   * against — and it has no stock level to compare against, so there is no
+   * `quantityOnHand` and no `shortfall`, only a required quantity. A `-1`
+   * line is filtered out of the sum rather than refused, the same treatment
+   * the fresh-food shopping list gives it.
+   *
+   * **The window has a floor as well as `upToDate`: the start of the current
+   * week.** Not exposed as a parameter — the caller only ever asks for
+   * `upToDate` — because it is a scope decision, not a filter anybody
+   * chooses per call: the report is about sessions still being planned for,
+   * and a session nobody confirmed years ago sitting in the total forever
+   * would be a stale figure nobody would think to doubt. See
+   * `sumRequiredUpTo` for what this floor also does for the query's cost.
+   */
+  async function stockRequirementSummary(
+    upToDate: string,
+    order: StockOrder,
+  ): Promise<StockRequirementSummaryLine[]> {
+    const today = instantToLondonWallClock(clock.nowIso()).date;
+    const required = await repository.sumRequiredUpTo(startOfWeek(today), upToDate);
+
+    // The whole catalogue, inactive items included — same reasoning as
+    // `stockRequirement`: an item deactivated after generation is still in
+    // parcels and still has to be picked.
+    const levels = await stock.listLevels(false, order);
+
+    return stockRequirementSummaryLines(
+      levels,
+      new Map(required.map((entry) => [entry.stockItemId, entry.requiredQuantity])),
+    );
+  }
+
   /** Compares the list against the referrals as they stand now. */
   async function divergence(pickList: PickList): Promise<PickListDivergence> {
     const [parcelRows, current] = await Promise.all([
@@ -383,12 +456,14 @@ export function createPickListsService(deps: PickListsServiceDeps) {
       repository.listParcelsWithLines(pickListId),
     getParcel,
     listParcelsForPrint,
+    printContext,
     setLine,
     removeLine,
     setParcelNotes,
     markParcelReviewed,
     markPrinted,
     stockRequirement,
+    stockRequirementSummary,
     divergence,
     requireEditable,
   };

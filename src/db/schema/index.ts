@@ -21,3 +21,4 @@ export * from './sms.ts';
 export * from './stock.ts';
 export * from './target-stock-lists.ts';
 export * from './users.ts';
+export * from './voucher-config.ts';

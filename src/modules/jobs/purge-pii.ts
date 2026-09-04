@@ -16,8 +16,8 @@ export interface PurgePiiResult {
  *
  * ## Why this is safe to run
  *
- * `adults`, `children`, `isDelivery`, `needsFuelHelp` and `reasonId` are
- * deliberately outside the PII block and are **kept**. Once the referee's own
+ * `adults`, `children`, `isDelivery`, `collectionMethod`, `needsFuelHelp` and
+ * `reasonId` are deliberately outside the PII block and are **kept**. Once the referee's own
  * columns are null they are no longer identifiable, so those become statistics
  * — which is how "we fed 340 households, 890 people, 22% for benefit delay"
  * survives a purge. That only works because the reason is a dropdown; free text

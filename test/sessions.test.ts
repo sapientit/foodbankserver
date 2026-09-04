@@ -429,10 +429,15 @@ describe('session occupancy', () => {
     const first = await submitReferral(
       testApp,
       built,
-      { isDelivery: true },
+      { collectionMethod: 'delivery' },
       { clientIp: '203.0.113.13' },
     );
-    await submitReferral(testApp, built, { isDelivery: true }, { clientIp: '203.0.113.14' });
+    await submitReferral(
+      testApp,
+      built,
+      { collectionMethod: 'delivery' },
+      { clientIp: '203.0.113.14' },
+    );
 
     const cancelled = await testApp.request(`/api/v1/referrals/${first.id}/cancel`, {
       method: 'POST',
@@ -457,9 +462,24 @@ describe('session occupancy', () => {
     const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
     const built = await setUpReferralWorld(testApp, accessToken, { deliveryCapacity: 5 });
 
-    await submitReferral(testApp, built, { isDelivery: false }, { clientIp: '203.0.113.15' });
-    await submitReferral(testApp, built, { isDelivery: true }, { clientIp: '203.0.113.16' });
-    await submitReferral(testApp, built, { isDelivery: true }, { clientIp: '203.0.113.17' });
+    await submitReferral(
+      testApp,
+      built,
+      { collectionMethod: 'collection' },
+      { clientIp: '203.0.113.15' },
+    );
+    await submitReferral(
+      testApp,
+      built,
+      { collectionMethod: 'delivery' },
+      { clientIp: '203.0.113.16' },
+    );
+    await submitReferral(
+      testApp,
+      built,
+      { collectionMethod: 'delivery' },
+      { clientIp: '203.0.113.17' },
+    );
 
     // Exercises `bookedFor`, the no-join query behind every single-session
     // response (create/patch/cancel/get) — its zero case is covered above,
@@ -539,9 +559,24 @@ describe('session occupancy', () => {
     const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
     const built = await setUpReferralWorld(testApp, accessToken, { deliveryCapacity: 5 });
 
-    await submitReferral(testApp, built, { isDelivery: false }, { clientIp: '203.0.113.20' });
-    await submitReferral(testApp, built, { isDelivery: false }, { clientIp: '203.0.113.21' });
-    await submitReferral(testApp, built, { isDelivery: true }, { clientIp: '203.0.113.22' });
+    await submitReferral(
+      testApp,
+      built,
+      { collectionMethod: 'collection' },
+      { clientIp: '203.0.113.20' },
+    );
+    await submitReferral(
+      testApp,
+      built,
+      { collectionMethod: 'collection' },
+      { clientIp: '203.0.113.21' },
+    );
+    await submitReferral(
+      testApp,
+      built,
+      { collectionMethod: 'delivery' },
+      { clientIp: '203.0.113.22' },
+    );
 
     const response = await testApp.request('/api/v1/sessions', {
       headers: authHeaders(accessToken),
@@ -560,8 +595,18 @@ describe('session occupancy', () => {
     const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
     const built = await setUpReferralWorld(testApp, accessToken, { deliveryCapacity: 5 });
 
-    await submitReferral(testApp, built, { isDelivery: false }, { clientIp: '203.0.113.23' });
-    await submitReferral(testApp, built, { isDelivery: false }, { clientIp: '203.0.113.24' });
+    await submitReferral(
+      testApp,
+      built,
+      { collectionMethod: 'collection' },
+      { clientIp: '203.0.113.23' },
+    );
+    await submitReferral(
+      testApp,
+      built,
+      { collectionMethod: 'collection' },
+      { clientIp: '203.0.113.24' },
+    );
 
     const response = await testApp.request('/api/v1/sessions', {
       headers: authHeaders(accessToken),
@@ -595,20 +640,25 @@ describe('session occupancy', () => {
     const { id: secondSessionId }: { id: string } = await secondSession.json();
 
     // First session: one delivery.
-    await submitReferral(testApp, built, { isDelivery: true }, { clientIp: '203.0.113.25' });
+    await submitReferral(
+      testApp,
+      built,
+      { collectionMethod: 'delivery' },
+      { clientIp: '203.0.113.25' },
+    );
     // Second session: two deliveries — a `GROUP BY` mistake that pooled every
     // session's deliveries together would report the total (3) on both rows
     // rather than each session's own count.
     await submitReferral(
       testApp,
       built,
-      { sessionId: secondSessionId, isDelivery: true },
+      { sessionId: secondSessionId, collectionMethod: 'delivery' },
       { clientIp: '203.0.113.26' },
     );
     await submitReferral(
       testApp,
       built,
-      { sessionId: secondSessionId, isDelivery: true },
+      { sessionId: secondSessionId, collectionMethod: 'delivery' },
       { clientIp: '203.0.113.27' },
     );
 
@@ -633,10 +683,15 @@ describe('session occupancy', () => {
     const cancelledOne = await submitReferral(
       testApp,
       built,
-      { isDelivery: true },
+      { collectionMethod: 'delivery' },
       { clientIp: '203.0.113.28' },
     );
-    await submitReferral(testApp, built, { isDelivery: true }, { clientIp: '203.0.113.29' });
+    await submitReferral(
+      testApp,
+      built,
+      { collectionMethod: 'delivery' },
+      { clientIp: '203.0.113.29' },
+    );
 
     const cancelled = await testApp.request(`/api/v1/referrals/${cancelledOne.id}/cancel`, {
       method: 'POST',

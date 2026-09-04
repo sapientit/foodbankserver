@@ -15,7 +15,10 @@ import { modelParcels, parcelGrid } from '../src/db/schema/rules.ts';
 import { recurringSessions, sessions } from '../src/db/schema/sessions.ts';
 import { stockItems, stockLedger, type StockItem } from '../src/db/schema/stock.ts';
 import { refreshTokens, users } from '../src/db/schema/users.ts';
-import { stockRequirementLines } from '../src/modules/pick-lists/stock-requirement.ts';
+import {
+  stockRequirementLines,
+  stockRequirementSummaryLines,
+} from '../src/modules/pick-lists/stock-requirement.ts';
 import { authHeaders, buildTestApp, devLogin, type TestApp } from './helpers/app.ts';
 import {
   generatePickList,
@@ -508,6 +511,68 @@ describe('stockRequirementLines (pure)', () => {
     // arrived Zebra-then-Apple, and the function must not have resorted it —
     // the caller's chosen order (shelf or category) is what it is trusted to
     // preserve.
+    expect(result.map((line) => line.item.id)).toEqual(['item-zebra', 'item-apple']);
+  });
+});
+
+describe('stockRequirementSummaryLines (pure)', () => {
+  function stockItem(overrides: Partial<StockItem> = {}): StockItem {
+    return {
+      id: 'item-1',
+      name: 'Beans',
+      nameNormalised: 'beans',
+      description: null,
+      category: 'Tinned Goods',
+      shelfNumber: 'A1',
+      shelfSortKey: 'A00000001',
+      lowStockThreshold: null,
+      isActive: 1,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      ...overrides,
+    };
+  }
+
+  it('drops an item nothing requires, however high its stock level', () => {
+    const beans = stockItem();
+
+    const result = stockRequirementSummaryLines([{ item: beans, quantityOnHand: 999 }], new Map());
+
+    expect(result).toEqual([]);
+  });
+
+  it('keeps an item with a requirement, carrying only the required quantity', () => {
+    const beans = stockItem();
+
+    const result = stockRequirementSummaryLines(
+      [{ item: beans, quantityOnHand: 500 }],
+      new Map([['item-1', 7]]),
+    );
+
+    expect(result).toEqual([{ item: beans, requiredQuantity: 7 }]);
+    // Deliberately not a comparison report: no stock level travels with the
+    // line, so there is nothing here for a `quantityOnHand` or a `shortfall`
+    // to sit on, however large the level supplied.
+    expect(result[0]).not.toHaveProperty('quantityOnHand');
+    expect(result[0]).not.toHaveProperty('shortfall');
+  });
+
+  it('preserves the order the caller supplied levels in, rather than resorting', () => {
+    const zebra = stockItem({ id: 'item-zebra', name: 'Zebra Feed' });
+    const apple = stockItem({ id: 'item-apple', name: 'Apple Sauce' });
+    const required = new Map([
+      ['item-zebra', 3],
+      ['item-apple', 5],
+    ]);
+
+    const result = stockRequirementSummaryLines(
+      [
+        { item: zebra, quantityOnHand: 1 },
+        { item: apple, quantityOnHand: 1 },
+      ],
+      required,
+    );
+
     expect(result.map((line) => line.item.id)).toEqual(['item-zebra', 'item-apple']);
   });
 });

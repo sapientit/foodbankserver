@@ -767,7 +767,7 @@ describe('the spreadsheet extract', () => {
       const submitted = await submitReferral(
         testApp,
         world,
-        { ...UNKNOWN_REFERRER, reasonId, isDelivery: true, needsFuelHelp: true },
+        { ...UNKNOWN_REFERRER, reasonId, collectionMethod: 'delivery', needsFuelHelp: true },
         { clientIp: nextClientIp() },
       );
       expect(submitted.referralStatus).toBe('pending_review');

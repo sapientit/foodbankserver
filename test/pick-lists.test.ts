@@ -742,7 +742,7 @@ describe('the printed sheet', () => {
 
   it("gives the driver the referee's own address, postcode and phone for a delivery", async () => {
     const { testApp, token, world: w } = await world({ deliveryCapacity: 5 });
-    await submitReferral(testApp, w, { adults: 1, children: 0, isDelivery: true });
+    await submitReferral(testApp, w, { adults: 1, children: 0, collectionMethod: 'delivery' });
     const { id } = await generatePickList(testApp, token, w.sessionId);
     await reviewEveryParcel(testApp, token, id);
 
@@ -775,7 +775,7 @@ describe('the printed sheet', () => {
     await submitReferral(testApp, w, {
       adults: 1,
       children: 0,
-      isDelivery: true,
+      collectionMethod: 'delivery',
       deliveryAddress: '4 Riverside Flats',
     });
     const { id } = await generatePickList(testApp, token, w.sessionId);

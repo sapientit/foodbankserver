@@ -2,6 +2,7 @@ import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import type { Actor } from '../../core/actor.ts';
 import { UnauthorizedError } from '../../core/errors.ts';
+import { isPlainDate } from '../../core/time/plain-date.ts';
 import { requireAuth, requireRole } from '../../http/middleware/require-auth.ts';
 import { parseJsonBody, parseOptionalJsonBody, parseOrThrow } from '../../http/validate.ts';
 import type { AppEnv } from '../../http/types.ts';
@@ -9,6 +10,7 @@ import { createReferralsRepository } from '../referrals/referrals.repository.ts'
 import { createRulesRepository } from '../rules/rules.repository.ts';
 import { createSessionsRepository } from '../sessions/sessions.repository.ts';
 import { createStockRepository } from '../stock/stock.repository.ts';
+import { createVoucherConfigRepository } from '../voucher-config/voucher-config.repository.ts';
 import { stockOrderSchema } from '../stock/stock.schema.ts';
 import { createPickListsRepository } from './pick-lists.repository.ts';
 import { generatePickListSchema, parcelNotesSchema } from './pick-lists.schema.ts';
@@ -19,9 +21,11 @@ import {
   toPickListResponse,
   toPrintParcelResponse,
   toStockRequirementResponse,
+  toStockRequirementSummaryResponse,
   type ParcelResponse,
   type PrintParcelResponse,
   type StockRequirementResponse,
+  type StockRequirementSummaryResponse,
 } from './pick-lists.mapper.ts';
 
 const lineSchema = z.object({
@@ -39,6 +43,11 @@ const attendanceSchema = z.object({
   attendance: z.enum(['attended', 'no_show']),
 });
 
+/** The cut-off date for the cross-session stock requirement report. */
+const stockRequirementSummaryQuerySchema = z.object({
+  upTo: z.string().refine(isPlainDate, 'must be a real YYYY-MM-DD date'),
+});
+
 /**
  * Team leads run sessions, so they generate, edit and print pick lists, and
  * confirm the session itself once it is done. Nothing here is admin-only — an
@@ -47,6 +56,8 @@ const attendanceSchema = z.object({
 export function pickListRoutes(): Hono<AppEnv> {
   const routes = new Hono<AppEnv>();
   const staff = [requireAuth, requireRole('admin', 'team_lead')] as const;
+  /** The cross-session stock requirement report is planning, not the picking floor — admin only. */
+  const admins = [requireAuth, requireRole('admin')] as const;
 
   /**
    * The session's pick list, generating it on first view.
@@ -91,6 +102,36 @@ export function pickListRoutes(): Hono<AppEnv> {
     });
   });
 
+  /**
+   * The running total of what every session still to come is going to need,
+   * up to a chosen cut-off date — `INITIAL_SPEC1.txt`, `#Stock requirement
+   * report`. An administrator's planning report, not the per-session
+   * comparison below, and deliberately different from it in every way that
+   * matters: admin-only rather than staff, spans every not-yet-confirmed
+   * session on or before `upTo` rather than one, a `-1` line is dropped from
+   * the total rather than refusing the report, there is no review gate
+   * because most of the sessions it covers are not yet picked, and it has no
+   * stock level to compare against — the total, not a shortfall.
+   *
+   * **Registered ahead of `/pick-lists/:id`.** Hono matches routes in
+   * registration order, so a static segment registered after a `:id` route
+   * is shadowed by it — `stock-requirement-summary` would otherwise be read
+   * as an id and 404. `stock.routes.ts`'s `/stock/items/low-stock-summary`
+   * is the existing example of the same trap.
+   */
+  routes.get('/pick-lists/stock-requirement-summary', ...admins, async (c) => {
+    const { upTo } = parseOrThrow(stockRequirementSummaryQuerySchema, {
+      upTo: c.req.query('upTo'),
+    });
+    const requested = c.req.query('order');
+    const order = requested === undefined ? 'shelf' : parseOrThrow(stockOrderSchema, requested);
+    const lines = await serviceFor(c).stockRequirementSummary(upTo, order);
+
+    return c.json<{ items: StockRequirementSummaryResponse[] }>({
+      items: lines.map(toStockRequirementSummaryResponse),
+    });
+  });
+
   routes.get('/pick-lists/:id', ...staff, async (c) => {
     const service = serviceFor(c);
     const pickList = await service.getPickList(c.req.param('id'));
@@ -121,6 +162,7 @@ export function pickListRoutes(): Hono<AppEnv> {
     const service = serviceFor(c);
     const pickList = await service.getPickList(c.req.param('id'));
     const parcels = await service.listParcelsForPrint(pickList.id);
+    const { session, voucherRange } = await service.printContext(pickList);
 
     const byId = await referralsBySession(c, pickList.sessionId);
 
@@ -130,7 +172,10 @@ export function pickListRoutes(): Hono<AppEnv> {
     }>({
       pickList: toPickListResponse(pickList),
       parcels: parcels.map((entry) =>
-        toPrintParcelResponse(entry, byId.get(entry.parcel.referralId)),
+        toPrintParcelResponse(entry, byId.get(entry.parcel.referralId), {
+          sessionDate: session.sessionDate,
+          voucherRange,
+        }),
       ),
     });
   });
@@ -260,6 +305,7 @@ function serviceFor(c: Context<AppEnv>) {
     referrals: createReferralsRepository(db),
     rules: createRulesRepository(db),
     stock: createStockRepository(db),
+    voucherConfig: createVoucherConfigRepository(db),
     clock: c.get('clock'),
     logger: c.get('logger'),
   });

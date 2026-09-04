@@ -40,6 +40,17 @@ function formatSessionDate(date: string): string {
 }
 
 /**
+ * The reminder text for a `referrer_collect` parcel, until the charity
+ * settles the real wording — `OPEN-QUESTIONS.md`, Q1. Deliberately **not** a
+ * variant of `composeReminder`'s own wording: the charity's brief is explicit
+ * that the two must not share text, because a referrer collecting for
+ * several households needs to be told which one a message is about and a
+ * household's own collection/delivery wording says nothing that could answer
+ * that.
+ */
+export const REFERRER_COLLECT_PLACEHOLDER = 'SMS wording for referrer collection is to be agreed.';
+
+/**
  * Composes the reminder for one household on one session.
  *
  * - **Collection**: date, start time, location.

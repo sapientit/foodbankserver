@@ -138,9 +138,9 @@ describe('public referral submission', () => {
   it('refuses a delivery referral once a session’s delivery capacity is reached', async () => {
     const { testApp, world: w } = await world({ deliveryCapacity: 1 });
 
-    expect((await submitReferral(testApp, w, { isDelivery: true })).status).toBe(201);
+    expect((await submitReferral(testApp, w, { collectionMethod: 'delivery' })).status).toBe(201);
 
-    const second = await submitReferral(testApp, w, { isDelivery: true });
+    const second = await submitReferral(testApp, w, { collectionMethod: 'delivery' });
     expect(second.status).toBe(409);
     expect(second.body).toMatchObject({
       error: { code: 'CONFLICT', details: { deliveryCapacity: 1, booked: 1 } },
@@ -150,7 +150,7 @@ describe('public referral submission', () => {
   it('refuses a delivery referral against a session with no delivery capacity', async () => {
     const { testApp, world: w } = await world({ deliveryCapacity: 0 });
 
-    const response = await submitReferral(testApp, w, { isDelivery: true });
+    const response = await submitReferral(testApp, w, { collectionMethod: 'delivery' });
     expect(response.status).toBe(409);
     expect(response.body).toMatchObject({
       error: { code: 'CONFLICT', details: { deliveryCapacity: 0, booked: 0 } },
@@ -160,7 +160,28 @@ describe('public referral submission', () => {
   it('still accepts a collection referral against a session whose delivery capacity is full or zero', async () => {
     const { testApp, world: w } = await world({ deliveryCapacity: 0 });
 
-    expect((await submitReferral(testApp, w, { isDelivery: false })).status).toBe(201);
+    expect((await submitReferral(testApp, w, { collectionMethod: 'collection' })).status).toBe(201);
+  });
+
+  it('accepts a referrer_collect referral against a session with no delivery capacity, and records it as not a delivery', async () => {
+    // Zero delivery capacity is the sharpest proof there is: an ordinary
+    // `delivery` submission to this same session is refused (the test above,
+    // and the assertion below), so a `referrer_collect` one succeeding here
+    // shows it is genuinely exempt from the gate rather than merely under it.
+    const { testApp, world: w } = await world({ deliveryCapacity: 0 });
+
+    const response = await submitReferral(testApp, w, { collectionMethod: 'referrer_collect' });
+    expect(response.status).toBe(201);
+    const receipt = response.body as { collectionMethod?: string; isDelivery?: boolean };
+    expect(receipt.collectionMethod).toBe('referrer_collect');
+    expect(receipt.isDelivery).toBe(false);
+
+    const [stored] = await db.select().from(referrals).where(eq(referrals.id, response.id));
+    expect(stored?.collectionMethod).toBe('referrer_collect');
+    expect(stored?.isDelivery).toBe(0);
+
+    const delivery = await submitReferral(testApp, w, { collectionMethod: 'delivery' });
+    expect(delivery.status).toBe(409);
   });
 
   it('rejects a referral to a cancelled session', async () => {
@@ -202,6 +223,42 @@ describe('public referral submission', () => {
     const { testApp, world: w } = await world();
 
     const response = await submitReferral(testApp, w, { adults: 0, children: 0 });
+
+    expect(response.status).toBe(400);
+  });
+
+  it('refuses a submission with collectionMethod omitted, now that it is required rather than defaulted', async () => {
+    const { testApp, world: w } = await world();
+    const body: Record<string, unknown> = submission(w);
+    delete body.collectionMethod;
+
+    const response = await testApp.request('/api/v1/public/referrals', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    expect(response.status).toBe(400);
+  });
+
+  it('refuses a submission with a collectionMethod value that is not one of the three', async () => {
+    const { testApp, world: w } = await world();
+
+    const response = await submitReferral(testApp, w, { collectionMethod: 'delivery_by_drone' });
+
+    expect(response.status).toBe(400);
+  });
+
+  it('refuses a submission with referrerPhone omitted, on every collection method and not only referrer_collect', async () => {
+    const { testApp, world: w } = await world();
+    const body: Record<string, unknown> = submission(w, { collectionMethod: 'collection' });
+    delete body.referrerPhone;
+
+    const response = await testApp.request('/api/v1/public/referrals', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
 
     expect(response.status).toBe(400);
   });
@@ -328,7 +385,7 @@ describe('public referral submission', () => {
     // A client built against the old contract, or an attempt to have a parcel
     // delivered somewhere the charity never agreed to. Either way it is dropped.
     const { status, id } = await submitReferral(testApp, w, {
-      isDelivery: true,
+      collectionMethod: 'delivery',
       deliveryAddress: '4 Riverside Flats',
     });
     expect(status).toBe(201);
@@ -1035,7 +1092,7 @@ describe('admin referral management', () => {
         refereePhone: '07700 900999',
         adults: 3,
         children: 2,
-        isDelivery: true,
+        collectionMethod: 'delivery',
         needsFuelHelp: true,
       }),
     });
@@ -1055,6 +1112,51 @@ describe('admin referral management', () => {
       isDelivery: 1,
       needsFuelHelp: 1,
     });
+  });
+
+  it('amends collectionMethod to referrer_collect, flipping the derived isDelivery to false', async () => {
+    const { testApp, token, world: w } = await world({ deliveryCapacity: 1 });
+    const { id } = await submitReferral(testApp, w, { collectionMethod: 'delivery' });
+
+    const [before] = await db.select().from(referrals).where(eq(referrals.id, id));
+    expect(before?.isDelivery).toBe(1);
+
+    const response = await testApp.request(`/api/v1/referrals/${id}`, {
+      method: 'PATCH',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({ collectionMethod: 'referrer_collect' }),
+    });
+    expect(response.status).toBe(200);
+    const body: { collectionMethod?: string; isDelivery?: boolean } = await response.json();
+    expect(body.collectionMethod).toBe('referrer_collect');
+    expect(body.isDelivery).toBe(false);
+
+    const [stored] = await db.select().from(referrals).where(eq(referrals.id, id));
+    expect(stored?.collectionMethod).toBe('referrer_collect');
+    expect(stored?.isDelivery).toBe(0);
+  });
+
+  it('round-trips collectionMethod through GET for all three values, with isDelivery derived correctly for each', async () => {
+    const { testApp, token, world: w } = await world({ deliveryCapacity: 1 });
+
+    const cases = [
+      ['collection', false],
+      ['delivery', true],
+      ['referrer_collect', false],
+    ] as const;
+
+    for (const [collectionMethod, expectedIsDelivery] of cases) {
+      const { id, status } = await submitReferral(testApp, w, { collectionMethod });
+      expect(status).toBe(201);
+
+      const response = await testApp.request(`/api/v1/referrals/${id}`, {
+        headers: authHeaders(token),
+      });
+      expect(response.status).toBe(200);
+      const body: { collectionMethod?: string; isDelivery?: boolean } = await response.json();
+      expect(body.collectionMethod).toBe(collectionMethod);
+      expect(body.isDelivery).toBe(expectedIsDelivery);
+    }
   });
 
   it('leaves untouched anything the correction did not mention', async () => {
@@ -1294,7 +1396,7 @@ describe('public session availability with referrals', () => {
   it('reports deliveryAvailability as full once delivery capacity is reached, while the session stays listed for collection', async () => {
     const { testApp, world: w } = await world({ capacity: 5, deliveryCapacity: 1 });
 
-    await submitReferral(testApp, w, { isDelivery: true });
+    await submitReferral(testApp, w, { collectionMethod: 'delivery' });
 
     const response = await testApp.request('/api/v1/public/sessions');
     const body: { sessions: { id: string; deliveryAvailability: string }[] } =
@@ -1302,5 +1404,84 @@ describe('public session availability with referrals', () => {
     const listed = body.sessions.find((s) => s.id === w.sessionId);
     expect(listed).toBeDefined();
     expect(listed?.deliveryAvailability).toBe('full');
+  });
+});
+
+describe('the collectionMethod backfill fallback', () => {
+  /**
+   * A referral inserted directly through Drizzle with `collectionMethod: null`
+   * — the shape a row captured before migration `0032` would have had before
+   * that migration's own one-time `UPDATE` ran. `collectionMethodOf()` in
+   * `referrals.mapper.ts` re-derives it from `isDelivery` on the way out, and
+   * must never guess `referrer_collect`: nothing already held can say whether
+   * a referrer was collecting. See the column's own comment in
+   * `db/schema/referrals.ts`.
+   */
+  async function insertWithNullCollectionMethod(
+    w: ReferralWorld,
+    isDelivery: 0 | 1,
+  ): Promise<string> {
+    const id = crypto.randomUUID();
+    await db.insert(referrals).values({
+      id,
+      sessionId: w.sessionId,
+      status: 'active',
+      referredAt: NOW,
+      cancelledAt: null,
+      cancelledReason: null,
+      reviewComment: null,
+      reviewedByUserId: null,
+      referrerOrganisation: 'Backfill Test Org',
+      authorisedReferrerId: null,
+      adults: 1,
+      children: 0,
+      isDelivery,
+      collectionMethod: null,
+      reasonId: w.reasonId,
+      needsFuelHelp: 0,
+      referrerName: null,
+      referrerEmail: null,
+      referrerPhone: null,
+      refereeFirstName: null,
+      refereeSurname: null,
+      refereeDateOfBirth: null,
+      refereeAddress: null,
+      refereePostcode: null,
+      refereePhone: null,
+      refereePostcodeNormalised: null,
+      refereePhoneNormalised: null,
+      answersJson: null,
+      piiPurgedAt: null,
+      createdByUserId: null,
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+    return id;
+  }
+
+  it('reads a null collectionMethod with isDelivery=1 as delivery', async () => {
+    const { testApp, token, world: w } = await world();
+    const id = await insertWithNullCollectionMethod(w, 1);
+
+    const response = await testApp.request(`/api/v1/referrals/${id}`, {
+      headers: authHeaders(token),
+    });
+    expect(response.status).toBe(200);
+    const body: { collectionMethod?: string; isDelivery?: boolean } = await response.json();
+    expect(body.collectionMethod).toBe('delivery');
+    expect(body.isDelivery).toBe(true);
+  });
+
+  it('reads a null collectionMethod with isDelivery=0 as collection, never as referrer_collect', async () => {
+    const { testApp, token, world: w } = await world();
+    const id = await insertWithNullCollectionMethod(w, 0);
+
+    const response = await testApp.request(`/api/v1/referrals/${id}`, {
+      headers: authHeaders(token),
+    });
+    expect(response.status).toBe(200);
+    const body: { collectionMethod?: string; isDelivery?: boolean } = await response.json();
+    expect(body.collectionMethod).toBe('collection');
+    expect(body.isDelivery).toBe(false);
   });
 });

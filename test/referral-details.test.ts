@@ -256,7 +256,7 @@ describe('who is included', () => {
     const delivery = await submitReferral(
       testApp,
       world,
-      { isDelivery: true },
+      { collectionMethod: 'delivery' },
       { clientIp: nextClientIp() },
     );
     // Both households need a pick number before the listener sheet will

@@ -1,9 +1,17 @@
 import type { Actor } from '../../core/actor.ts';
 import { parseAnswers } from '../../core/answers.ts';
+import type { PlainDate } from '../../core/time/plain-date.ts';
 import type { PickList } from '../../db/schema/pick-lists.ts';
 import type { Referral } from '../../db/schema/referrals.ts';
+import {
+  firstTimeMarkerFor,
+  voucherInstructionFor,
+  type FirstTimeMarker,
+  type VoucherDateRange,
+  type VoucherInstruction,
+} from '../voucher-config/derivations.ts';
 import type { ParcelWithLines } from './pick-lists.repository.ts';
-import type { StockRequirementLine } from './stock-requirement.ts';
+import type { StockRequirementLine, StockRequirementSummaryLine } from './stock-requirement.ts';
 
 /** Response mappers are the output allowlist. See CLAUDE.md. */
 
@@ -76,6 +84,15 @@ export interface ParcelResponse {
    */
   readonly answers: Record<string, unknown>;
   readonly lines: ParcelLineResponse[];
+  /**
+   * `first_time`, `admin` or no marker at all — never the historic date or
+   * anything else about the referral. `INITIAL_SPEC1.txt`, `#Christmas
+   * voucher and first-time selection`: this is what tells a team leader on
+   * the Run a session screen whether a household is new. Safe for a team
+   * lead, unlike the referral's own `firstTimeReview`, which stays
+   * admin-only — see `derivations.ts#firstTimeMarkerFor`.
+   */
+  readonly firstTimeMarker: FirstTimeMarker | null;
 }
 
 export function toParcelResponse(
@@ -96,6 +113,7 @@ export function toParcelResponse(
     attendance: parcel.attendance,
     notes: parcel.notes,
     answers: parseAnswers(referral?.answersJson ?? null),
+    firstTimeMarker: firstTimeMarkerFor(referral?.firstTimeReviewStatus),
     lines: lines.map((line) => ({
       stockItemId: line.stockItemId,
       name: line.item.name,
@@ -130,6 +148,12 @@ export function toParcelResponse(
  * - **No answers.** The preferences belong on the maintenance screen, where
  *   somebody is deciding what goes in the parcel; by print time that decision
  *   is in `lines`.
+ * - **`voucherInstruction`** is calculated fresh on every print — never stored
+ *   on the parcel and never generated with the pick list — because an
+ *   administrator may make the first-time-review decision after the pick
+ *   list already exists, and printing must always use the current one. See
+ *   `derivations.ts#voucherInstructionFor`. Like the marker above, this
+ *   carries no historic date and no other referral detail.
  */
 export interface PrintParcelResponse {
   readonly pickNumber: number;
@@ -143,12 +167,20 @@ export interface PrintParcelResponse {
   readonly deliveryPostcode: string | null;
   readonly deliveryPhone: string | null;
   readonly notes: string | null;
+  readonly voucherInstruction: VoucherInstruction | null;
   readonly lines: ParcelLineResponse[];
+}
+
+/** What `toPrintParcelResponse` needs to work out `voucherInstruction`. */
+export interface PrintVoucherContext {
+  readonly sessionDate: PlainDate;
+  readonly voucherRange: VoucherDateRange | undefined;
 }
 
 export function toPrintParcelResponse(
   entry: ParcelWithLines,
   referral: Referral | undefined,
+  voucher: PrintVoucherContext,
 ): PrintParcelResponse {
   // Bind the narrowed referral once: the address and phone number are only ever
   // read for a delivery, so there is no path where they reach a collection sheet.
@@ -166,6 +198,10 @@ export function toPrintParcelResponse(
     deliveryPostcode: delivery?.refereePostcode ?? null,
     deliveryPhone: delivery?.refereePhone ?? null,
     notes: entry.parcel.notes,
+    voucherInstruction: voucherInstructionFor(voucher.sessionDate, voucher.voucherRange, {
+      status: referral?.firstTimeReviewStatus ?? 'unreviewed',
+      previousSessionDate: referral?.firstTimeReviewDate ?? null,
+    }),
     lines: toParcelResponse(entry, undefined).lines,
   };
 }
@@ -202,6 +238,36 @@ export function toStockRequirementResponse(line: StockRequirementLine): StockReq
     requiredQuantity: line.requiredQuantity,
     quantityOnHand: line.quantityOnHand,
     shortfall: line.shortfall,
+  };
+}
+
+/**
+ * One line of the cross-session stock requirement report — the same shape as
+ * `StockRequirementResponse` minus `quantityOnHand` and `shortfall`, because
+ * this report is a total across many sessions, not a comparison against one
+ * session's shelf. See `GET /pick-lists/stock-requirement-summary`.
+ */
+export interface StockRequirementSummaryResponse {
+  readonly id: string;
+  readonly name: string;
+  readonly category: string;
+  readonly description: string | null;
+  readonly shelfNumber: string;
+  readonly isActive: boolean;
+  readonly requiredQuantity: number;
+}
+
+export function toStockRequirementSummaryResponse(
+  line: StockRequirementSummaryLine,
+): StockRequirementSummaryResponse {
+  return {
+    id: line.item.id,
+    name: line.item.name,
+    category: line.item.category,
+    description: line.item.description,
+    shelfNumber: line.item.shelfNumber,
+    isActive: line.item.isActive === 1,
+    requiredQuantity: line.requiredQuantity,
   };
 }
 

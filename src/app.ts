@@ -20,6 +20,7 @@ import { stockRoutes } from './modules/stock/stock.routes.ts';
 import { targetStockListRoutes } from './modules/target-stock-lists/target-stock-lists.routes.ts';
 import { sessionRoutes } from './modules/sessions/sessions.routes.ts';
 import { userRoutes } from './modules/users/users.routes.ts';
+import { voucherConfigRoutes } from './modules/voucher-config/voucher-config.routes.ts';
 import type { AppEnv } from './http/types.ts';
 
 export const API_PREFIX = '/api/v1';
@@ -59,6 +60,7 @@ export function buildApp(config: AppConfig, options: ContextOptions = {}): Hono<
   app.route(API_PREFIX, stockRoutes());
   app.route(API_PREFIX, targetStockListRoutes());
   app.route(API_PREFIX, ruleRoutes());
+  app.route(API_PREFIX, voucherConfigRoutes());
   app.route(API_PREFIX, pickListRoutes());
   app.route(API_PREFIX, userRoutes());
   app.route(API_PREFIX, smsRoutes());

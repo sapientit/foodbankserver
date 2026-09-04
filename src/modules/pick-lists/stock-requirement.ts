@@ -42,3 +42,33 @@ export function stockRequirementLines(
     ];
   });
 }
+
+/**
+ * One stock item's running total across many sessions — the cross-session
+ * report, not the per-session comparison above.
+ *
+ * `INITIAL_SPEC1.txt`, `#Stock requirement report`: no stock level travels
+ * with it, so there is no `quantityOnHand` and no `shortfall` to compute —
+ * the report is a total, not a comparison.
+ */
+export interface StockRequirementSummaryLine {
+  readonly item: StockItem;
+  readonly requiredQuantity: number;
+}
+
+/**
+ * Pairs each item with a requirement to its catalogue row, in catalogue
+ * order. Mirrors `stockRequirementLines` minus the stock-level arithmetic
+ * that report needs and this one deliberately does not.
+ */
+export function stockRequirementSummaryLines(
+  levels: readonly { item: StockItem; quantityOnHand: number }[],
+  requiredByItem: ReadonlyMap<string, number>,
+): StockRequirementSummaryLine[] {
+  return levels.flatMap((level) => {
+    const requiredQuantity = requiredByItem.get(level.item.id);
+    if (requiredQuantity === undefined) return [];
+
+    return [{ item: level.item, requiredQuantity }];
+  });
+}

@@ -24,7 +24,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "check:openapi": "node scripts/check-openapi.mjs",
-    "test": "vitest run",
+    "test": "vitest run && node --test scripts/load-stock-data.test.mjs",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "dry-run": "wrangler deploy --env production --dry-run --outdir .wrangler/dry-run",

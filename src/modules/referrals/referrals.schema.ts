@@ -5,7 +5,7 @@ import {
   MAX_ANSWERS_BYTES,
   MAX_ANSWER_KEY_LENGTH,
 } from '../../config/constants.ts';
-import { REFERRAL_STATUSES } from '../../db/schema/referrals.ts';
+import { COLLECTION_METHODS, REFERRAL_STATUSES } from '../../db/schema/referrals.ts';
 import { isPlainDate } from '../../core/time/plain-date.ts';
 
 /**
@@ -24,6 +24,7 @@ const address = z.string().trim().min(1).max(500);
 const postcode = z.string().trim().min(2).max(12);
 const phone = z.string().trim().min(5).max(30);
 const dateOfBirth = z.string().refine(isPlainDate, 'must be a real YYYY-MM-DD date');
+const plainDate = z.string().refine(isPlainDate, 'must be a real YYYY-MM-DD date');
 
 /**
  * The dynamic answers, stored exactly as sent.
@@ -58,7 +59,12 @@ export const referralSubmissionSchema = z.object({
    * which organisation a referral is credited to.
    */
   referrerOrganisation: organisation,
-  referrerPhone: phone.optional(),
+  /**
+   * Required on every referral, not only a `referrer_collect` one — the food
+   * bank may need to ring the person who sent a household regardless of how
+   * the parcel itself is collected. `INITIAL_SPEC1.txt`, "#referral".
+   */
+  referrerPhone: phone,
 
   refereeFirstName: personName,
   refereeSurname: personName,
@@ -81,8 +87,14 @@ export const referralSubmissionSchema = z.object({
   adults: z.number().int().min(1).max(30),
   children: z.number().int().min(0).max(30),
 
-  /** A delivery goes to `refereeAddress`; there is no second address. */
-  isDelivery: z.boolean().default(false),
+  /**
+   * `collection`, `delivery` or `referrer_collect` — the sole source of
+   * whether a parcel is a delivery. Required, not defaulted: a submission
+   * this important should say what it means rather than fall back to
+   * `collection` by omission. A delivery goes to `refereeAddress`; there is
+   * no second address.
+   */
+  collectionMethod: z.enum(COLLECTION_METHODS),
 
   /**
    * A column rather than an answer because the charity reports on it. The two
@@ -128,7 +140,7 @@ export const referralAmendSchema = z.object({
   refereePhone: phone.nullable().optional(),
   adults: z.number().int().min(1).max(30).optional(),
   children: z.number().int().min(0).max(30).optional(),
-  isDelivery: z.boolean().optional(),
+  collectionMethod: z.enum(COLLECTION_METHODS).optional(),
   needsFuelHelp: z.boolean().optional(),
   reasonId: z.uuid().optional(),
   /** Replaces the stored set outright; it is not merged into it. */
@@ -282,3 +294,38 @@ export const referralSearchSchema = z
   );
 
 export type ReferralSearch = z.infer<typeof referralSearchSchema>;
+
+/**
+ * `POST /referrals/{id}/first-time-review` — the dedicated first-time review
+ * screen's Save action. `INITIAL_SPEC1.txt`, `#Christmas voucher and
+ * first-time selection`.
+ *
+ * Exactly one of the two choices the screen offers: there is no previous
+ * referral, or a specific previous-session date. **No candidate-list
+ * validation here, by explicit instruction rather than by analogy to
+ * anything else in this module**: the brief for this feature is "do not
+ * build a new candidate-list API or server-side presentation/filtering for
+ * the chooser; the client reuses the existing previous-referrals API and
+ * controls which choices are selectable." The client reuses `GET
+ * /referrals/{id}/repeat-referrals` for the candidates and decides which of
+ * them are selectable (a No Show or Not In stays visible but is not
+ * offered); this route stores whatever date it is sent without cross-checking
+ * it against that list. This is *not* the same trust the pick-list
+ * preference-lines exception rests on (`.claude/rules/pii-security.md`,
+ * "The one exception") — that one is about who owns the referral form
+ * definition, and that reasoning does not extend here by analogy. This one
+ * rests on the instruction above, and remains a re-visitable product
+ * decision, not an architectural one.
+ */
+export const firstTimeReviewSchema = z
+  .object({
+    noPreviousReferral: z.literal(true).optional(),
+    previousSessionDate: plainDate.optional(),
+  })
+  .strict()
+  .refine(
+    (value) => (value.noPreviousReferral === true) !== (value.previousSessionDate !== undefined),
+    'supply exactly one of noPreviousReferral or previousSessionDate',
+  );
+
+export type FirstTimeReview = z.infer<typeof firstTimeReviewSchema>;
