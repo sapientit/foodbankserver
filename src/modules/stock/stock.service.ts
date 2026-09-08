@@ -35,6 +35,17 @@ export interface CrateCountInput {
   readonly enteredCount: number;
 }
 
+/**
+ * Who a counted page is stamped against. A signed-in team lead supplies their
+ * own id; a volunteer counting on a code supplies the team lead who issued it
+ * (`INITIAL_SPEC1.txt`, #Stock maintenance — "recorded against the team leader
+ * who gave it out"). Either way it is a real `users` row, so the ledger's
+ * `actor_user_id` foreign key holds.
+ */
+export interface StockTakeCounter {
+  readonly actorUserId: string;
+}
+
 export function createStockService({
   db,
   repository,
@@ -202,7 +213,7 @@ export function createStockService({
   async function recordStockTake(
     counts: readonly StockCountInput[],
     crateCounts: readonly CrateCountInput[],
-    actor: Actor,
+    counter: StockTakeCounter,
   ): Promise<{ applied: number; levels: { stockItemId: string; quantityOnHand: number }[] }> {
     // Fail before writing anything if an item does not exist. One query per
     // item, but a page is 40 and this is the only chance to refuse cleanly —
@@ -273,7 +284,7 @@ export function createStockService({
         ? []
         : [
             repository.buildInsertBaselines(baselines, {
-              actorUserId: actor.userId,
+              actorUserId: counter.actorUserId,
               occurredAt: now,
             }),
           ]),
@@ -281,7 +292,7 @@ export function createStockService({
 
     logger.info('recorded a stock take page', {
       count: combined.length,
-      userId: actor.userId,
+      userId: counter.actorUserId,
     });
 
     return {

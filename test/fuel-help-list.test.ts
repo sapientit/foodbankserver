@@ -451,6 +451,8 @@ describe('the fuel help list', () => {
       `/api/v1/sessions/${sessionId}/listener-sheet`,
       '/api/v1/stock/items',
       '/api/v1/stock/levels',
+      '/api/v1/stock/groupings',
+      '/api/v1/stock/crates',
       '/api/v1/model-parcels',
       '/api/v1/parcel-grid',
       '/api/v1/users',

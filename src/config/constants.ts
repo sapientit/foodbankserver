@@ -25,6 +25,22 @@ export const SIGN_IN_TTL_SECONDS = 8 * 60 * 60;
 /** Tolerance for clock skew between the signer and the verifier. */
 export const JWT_CLOCK_LEEWAY_SECONDS = 60;
 
+/**
+ * How long a stock-take volunteer code works, from the moment it was issued.
+ *
+ * Eight hours — the same span as a sign-in and for the same reasons: it covers
+ * a morning's counting, and a code read out onto a shared tablet is useless by
+ * the next session. A **separate constant on purpose**: it happens to equal
+ * `SIGN_IN_TTL_SECONDS` today, but the two answer different questions and
+ * there is no reason a change to one should drag the other with it.
+ *
+ * There is deliberately no way to end a code sooner. It reaches the stock take
+ * and nothing with a name on it, so a loose one exposes little, and an
+ * "end it now" control is surface for no real gain. See `INITIAL_SPEC1.txt`,
+ * #Stock maintenance.
+ */
+export const VOLUNTEER_CODE_TTL_SECONDS = 8 * 60 * 60;
+
 export const JWT_ISSUER = 'foodbank-api';
 export const JWT_AUDIENCE = 'foodbank-web';
 

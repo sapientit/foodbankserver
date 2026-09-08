@@ -194,6 +194,13 @@ minutes later. Deactivation is the same: their current access token keeps
 working until it expires. If someone must be locked out immediately, that is a
 gap — say so rather than assuming this closes it.
 
+### One credential that is not a sign-in
+
+A team lead can hand a volunteer a code to count the stock with, so somebody
+with no account can do the weekly stock take. It is a header, not a token, it
+reaches the stock take and nothing else, and it lapses after eight hours. See
+§4, "Counting the stock without an account".
+
 ---
 
 ## 2. Roles
@@ -1135,6 +1142,38 @@ app that cannot be taken back.
 is still `pending`, returning `details.pendingPickNumbers` — show those numbers
 so the team lead knows who is missing. There is no override: everybody is marked
 one way or the other before the session closes.
+
+### Counting the stock without an account
+
+The people walking the shelves are often volunteers with no sign-in and no
+reason to be given one. A team lead (or an admin) generates them a code:
+
+```
+POST /api/v1/stock/take/volunteer-codes   →  201 { code, expiresAt }
+```
+
+`code` is `XXXX-XXXX-XXXX-XXXX`. It is in that response and nowhere else — only
+a hash is stored, so nothing retrieves it again; if it is lost, generate
+another and let the old one lapse. Show it to the team lead once.
+
+The volunteer then sends it on every stock-take request as a header, instead of
+a bearer token:
+
+```
+X-Volunteer-Code: KP7Q-4XZM-9RTW-2NJH
+```
+
+Case and separators are normalised, so what the volunteer types need only be
+close. The code reaches exactly four operations — `GET /stock/levels`,
+`GET /stock/groupings`, `GET /stock/crates`, `POST /stock/take` — and every
+other endpoint answers `401`, the item list and hand corrections included. It
+stops working eight hours after it was issued; there is no way to end one
+sooner, and nothing about it survives. A page saved on a code is recorded
+against the team lead who issued it.
+
+Build the counting screen to accept a code on a device that never signs in.
+Everything else about the stock take — the paging, "send only what changed",
+no stock-take resource — is exactly as below.
 
 ### How stock moves
 

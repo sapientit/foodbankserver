@@ -2,7 +2,9 @@ import { Hono, type Context } from 'hono';
 import { UnauthorizedError } from '../../core/errors.ts';
 import type { Actor } from '../../core/actor.ts';
 import { requireAuth, requireRole } from '../../http/middleware/require-auth.ts';
+import { stockCountingAuth } from '../../http/middleware/stock-counting-auth.ts';
 import { parseJsonBody, parseOrThrow } from '../../http/validate.ts';
+import { volunteerCodeServiceFrom } from './volunteer-code.service.ts';
 import type { AppEnv } from '../../http/types.ts';
 import type { StockTakeGrouping } from '../../db/schema/crates.ts';
 import { createCratesRepository, type CrateWithMembers } from './crates.repository.ts';
@@ -47,6 +49,11 @@ interface StockCorrectionResponse {
   readonly quantityOnHand: number;
 }
 
+interface VolunteerCodeResponse {
+  readonly code: string;
+  readonly expiresAt: number;
+}
+
 interface StockLevelResponse extends StockItemResponse {
   readonly quantityOnHand: number;
 }
@@ -79,6 +86,13 @@ interface CrateResponse {
  * and every stock take that follows. Groupings and crates follow the same
  * split: both roles use the grouped stock take, but only an admin sets up
  * what a grouping or a crate is.
+ *
+ * The grouped stock take — the level list, the groupings, the crates, and
+ * saving a counted page — is additionally reachable by a volunteer holding a
+ * code a team lead handed out (`stockCountingAuth`, `INITIAL_SPEC1.txt`
+ * #Stock maintenance). Nothing else here is: not the item list, not a
+ * correction, not the validation report. That boundary is enforced by
+ * `stockCountingAuth` sitting on those four routes and `...staff` on the rest.
  */
 export function stockRoutes(): Hono<AppEnv> {
   const routes = new Hono<AppEnv>();
@@ -86,7 +100,7 @@ export function stockRoutes(): Hono<AppEnv> {
   const admins = [requireAuth, requireRole('admin')] as const;
 
   /** The stock-take list, ordered by shelf so a picker walks the aisle once. */
-  routes.get('/stock/levels', ...staff, async (c) => {
+  routes.get('/stock/levels', stockCountingAuth, async (c) => {
     const includeInactive = c.req.query('includeInactive') === 'true';
     const levels = await serviceFor(c).listLevels(!includeInactive, orderOf(c, 'shelf'));
 
@@ -144,11 +158,28 @@ export function stockRoutes(): Hono<AppEnv> {
    * Each page save stands on its own, so the resource is the act of counting
    * rather than a thing with a lifecycle.
    */
-  routes.post('/stock/take', ...staff, async (c) => {
+  routes.post('/stock/take', stockCountingAuth, async (c) => {
     const { counts, crateCounts } = await parseJsonBody(c, stockTakeCountsSchema);
-    const result = await serviceFor(c).recordStockTake(counts, crateCounts, actorOf(c));
+    const result = await serviceFor(c).recordStockTake(counts, crateCounts, countingActorOf(c));
 
     return c.json(result);
+  });
+
+  /**
+   * A stock-take volunteer code, for a team lead to read out to whoever is
+   * counting the shelves that morning. `...staff` — a code cannot mint another
+   * code. The plaintext is in this response and nowhere else; it is stored
+   * only as a hash and cannot be shown again.
+   */
+  routes.post('/stock/take/volunteer-codes', ...staff, async (c) => {
+    const actor = actorOf(c);
+    const { code, expiresAt } = await volunteerCodeServiceFrom(
+      c.get('db'),
+      c.get('clock'),
+    ).generate(actor.userId);
+
+    c.get('logger').info('generated a stock-take volunteer code', { userId: actor.userId });
+    return c.json<VolunteerCodeResponse>({ code, expiresAt }, 201);
   });
 
   /**
@@ -166,7 +197,7 @@ export function stockRoutes(): Hono<AppEnv> {
     return c.json<StockCorrectionResponse>(result);
   });
 
-  routes.get('/stock/groupings', ...staff, async (c) => {
+  routes.get('/stock/groupings', stockCountingAuth, async (c) => {
     const groupings = await groupingsServiceFor(c).listGroupings();
     return c.json<{ items: GroupingResponse[] }>({ items: groupings.map(toGroupingResponse) });
   });
@@ -183,7 +214,7 @@ export function stockRoutes(): Hono<AppEnv> {
     return c.json(toGroupingResponse(updated));
   });
 
-  routes.get('/stock/crates', ...staff, async (c) => {
+  routes.get('/stock/crates', stockCountingAuth, async (c) => {
     const crates = await cratesServiceFor(c).listCrates();
     return c.json<{ items: CrateResponse[] }>({ items: crates.map(toCrateResponse) });
   });
@@ -293,6 +324,23 @@ function actorOf(c: Context<AppEnv>): Actor {
     throw new UnauthorizedError('Authentication required');
   }
   return actor;
+}
+
+/**
+ * Who to record a counted page against, whichever way the request authenticated:
+ * the signed-in user, or the team lead who issued the volunteer code in play.
+ * `stockCountingAuth` guarantees exactly one of the two is set.
+ */
+function countingActorOf(c: Context<AppEnv>): { actorUserId: string } {
+  const actor = c.get('actor');
+  if (actor !== undefined) {
+    return { actorUserId: actor.userId };
+  }
+  const volunteerCode = c.get('volunteerCode');
+  if (volunteerCode !== undefined) {
+    return { actorUserId: volunteerCode.createdByUserId };
+  }
+  throw new UnauthorizedError('Authentication required');
 }
 
 function serviceFor(c: Context<AppEnv>) {

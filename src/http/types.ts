@@ -30,6 +30,16 @@ export interface Variables {
    * public session list and referral submission both run without one.
    */
   readonly actor?: Actor;
+  /**
+   * Set by `stockCountingAuth` when a request carries a valid stock-take
+   * volunteer code instead of a sign-in. Present on the stock-take routes
+   * only, and never alongside `actor`. `createdByUserId` is the team lead who
+   * issued the code — who a count on it is recorded against.
+   */
+  readonly volunteerCode?: {
+    readonly volunteerCodeId: string;
+    readonly createdByUserId: string;
+  };
 }
 
 export interface AppEnv {
