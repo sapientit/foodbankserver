@@ -4,10 +4,13 @@ import { requireAuth, requireRole } from '../../http/middleware/require-auth.ts'
 import { parseJsonBody } from '../../http/validate.ts';
 import type { AppEnv } from '../../http/types.ts';
 import type { TargetStockListRow } from '../../db/schema/target-stock-lists.ts';
+import { createCratesRepository } from '../stock/crates.repository.ts';
+import { createCratesService } from '../stock/crates.service.ts';
 import { createTargetStockListsRepository } from './target-stock-lists.repository.ts';
 import { createTargetStockListsService, parseLines } from './target-stock-lists.service.ts';
 
-const lineSchema = z.object({
+const itemLineSchema = z.object({
+  kind: z.literal('item'),
   // Not validated against the stock item catalogue on write — settled
   // 2026-08-31 (was Q46). See the comment on the service.
   stockItemId: z.string().trim().min(1).max(100),
@@ -15,12 +18,33 @@ const lineSchema = z.object({
   targetQuantity: z.number().int().min(1).max(100_000),
 });
 
+/**
+ * A crate line beside an item line — same snapshot design: `crateId` and
+ * `crateName` are stored as they stood when the line was saved, never
+ * revalidated against the live crate. `targetQuantity` allows one decimal
+ * place, unlike an item line's whole-number target, because a shopping run
+ * can reasonably ask for half a crate.
+ */
+const crateLineSchema = z.object({
+  kind: z.literal('crate'),
+  crateId: z.string().trim().min(1).max(100),
+  crateName: z.string().trim().min(1).max(120),
+  targetQuantity: z.number().min(0.1).max(100_000).multipleOf(0.1),
+});
+
+const lineSchema = z.discriminatedUnion('kind', [itemLineSchema, crateLineSchema]);
+
 const linesSchema = z
   .array(lineSchema)
   .max(500)
   .refine(
-    (lines) => new Set(lines.map((line) => line.stockItemId)).size === lines.length,
-    'the same stockItemId appears twice',
+    (lines) =>
+      new Set(
+        lines.map((line) =>
+          line.kind === 'item' ? `item:${line.stockItemId}` : `crate:${line.crateId}`,
+        ),
+      ).size === lines.length,
+    'the same stockItemId or crateId appears twice',
   );
 
 const createSchema = z.object({
@@ -93,8 +117,12 @@ function toTargetStockListResponse(list: TargetStockListRow) {
 }
 
 function serviceFor(c: Context<AppEnv>) {
+  const db = c.get('db');
   return createTargetStockListsService({
-    repository: createTargetStockListsRepository(c.get('db')),
+    repository: createTargetStockListsRepository(db),
+    // Reached through the crates *service*, not its repository directly —
+    // this module and `stock` talk to each other the way any two modules do.
+    crates: createCratesService({ repository: createCratesRepository(db), clock: c.get('clock') }),
     clock: c.get('clock'),
   });
 }

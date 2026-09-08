@@ -143,6 +143,34 @@ export function createStockRepository(db: Database) {
       return expectAtMostOne(rows);
     },
 
+    /**
+     * A team lead's hand correction: one row, written directly rather than
+     * through the delete-then-insert `db.$client.batch()` a stock take needs
+     * — there is no prior state here to reconcile, so a plain Drizzle insert
+     * is enough.
+     */
+    async insertCorrection(row: {
+      id: string;
+      stockItemId: string;
+      quantityDelta: number;
+      occurredAt: string;
+    }): Promise<void> {
+      await db.insert(stockLedger).values({
+        id: row.id,
+        stockItemId: row.stockItemId,
+        quantityDelta: row.quantityDelta,
+        movementType: 'correction',
+        parcelId: null,
+        sessionId: null,
+        // Deliberately null: the charity decided nothing is kept about who
+        // made a correction, unlike a stock take's baseline or a parcel
+        // issue — INITIAL_SPEC1.txt, "#Stock maintenance".
+        actorUserId: null,
+        occurredAt: row.occurredAt,
+        createdAt: row.occurredAt,
+      });
+    },
+
     async listLedgerFor(stockItemId: string) {
       return db
         .select()

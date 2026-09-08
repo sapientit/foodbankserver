@@ -1138,17 +1138,21 @@ one way or the other before the session closes.
 
 ### How stock moves
 
-**Two `movementType` values, and there will not quietly be a third** — they are a
-`CHECK` constraint on a table that cannot be altered without a rebuild, and that
-column has already been rebuilt three times by guessing.
+**Three `movementType` values.** They are a `CHECK` constraint on a table that
+cannot be altered without a rebuild, and that column has already been
+rebuilt three times by guessing — `correction` is the one exception, a
+settled decision rather than another guess, see **5l**.
 
 | Value             | Written by                                                       |
 | ----------------- | ---------------------------------------------------------------- |
 | `opening_balance` | `POST /stock/take` — one per counted item, at the counted figure |
 | `parcel_issued`   | attendance, when a household attends or a delivery lands         |
+| `correction`      | `POST /stock/items/{id}/corrections` — a team lead's hand fix    |
 
-There is no shop, no donation, no wastage and no hand correction. The count on
-the shelf next week is what the stock is, whatever happened to it in between.
+There is no shop, no donation and no wastage. The count on the shelf next
+week is what the stock is, whatever happened to it in between — a
+correction does not change that, it just lets a team lead put one item
+right without waiting for the next count.
 
 **Rows are deleted in exactly two places**, and both are deliberate: a stock take
 discards the counted item's rows before writing its new baseline, and taking an
@@ -2079,6 +2083,184 @@ Print exactly one instruction where this is non-null; render nothing where it
 is `null`. As with the marker above, this is never the historic date and
 carries nothing else about the referral — `PrintParcel` still has no
 `answers` and no reason for referral, see **5**.
+
+---
+
+## 5k. Stock groupings, crates and packing units
+
+Grouped stock-taking: a stock item now belongs to a **stock-take grouping**
+above `category`, and several items can be shelved and counted together as
+one **crate**. Both are new maintenance concepts alongside the existing stock
+item list, and both follow the same role split: `admin` and `team_lead` can
+read them (both roles use the grouped stock take), only `admin` writes them.
+
+### `StockItem` gains four fields
+
+`groupingId` (nullable uuid), `unitsPerPack` (nullable positive integer),
+`packUnitLabel` (nullable string) and `shelfSortKey` (string) join the
+existing fields on `GET /stock/items`, `GET /stock/levels`,
+`POST /stock/items` and `PATCH /stock/items/{id}`.
+
+- **`shelfSortKey`** is opaque — compare it as a plain string, do not parse
+  it. It sorts the way `shelfNumber` already orders `GET /stock/levels`:
+  `A1` before `A2` before `A10`. It exists so a client building a combined
+  stock-take screen can interleave crates among items by comparing this
+  against `Crate.shelfSortKey` below, without reimplementing the server's
+  shelf-number parsing itself.
+
+- **`groupingId`** is `null` on a crate member — its grouping comes from its
+  crate instead — and otherwise defaults to the seeded `"Non-perishable"`
+  grouping on create when omitted. **Nothing keeps this in step with crate
+  membership afterwards.** An item that is both directly grouped and a crate
+  member, or one that is neither and so would never appear on a grouped stock
+  take, is not rejected — it is reported by `GET /stock/validation` below, for
+  an administrator to notice and fix.
+- **`unitsPerPack`/`packUnitLabel`** are a pair: `packUnitLabel` is always
+  `null` when `unitsPerPack` is absent, whatever was sent, and a blank
+  `packUnitLabel` sent alongside a real `unitsPerPack` reads as "packs" —
+  render it as such rather than as an empty label.
+
+### `GET`/`POST /stock/groupings`, `PATCH /stock/groupings/{id}`
+
+A grouping is just an `id` and a `name` (`maxLength` 40). List is unordered by
+role — actually alphabetical, by name. Create and rename are both `admin`
+only and `409` on a duplicate name.
+
+### `GET`/`POST /stock/crates`, `PATCH`/`DELETE /stock/crates/{id}`
+
+A crate is a shelf (`shelfKey`, unique across crates) holding several stock
+items in fixed proportions. `POST`/`PATCH` **hard-validate**, unlike a stock
+item write: at least two `members`, a `groupingId` and every member
+`stockItemId` that actually exist, a positive `sizePerCrate`, and both
+`stockCompositionPercent` and `shoppingCompositionPercent` totalling exactly
+100 across the members — **no all-zero fallback**, so a crate whose shares
+have not been worked out yet is refused, not silently accepted.
+
+The two percentage columns serve different moments and are allowed to differ:
+`stockCompositionPercent` is how a **counted** crate divides among its
+members; `shoppingCompositionPercent` is how a **shopping shortfall** for
+that crate should divide among them, which the browser calculates from the
+crate definition, stock levels and this column — there is no server
+shopping-calculation endpoint.
+
+`PATCH` treats `members` as replace-wholesale, same as a target stock list's
+`lines` — omit it to rename or resize a crate without touching who is in it.
+`DELETE` is idempotent (`204` on an already-gone id). A target stock list
+line that names a deleted crate is not cleaned up — see below.
+
+`Crate` also carries a `shelfSortKey`, computed from `shelfKey` fresh on
+every read (there is no stored column for it) using the same shelf-number
+parsing as `StockItem.shelfSortKey`. The list itself stays **ordered by
+name** — that has not changed — but a client can use the key to slot crates
+into the same shelf-walk order as `GET /stock/levels` for a combined
+stock-take screen.
+
+### `POST /stock/take` gains `crateCounts`
+
+A crate can now be counted as one line instead of counting each member:
+
+```json
+{ "crateCounts": [{ "crateId": "…", "enteredCount": 3.5 }] }
+```
+
+The server decomposes it into the same per-item deltas a direct `counts`
+entry would produce, using `stockCompositionPercent`, and folds them into the
+same save — "zero writes nothing" and repeat-safety both still apply,
+per-member. `enteredCount` allows **one decimal place**, settled 2026-09-05
+(was Q50).
+
+Either `counts` or `crateCounts` may be empty, but not both. **A stock item
+named by more than one source in one request is a `400`** — a direct count
+colliding with a crate, or two crates sharing a member — the same "ambiguous
+instruction" reasoning already applied to a repeated `stockItemId` within
+`counts`. `levels` in the response now reports every item actually changed,
+direct or crate-derived, not only the ones named in `counts`.
+
+### `GET /stock/validation`
+
+Admin only. A live, non-blocking report — computed fresh on every call, never
+stored, and **never used to reject a stock-item write**. Call it after a
+successful `POST`/`PATCH /stock/items` and show the result; do not call it
+before saving or use it to decide whether to submit.
+
+```json
+{
+  "issues": [
+    { "kind": "crate_member_shelf_mismatch", "crateId": "…", "stockItemId": "…", "message": "…" }
+  ]
+}
+```
+
+`kind` is a stable, closed vocabulary you may key UI off:
+`shelf_without_crate`, `crate_too_few_members`, `crate_member_shelf_mismatch`,
+`item_uncounted`, `item_grouped_and_crate_member`, `item_in_multiple_crates`.
+`message` is for display only — do not parse it.
+
+**Retired items (`isActive: false`) take no part in any check.** A retired item
+never makes a shared shelf need a crate, is never `item_uncounted`, and is not
+held to a crate's shelf. A crate a retired item still belongs to stays valid —
+retiring a member never trips `crate_too_few_members` — and its membership is
+left as saved.
+
+### Target stock lists gain a crate line
+
+`TargetStockLine` is now one of two shapes, told apart by `kind`:
+
+```json
+{ "kind": "item", "stockItemId": "…", "name": "…", "targetQuantity": 5 }
+{ "kind": "crate", "crateId": "…", "crateName": "…", "targetQuantity": 1.5 }
+```
+
+Send `kind` on every line from now on. A crate line's `targetQuantity` allows
+one decimal place, unlike an item line's whole number — a shopping run can
+reasonably ask for half a crate. Same snapshot rules as an item line: stored
+and returned exactly as sent, never revalidated against the live crate, so a
+deleted crate's line is not removed out from under you.
+
+**A stock item that is currently a crate member cannot be given a new
+individual target on a list saved from scratch** — the crate is what gets
+bought. Enforced server-side: an item-kind line naming a current crate member
+is refused with a `422`, whether on `POST` or on a `PATCH` that sends `lines`.
+This does not reach backwards: a `PATCH` that omits `lines` leaves whatever is
+stored untouched, so a target already on a list for an item before it became
+a crate member, or for a crate since deleted, stays on the list exactly as
+saved. Show such a line as needing administrator attention rather than
+hiding or auto-removing it.
+
+---
+
+## 5l. Stock corrections
+
+```
+POST /api/v1/stock/items/{id}/corrections   { "quantityDelta": -3 }
+  → { "quantityOnHand": 17 }
+```
+
+A team lead can put one item's level right by hand, between one stock take
+and the next, when they discover it is wrong. This is new: `movementType`
+gains a third value, `correction` — see **How stock moves** above.
+
+**`quantityDelta` is a signed delta, not a fresh total.** Send the amount the
+level is out by — negative to reduce it, positive to increase it — not a
+replacement figure. That is the opposite of `POST /stock/take`, which takes a
+count and works out the difference itself; a correction is entered the other
+way round because the team lead already knows the amount, not the total.
+`0` is a `400` — a delta saying nothing changed is refused rather than
+written as a no-op row.
+
+**No reason is recorded and there is no history to read back.** Same
+decision the charity already made about a stock take's variance: once the
+level is put right, nothing is kept about how it came to be wrong or who
+made the correction. There is no audit screen for this and none is planned.
+
+**Staff — `admin` and `team_lead`**, the same as `POST /stock/take` it
+belongs with. A team lead is who does it in practice, but an administrator
+can do everything a team lead can, without exception.
+
+`404` on an unknown stock item, with nothing written. A subsequent stock
+take on that item still discards this row along with everything else the
+ledger held for it — a correction does not get special treatment from the
+"two deletes" rule.
 
 ---
 
