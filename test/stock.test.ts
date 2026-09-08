@@ -1,9 +1,11 @@
 import { env } from 'cloudflare:workers';
-import { eq, sql } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createDatabase } from '../src/db/client.ts';
+import { crateMembers, crates } from '../src/db/schema/crates.ts';
 import { stockItems, stockLedger } from '../src/db/schema/stock.ts';
 import { refreshTokens, users } from '../src/db/schema/users.ts';
+import { NON_PERISHABLE_GROUPING_ID } from '../src/modules/stock/stock.service.ts';
 import { authHeaders, buildTestApp, devLogin, type TestApp } from './helpers/app.ts';
 
 const db = createDatabase(env.DB);
@@ -72,7 +74,50 @@ interface ItemFields {
   readonly category: string;
   readonly description: string | null;
   readonly shelfNumber: string;
+  readonly shelfSortKey: string;
   readonly lowStockThreshold: number | null;
+  readonly groupingId: string | null;
+  readonly unitsPerPack: number | null;
+  readonly packUnitLabel: string | null;
+}
+
+interface CrateMemberInput {
+  readonly stockItemId: string;
+  readonly stockCompositionPercent: number;
+  readonly shoppingCompositionPercent: number;
+}
+
+async function createCrate(
+  testApp: TestApp,
+  token: string,
+  body: {
+    name: string;
+    shelfKey: string;
+    groupingId: string;
+    sizePerCrate: number;
+    members: CrateMemberInput[];
+  },
+): Promise<{ id: string }> {
+  const response = await testApp.request('/api/v1/stock/crates', {
+    method: 'POST',
+    headers: json(token),
+    body: JSON.stringify(body),
+  });
+  expect(response.status).toBe(201);
+  return response.json();
+}
+
+async function takeCrateCount(
+  testApp: TestApp,
+  token: string,
+  crateCounts: readonly { crateId: string; enteredCount: number }[],
+  counts: readonly { stockItemId: string; countedQuantity: number }[] = [],
+) {
+  return testApp.request('/api/v1/stock/take', {
+    method: 'POST',
+    headers: json(token),
+    body: JSON.stringify({ counts, crateCounts }),
+  });
 }
 
 async function itemsResponse(testApp: TestApp, token: string, order?: string): Promise<Response> {
@@ -87,6 +132,9 @@ async function items(testApp: TestApp, token: string, order?: string): Promise<I
 }
 
 beforeEach(async () => {
+  // Children first: crate members reference both crates and stock items.
+  await db.delete(crateMembers);
+  await db.delete(crates);
   await db.delete(stockLedger);
   await db.delete(stockItems);
   await db.delete(refreshTokens);
@@ -162,6 +210,19 @@ describe('stock levels', () => {
       'Second',
       'Tenth',
     ]);
+  });
+
+  it('returns a shelfSortKey that plain string comparison walks in shelf order', async () => {
+    const { testApp, token } = await adminApp();
+    await createItem(testApp, token, 'Tenth', 'A10');
+    await createItem(testApp, token, 'Second', 'A2');
+    await createItem(testApp, token, 'First', 'A1');
+
+    const ordered = await items(testApp, token, 'shelf');
+    expect(ordered.map((item) => item.shelfSortKey)).toEqual(
+      [...ordered.map((item) => item.shelfSortKey)].sort(),
+    );
+    expect(ordered.map((item) => item.name)).toEqual(['First', 'Second', 'Tenth']);
   });
 
   it('keeps the shelf sort key in step when a shelf number changes', async () => {
@@ -357,12 +418,12 @@ describe('the stock take', () => {
 });
 
 describe('the ways stock moves', () => {
-  it('accepts the two ways stock moves', async () => {
+  it('accepts the three ways stock moves', async () => {
     const { testApp, token } = await adminApp();
     const sugar = await createItem(testApp, token, 'Sugar', 'A1', 'Baking');
     const now = new Date().toISOString();
 
-    for (const movementType of ['opening_balance', 'parcel_issued'] as const) {
+    for (const movementType of ['opening_balance', 'parcel_issued', 'correction'] as const) {
       await db.insert(stockLedger).values({
         id: crypto.randomUUID(),
         stockItemId: sugar,
@@ -376,17 +437,19 @@ describe('the ways stock moves', () => {
       });
     }
 
-    expect(await db.select().from(stockLedger)).toHaveLength(2);
+    expect(await db.select().from(stockLedger)).toHaveLength(3);
   });
 
   it('refuses a movement type the charity no longer records', async () => {
-    // Shopping, donations, wastage and hand corrections are gone. The CHECK
-    // constraint is what stops one coming back through a stray insert.
+    // Shopping, donations and wastage are gone. The CHECK constraint is what
+    // stops one coming back through a stray insert. `correction` used to be
+    // in this retired list too — it is a settled value again as of migration
+    // `0035`, see `stock-correction.test.ts`.
     const { testApp, token } = await adminApp();
     const sugar = await createItem(testApp, token, 'Sugar', 'A1', 'Baking');
     const now = new Date().toISOString();
 
-    for (const retired of ['purchase', 'donation', 'wastage', 'correction']) {
+    for (const retired of ['purchase', 'donation', 'wastage']) {
       await expect(
         db.run(
           sql`INSERT INTO stock_ledger (id, stock_item_id, quantity_delta, movement_type, occurred_at, created_at)
@@ -942,5 +1005,545 @@ describe('the low-stock summary', () => {
     ]);
 
     expect(await lowStockCount(testApp, token)).toBe(2);
+  });
+});
+
+describe('stock-take grouping backfill and defaulting', () => {
+  it('defaults an omitted groupingId on create to the seeded Non-perishable grouping', async () => {
+    const { testApp, token } = await adminApp();
+    const id = await createItem(testApp, token, 'Sugar', 'A1', 'Baking');
+
+    const [listed] = await items(testApp, token);
+    expect(listed?.id).toBe(id);
+    expect(listed?.groupingId).toBe(NON_PERISHABLE_GROUPING_ID);
+  });
+
+  it('stores an explicit null groupingId as null rather than defaulting it', async () => {
+    const { testApp, token } = await adminApp();
+    const response = await testApp.request('/api/v1/stock/items', {
+      method: 'POST',
+      headers: json(token),
+      body: JSON.stringify({
+        name: 'Crate Member',
+        category: 'Tinned Goods',
+        shelfNumber: 'A1',
+        groupingId: null,
+      }),
+    });
+
+    expect(response.status).toBe(201);
+    const created: ItemFields = await response.json();
+    expect(created.groupingId).toBeNull();
+
+    const [listed] = await items(testApp, token);
+    expect(listed?.groupingId).toBeNull();
+  });
+});
+
+describe('groupingId, unitsPerPack and packUnitLabel', () => {
+  it('round-trips groupingId, unitsPerPack and packUnitLabel through create and patch', async () => {
+    const { testApp, token } = await adminApp();
+    const response = await testApp.request('/api/v1/stock/items', {
+      method: 'POST',
+      headers: json(token),
+      body: JSON.stringify({
+        name: 'Tinned Tomatoes',
+        category: 'Tinned Goods',
+        shelfNumber: 'A3',
+        groupingId: NON_PERISHABLE_GROUPING_ID,
+        unitsPerPack: 12,
+        packUnitLabel: 'box',
+      }),
+    });
+    expect(response.status).toBe(201);
+    const created: ItemFields = await response.json();
+    expect(created.groupingId).toBe(NON_PERISHABLE_GROUPING_ID);
+    expect(created.unitsPerPack).toBe(12);
+    expect(created.packUnitLabel).toBe('box');
+
+    const patched = await testApp.request(`/api/v1/stock/items/${created.id}`, {
+      method: 'PATCH',
+      headers: json(token),
+      body: JSON.stringify({ unitsPerPack: 6, packUnitLabel: 'sleeve' }),
+    });
+    expect(patched.status).toBe(200);
+    const patchedBody: ItemFields = await patched.json();
+    expect(patchedBody.unitsPerPack).toBe(6);
+    expect(patchedBody.packUnitLabel).toBe('sleeve');
+  });
+
+  it('refuses an unknown groupingId on create with a clean 400, not a raw foreign-key error', async () => {
+    const { testApp, token } = await adminApp();
+    const response = await testApp.request('/api/v1/stock/items', {
+      method: 'POST',
+      headers: json(token),
+      body: JSON.stringify({
+        name: 'Tinned Tomatoes',
+        category: 'Tinned Goods',
+        shelfNumber: 'A3',
+        groupingId: crypto.randomUUID(),
+      }),
+    });
+
+    expect(response.status).toBe(400);
+  });
+
+  it('refuses an unknown groupingId on patch with a clean 400', async () => {
+    const { testApp, token } = await adminApp();
+    const id = await createItem(testApp, token, 'Sugar', 'A1', 'Baking');
+
+    const response = await testApp.request(`/api/v1/stock/items/${id}`, {
+      method: 'PATCH',
+      headers: json(token),
+      body: JSON.stringify({ groupingId: crypto.randomUUID() }),
+    });
+
+    expect(response.status).toBe(400);
+  });
+
+  it('forces packUnitLabel to null when unitsPerPack is not supplied on create', async () => {
+    const { testApp, token } = await adminApp();
+    const response = await testApp.request('/api/v1/stock/items', {
+      method: 'POST',
+      headers: json(token),
+      body: JSON.stringify({
+        name: 'Sugar',
+        category: 'Baking',
+        shelfNumber: 'A1',
+        packUnitLabel: 'box', // unitsPerPack omitted entirely
+      }),
+    });
+
+    expect(response.status).toBe(201);
+    const created: ItemFields = await response.json();
+    expect(created.unitsPerPack).toBeNull();
+    expect(created.packUnitLabel).toBeNull();
+  });
+
+  it('normalises a blank packUnitLabel alongside a real unitsPerPack to null on create', async () => {
+    const { testApp, token } = await adminApp();
+    const response = await testApp.request('/api/v1/stock/items', {
+      method: 'POST',
+      headers: json(token),
+      body: JSON.stringify({
+        name: 'Sugar',
+        category: 'Baking',
+        shelfNumber: 'A1',
+        unitsPerPack: 4,
+        packUnitLabel: '   ',
+      }),
+    });
+
+    expect(response.status).toBe(201);
+    const created: ItemFields = await response.json();
+    expect(created.unitsPerPack).toBe(4);
+    expect(created.packUnitLabel).toBeNull();
+  });
+
+  it('clears packUnitLabel to null when unitsPerPack is cleared on patch', async () => {
+    const { testApp, token } = await adminApp();
+    const createdResponse = await testApp.request('/api/v1/stock/items', {
+      method: 'POST',
+      headers: json(token),
+      body: JSON.stringify({
+        name: 'Sugar',
+        category: 'Baking',
+        shelfNumber: 'A1',
+        unitsPerPack: 4,
+        packUnitLabel: 'box',
+      }),
+    });
+    const { id }: { id: string } = await createdResponse.json();
+
+    const patched = await testApp.request(`/api/v1/stock/items/${id}`, {
+      method: 'PATCH',
+      headers: json(token),
+      body: JSON.stringify({ unitsPerPack: null }),
+    });
+
+    expect(patched.status).toBe(200);
+    const body: ItemFields = await patched.json();
+    expect(body.unitsPerPack).toBeNull();
+    expect(body.packUnitLabel).toBeNull();
+  });
+
+  it('does not wipe an existing packUnitLabel when patching unitsPerPack alone', async () => {
+    // Regression: sending { unitsPerPack: 6 } without resending packUnitLabel
+    // must leave the stored label untouched.
+    const { testApp, token } = await adminApp();
+    const createdResponse = await testApp.request('/api/v1/stock/items', {
+      method: 'POST',
+      headers: json(token),
+      body: JSON.stringify({
+        name: 'Sugar',
+        category: 'Baking',
+        shelfNumber: 'A1',
+        unitsPerPack: 4,
+        packUnitLabel: 'box',
+      }),
+    });
+    const { id }: { id: string } = await createdResponse.json();
+
+    const patched = await testApp.request(`/api/v1/stock/items/${id}`, {
+      method: 'PATCH',
+      headers: json(token),
+      body: JSON.stringify({ unitsPerPack: 6 }),
+    });
+
+    expect(patched.status).toBe(200);
+    const body: ItemFields = await patched.json();
+    expect(body.unitsPerPack).toBe(6);
+    expect(body.packUnitLabel).toBe('box');
+  });
+});
+
+describe('crate counts on the stock take', () => {
+  it('decomposes a crate count into member ledger deltas using stock composition percentages', async () => {
+    const { testApp, token } = await adminApp();
+    const item1 = await createItem(testApp, token, 'Crate Item One', 'C1');
+    const item2 = await createItem(testApp, token, 'Crate Item Two', 'C1');
+    const crate = await createCrate(testApp, token, {
+      name: 'Mixed Crate',
+      shelfKey: 'C1',
+      groupingId: NON_PERISHABLE_GROUPING_ID,
+      sizePerCrate: 10,
+      members: [
+        { stockItemId: item1, stockCompositionPercent: 60, shoppingCompositionPercent: 60 },
+        { stockItemId: item2, stockCompositionPercent: 40, shoppingCompositionPercent: 40 },
+      ],
+    });
+
+    const response = await takeCrateCount(testApp, token, [{ crateId: crate.id, enteredCount: 2 }]);
+    expect(response.status).toBe(200);
+    const body: { applied: number; levels: { stockItemId: string; quantityOnHand: number }[] } =
+      await response.json();
+    expect(body.applied).toBe(1);
+    const byId = Object.fromEntries(body.levels.map((l) => [l.stockItemId, l.quantityOnHand]));
+    // enteredCount 2 * sizePerCrate 10 = 20 units; 60% -> 12, 40% -> 8.
+    expect(byId).toEqual({ [item1]: 12, [item2]: 8 });
+
+    const levelById = Object.fromEntries(
+      (await levels(testApp, token)).map((item) => [item.id, item.quantityOnHand]),
+    );
+    expect(levelById[item1]).toBe(12);
+    expect(levelById[item2]).toBe(8);
+  });
+
+  it('applies a crate count alongside an unrelated direct count in the same request', async () => {
+    const { testApp, token } = await adminApp();
+    const item1 = await createItem(testApp, token, 'Crate Item One', 'C1');
+    const item2 = await createItem(testApp, token, 'Crate Item Two', 'C1');
+    const direct = await createItem(testApp, token, 'Direct Item', 'D1');
+    const crate = await createCrate(testApp, token, {
+      name: 'Mixed Crate',
+      shelfKey: 'C1',
+      groupingId: NON_PERISHABLE_GROUPING_ID,
+      sizePerCrate: 10,
+      members: [
+        { stockItemId: item1, stockCompositionPercent: 50, shoppingCompositionPercent: 50 },
+        { stockItemId: item2, stockCompositionPercent: 50, shoppingCompositionPercent: 50 },
+      ],
+    });
+
+    const response = await takeCrateCount(
+      testApp,
+      token,
+      [{ crateId: crate.id, enteredCount: 1 }],
+      [{ stockItemId: direct, countedQuantity: 7 }],
+    );
+    expect(response.status).toBe(200);
+    const body: { applied: number } = await response.json();
+    expect(body.applied).toBe(2);
+
+    const levelById = Object.fromEntries(
+      (await levels(testApp, token)).map((item) => [item.id, item.quantityOnHand]),
+    );
+    expect(levelById[direct]).toBe(7);
+    expect(levelById[item1]).toBe(5);
+    expect(levelById[item2]).toBe(5);
+  });
+
+  it('refuses a stock item named by both a direct count and a crate count in the same page', async () => {
+    const { testApp, token } = await adminApp();
+    const item1 = await createItem(testApp, token, 'Crate Item One', 'C1');
+    const item2 = await createItem(testApp, token, 'Crate Item Two', 'C1');
+    const crate = await createCrate(testApp, token, {
+      name: 'Mixed Crate',
+      shelfKey: 'C1',
+      groupingId: NON_PERISHABLE_GROUPING_ID,
+      sizePerCrate: 10,
+      members: [
+        { stockItemId: item1, stockCompositionPercent: 50, shoppingCompositionPercent: 50 },
+        { stockItemId: item2, stockCompositionPercent: 50, shoppingCompositionPercent: 50 },
+      ],
+    });
+
+    const response = await takeCrateCount(
+      testApp,
+      token,
+      [{ crateId: crate.id, enteredCount: 1 }],
+      [{ stockItemId: item1, countedQuantity: 3 }],
+    );
+
+    expect(response.status).toBe(400);
+    expect(await db.select().from(stockLedger)).toEqual([]);
+  });
+
+  it('refuses two crates that share a member in the same page', async () => {
+    const { testApp, token } = await adminApp();
+    const shared = await createItem(testApp, token, 'Shared Item', 'C1');
+    const extraA = await createItem(testApp, token, 'Crate A Extra', 'C1');
+    const extraB = await createItem(testApp, token, 'Crate B Extra', 'C2');
+    const crateA = await createCrate(testApp, token, {
+      name: 'Crate A',
+      shelfKey: 'C1',
+      groupingId: NON_PERISHABLE_GROUPING_ID,
+      sizePerCrate: 10,
+      members: [
+        { stockItemId: shared, stockCompositionPercent: 50, shoppingCompositionPercent: 50 },
+        { stockItemId: extraA, stockCompositionPercent: 50, shoppingCompositionPercent: 50 },
+      ],
+    });
+    const crateB = await createCrate(testApp, token, {
+      name: 'Crate B',
+      shelfKey: 'C2',
+      groupingId: NON_PERISHABLE_GROUPING_ID,
+      sizePerCrate: 10,
+      members: [
+        { stockItemId: shared, stockCompositionPercent: 50, shoppingCompositionPercent: 50 },
+        { stockItemId: extraB, stockCompositionPercent: 50, shoppingCompositionPercent: 50 },
+      ],
+    });
+
+    const response = await takeCrateCount(testApp, token, [
+      { crateId: crateA.id, enteredCount: 1 },
+      { crateId: crateB.id, enteredCount: 1 },
+    ]);
+
+    expect(response.status).toBe(400);
+    expect(await db.select().from(stockLedger)).toEqual([]);
+  });
+
+  it('accepts a crate count with one decimal place', async () => {
+    const { testApp, token } = await adminApp();
+    const item1 = await createItem(testApp, token, 'Crate Item One', 'C1');
+    const item2 = await createItem(testApp, token, 'Crate Item Two', 'C1');
+    const crate = await createCrate(testApp, token, {
+      name: 'Mixed Crate',
+      shelfKey: 'C1',
+      groupingId: NON_PERISHABLE_GROUPING_ID,
+      sizePerCrate: 10,
+      members: [
+        { stockItemId: item1, stockCompositionPercent: 60, shoppingCompositionPercent: 60 },
+        { stockItemId: item2, stockCompositionPercent: 40, shoppingCompositionPercent: 40 },
+      ],
+    });
+
+    const response = await takeCrateCount(testApp, token, [
+      { crateId: crate.id, enteredCount: 2.5 },
+    ]);
+    expect(response.status).toBe(200);
+
+    const levelById = Object.fromEntries(
+      (await levels(testApp, token)).map((item) => [item.id, item.quantityOnHand]),
+    );
+    // enteredCount 2.5 * sizePerCrate 10 = 25 units; 60% -> 15, 40% -> 10.
+    expect(levelById[item1]).toBe(15);
+    expect(levelById[item2]).toBe(10);
+  });
+
+  it('writes no ledger rows for any member when a crate count of zero is saved', async () => {
+    const { testApp, token } = await adminApp();
+    const item1 = await createItem(testApp, token, 'Crate Item One', 'C1');
+    const item2 = await createItem(testApp, token, 'Crate Item Two', 'C1');
+    const crate = await createCrate(testApp, token, {
+      name: 'Mixed Crate',
+      shelfKey: 'C1',
+      groupingId: NON_PERISHABLE_GROUPING_ID,
+      sizePerCrate: 10,
+      members: [
+        { stockItemId: item1, stockCompositionPercent: 60, shoppingCompositionPercent: 60 },
+        { stockItemId: item2, stockCompositionPercent: 40, shoppingCompositionPercent: 40 },
+      ],
+    });
+
+    await takeCrateCount(testApp, token, [{ crateId: crate.id, enteredCount: 2 }]);
+    const response = await takeCrateCount(testApp, token, [{ crateId: crate.id, enteredCount: 0 }]);
+    expect(response.status).toBe(200);
+
+    expect(
+      await db
+        .select()
+        .from(stockLedger)
+        .where(inArray(stockLedger.stockItemId, [item1, item2])),
+    ).toEqual([]);
+    const levelById = Object.fromEntries(
+      (await levels(testApp, token)).map((item) => [item.id, item.quantityOnHand]),
+    );
+    expect(levelById[item1]).toBe(0);
+    expect(levelById[item2]).toBe(0);
+  });
+
+  it('404s an unknown crateId and writes nothing at all', async () => {
+    const { testApp, token } = await adminApp();
+    const sugar = await createItem(testApp, token, 'Sugar', 'A1', 'Baking');
+    await takeCount(testApp, token, [{ stockItemId: sugar, countedQuantity: 10 }]);
+
+    const response = await takeCrateCount(
+      testApp,
+      token,
+      [{ crateId: crypto.randomUUID(), enteredCount: 1 }],
+      [{ stockItemId: sugar, countedQuantity: 3 }],
+    );
+
+    expect(response.status).toBe(404);
+    // The existing count survives: an unknown crate id must not write anything.
+    expect((await levels(testApp, token))[0]?.quantityOnHand).toBe(10);
+  });
+
+  it('refuses a page where both counts and crateCounts are empty', async () => {
+    const { testApp, token } = await adminApp();
+
+    const response = await testApp.request('/api/v1/stock/take', {
+      method: 'POST',
+      headers: json(token),
+      body: JSON.stringify({}),
+    });
+
+    expect(response.status).toBe(400);
+  });
+
+  it('refuses a crate count that decomposes to a quantity larger than a direct count could ever be', async () => {
+    // sizePerCrate and enteredCount are each individually within their own
+    // schema limits, but their product is not bounded the way a direct
+    // countedQuantity is — this pins the extra check that catches it.
+    const { testApp, token } = await adminApp();
+    const item1 = await createItem(testApp, token, 'Crate Item One', 'C1');
+    const item2 = await createItem(testApp, token, 'Crate Item Two', 'C1');
+    const crate = await createCrate(testApp, token, {
+      name: 'Huge Crate',
+      shelfKey: 'C1',
+      groupingId: NON_PERISHABLE_GROUPING_ID,
+      sizePerCrate: 1000,
+      members: [
+        { stockItemId: item1, stockCompositionPercent: 50, shoppingCompositionPercent: 50 },
+        { stockItemId: item2, stockCompositionPercent: 50, shoppingCompositionPercent: 50 },
+      ],
+    });
+
+    const response = await takeCrateCount(testApp, token, [
+      { crateId: crate.id, enteredCount: 1000 },
+    ]);
+
+    expect(response.status).toBe(400);
+    expect(await db.select().from(stockLedger)).toEqual([]);
+  });
+});
+
+describe('GET /stock/validation', () => {
+  it('is admin only', async () => {
+    const { testApp, token } = await adminApp();
+    await createItem(testApp, token, 'Sugar', 'A1', 'Baking');
+
+    const { lead, accessToken } = await teamLeadApp();
+    const asLead = await lead.request('/api/v1/stock/validation', {
+      headers: authHeaders(accessToken),
+    });
+    expect(asLead.status).toBe(403);
+
+    const asAdmin = await testApp.request('/api/v1/stock/validation', {
+      headers: authHeaders(token),
+    });
+    expect(asAdmin.status).toBe(200);
+  });
+
+  it('flags a crate member whose stock item shelf no longer matches the crate shelf key', async () => {
+    const { testApp, token } = await adminApp();
+    const memberResponse = await testApp.request('/api/v1/stock/items', {
+      method: 'POST',
+      headers: json(token),
+      body: JSON.stringify({
+        name: 'Crate Member',
+        category: 'Tinned Goods',
+        shelfNumber: 'C1',
+        groupingId: null,
+      }),
+    });
+    const member: { id: string } = await memberResponse.json();
+    const otherMemberResponse = await testApp.request('/api/v1/stock/items', {
+      method: 'POST',
+      headers: json(token),
+      body: JSON.stringify({
+        name: 'Other Member',
+        category: 'Tinned Goods',
+        shelfNumber: 'C1',
+        groupingId: null,
+      }),
+    });
+    const otherMember: { id: string } = await otherMemberResponse.json();
+
+    const crate = await createCrate(testApp, token, {
+      name: 'Mixed Crate',
+      shelfKey: 'C1',
+      groupingId: NON_PERISHABLE_GROUPING_ID,
+      sizePerCrate: 10,
+      members: [
+        { stockItemId: member.id, stockCompositionPercent: 50, shoppingCompositionPercent: 50 },
+        {
+          stockItemId: otherMember.id,
+          stockCompositionPercent: 50,
+          shoppingCompositionPercent: 50,
+        },
+      ],
+    });
+
+    // Drift: the shelf moves out from under the crate after the fact — the
+    // crate write path never re-checks it.
+    const moved = await testApp.request(`/api/v1/stock/items/${member.id}`, {
+      method: 'PATCH',
+      headers: json(token),
+      body: JSON.stringify({ shelfNumber: 'Z9' }),
+    });
+    expect(moved.status).toBe(200);
+
+    const response = await testApp.request('/api/v1/stock/validation', {
+      headers: authHeaders(token),
+    });
+    expect(response.status).toBe(200);
+    const body: {
+      issues: { kind: string; stockItemId?: string; crateId?: string }[];
+    } = await response.json();
+
+    expect(body.issues).toContainEqual(
+      expect.objectContaining({
+        kind: 'crate_member_shelf_mismatch',
+        crateId: crate.id,
+        stockItemId: member.id,
+      }),
+    );
+  });
+
+  it('does not flag an active item and a retired item that share a shelf', async () => {
+    const { testApp, token } = await adminApp();
+    // Active "Flour" and its retired predecessor "Flour: SR" on one shelf.
+    await createItem(testApp, token, 'Flour', 'S1', 'Baking');
+    const retiredId = await createItem(testApp, token, 'Flour: SR', 'S1', 'Baking');
+
+    const retire = await testApp.request(`/api/v1/stock/items/${retiredId}`, {
+      method: 'PATCH',
+      headers: json(token),
+      body: JSON.stringify({ isActive: false }),
+    });
+    expect(retire.status).toBe(200);
+
+    const response = await testApp.request('/api/v1/stock/validation', {
+      headers: authHeaders(token),
+    });
+    expect(response.status).toBe(200);
+    const body: { issues: { kind: string; stockItemId?: string }[] } = await response.json();
+
+    // No crate demanded for the shelf, and the retired item is not chased for
+    // a missing count.
+    expect(body.issues).toEqual([]);
   });
 });

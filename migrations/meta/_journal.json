@@ -239,6 +239,20 @@
       "when": 1788430858161,
       "tag": "0033_voucher-and-first-time-review",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "6",
+      "when": 1788634464539,
+      "tag": "0034_stock-groupings-and-crates",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "6",
+      "when": 1788724217551,
+      "tag": "0035_deep_wendell_rand",
+      "breakpoints": true
     }
   ]
 }

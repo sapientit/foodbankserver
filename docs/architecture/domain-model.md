@@ -9,18 +9,20 @@ each one serves.
 
 Use these words in code, tests and API paths. Do not invent synonyms.
 
-| Term                  | Meaning                                                                                                                                                                           |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Session**           | A scheduled distribution slot. Standard ones repeat weekly; occurrences can be re-timed, cancelled or added ad hoc.                                                               |
-| **Recurring session** | The template a session is generated from.                                                                                                                                         |
-| **Referral**          | A request to feed a household, made by an authorised organisation or person, **without authentication**.                                                                          |
-| **Household**         | The people a referral feeds. Its size drives parcel contents.                                                                                                                     |
-| **Parcel**            | One household's food for one session.                                                                                                                                             |
-| **Pick list**         | The set of parcels for a session, generated on first view.                                                                                                                        |
-| **Stock item**        | A food line held in inventory: a name, a description, a category and a shelf number.                                                                                              |
-| **Attendance**        | Whether a referred household turned up.                                                                                                                                           |
-| **First-time review** | An administrator's dedicated decision, per referral, about whether the household has been fed before — `unreviewed`, `no_previous_referral`, or a recorded previous-session date. |
-| **Voucher range**     | The one administrator-maintained Christmas-voucher date range. Applies to a session inclusively, by session date.                                                                 |
+| Term                    | Meaning                                                                                                                                                                           |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Session**             | A scheduled distribution slot. Standard ones repeat weekly; occurrences can be re-timed, cancelled or added ad hoc.                                                               |
+| **Recurring session**   | The template a session is generated from.                                                                                                                                         |
+| **Referral**            | A request to feed a household, made by an authorised organisation or person, **without authentication**.                                                                          |
+| **Household**           | The people a referral feeds. Its size drives parcel contents.                                                                                                                     |
+| **Parcel**              | One household's food for one session.                                                                                                                                             |
+| **Pick list**           | The set of parcels for a session, generated on first view.                                                                                                                        |
+| **Stock item**          | A food line held in inventory: a name, a description, a category and a shelf number.                                                                                              |
+| **Stock-take grouping** | A coarser heading above `category` that the grouped stock take is organised by. Every item belongs to one, unless it is a crate member.                                           |
+| **Crate**               | Several stock items shelved and counted together as one line, in fixed proportions, behind one shelf number.                                                                      |
+| **Attendance**          | Whether a referred household turned up.                                                                                                                                           |
+| **First-time review**   | An administrator's dedicated decision, per referral, about whether the household has been fed before — `unreviewed`, `no_previous_referral`, or a recorded previous-session date. |
+| **Voucher range**       | The one administrator-maintained Christmas-voucher date range. Applies to a session inclusively, by session date.                                                                 |
 
 ## Lifecycles
 
@@ -180,11 +182,21 @@ no-show after marking them attended deletes that parcel's movements and puts the
 the only way to fix a mis-tap, because the hand correction that used to do it is gone. Confirming
 the session ends it: after that the outcome is a `ConflictError`.
 
-**Stock moves two ways and no more**: `opening_balance`, written by the weekly count, and
-`parcel_issued`, written by attendance. That list is the charity's. There is no shop, no donation,
-no wastage and no hand correction — the count on the shelf next week is what the stock is. A third
-value costs a rebuild of the whole ledger, and that column has already been rebuilt three times by
-guessing, so it is a question for Pete rather than a line to add.
+**Stock moves three ways now**: `opening_balance`, written by the weekly count; `parcel_issued`,
+written by attendance; and `correction`, a team lead's hand fix to one item's level between one
+count and the next (`POST /stock/items/:id/corrections`, migration `0035`). There is still no shop,
+no donation and no wastage — the count on the shelf next week is what the stock is — but the charity
+accepted that a shelf drifts from what the system believes for everyday reasons it does not need a
+name for, and settled that a team lead may put an item right by hand rather than waiting for the
+next count. **A correction is a signed delta, not a recount**: it is added to whatever the ledger
+already holds, the opposite of a stock take, which takes a total and lets the server work out the
+difference. Like a stock take's variance, no reason is recorded and there is no history to read
+back — the level just changes. It is `...staff`, the same as `POST /stock/take` it belongs with:
+both `admin` and `team_lead` may call it. (An earlier reading made it `team_lead`-only; that
+misread `INITIAL_SPEC1.txt` — an administrator does everything a team leader does, without
+exception.) This was a genuine third value added to the `CHECK` constraint — a rebuild of the whole
+ledger — but unlike the guesses that caused the previous two rebuilds, this one is a decision Pete
+made directly, recorded in `INITIAL_SPEC1.txt`, "#Stock maintenance".
 
 **A line quantity of `-1` is not a quantity.** It means the household asked for an item the client's
 preference rules could not put a number on, and a team leader must decide. A parcel holding one
@@ -298,6 +310,21 @@ than a leak:
 Anything else that deletes a ledger row is a bug. The table was append-only until the charity
 decided it did not want the history, and a comment somewhere may still say so — the reasoning for
 the change is in `docs/engineering/d1-constraints.md`.
+
+**A counted crate decomposes into ordinary ledger deltas, one per member, computed independently.**
+`crate-decomposition.ts` is `round(enteredCount * sizePerCrate * memberPercent / 100)` per member —
+nothing corrects the small drift independent rounding can leave against the entered total, and
+nothing should: a stable, individually-explicable figure per member beats a total forced to agree.
+The decomposed deltas are fed through the same `recordStockTake` pipeline a direct count uses, so
+"zero writes nothing" and the delete-then-insert atomicity apply unchanged.
+
+**Crate writes hard-validate; stock-item writes don't.** `crates.service.ts` refuses a crate born (or
+amended into) fewer than two members, an unknown grouping, or a percentage table that does not total
+exactly 100 — ordinary `400`/`409`s. `GET /stock/validation` is a **separate, non-blocking** report
+computed fresh from current data (`stock-validation.ts`, pure) for drift the write-time checks cannot
+see afterwards: an item's shelf moving out from under its crate, an item ending up both directly
+grouped and a crate member, and so on. A stock-item create or patch never fails because of it — see
+`INITIAL_SPEC1.txt`, `#Stock maintenance`.
 
 **Session materialisation never `UPDATE`s an existing session row.** That is what makes an admin's
 re-timed or cancelled occurrence safe by construction.

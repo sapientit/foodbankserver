@@ -1,22 +1,30 @@
 import { relations, sql } from 'drizzle-orm';
 import { check, index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 import { sessions } from './sessions.ts';
+import { stockTakeGroupings } from './crates.ts';
 import { users } from './users.ts';
 
 /**
- * The two ways stock moves: the weekly count setting an opening balance, and a
- * parcel going to a household.
+ * The three ways stock moves: the weekly count setting an opening balance, a
+ * parcel going to a household, and a team lead's hand correction between one
+ * count and the next.
  *
- * There is no shop, no donation, no wastage and no hand correction. The charity
- * does not track any of them — the count on the shelf next week says what the
- * stock is, whatever happened to it in between.
+ * There is no shop, no donation and no wastage. The charity does not track
+ * any of them — the count on the shelf next week says what the stock is,
+ * whatever happened to it in between. A correction is different in kind: it
+ * exists precisely because the charity accepted that a shelf drifts from what
+ * the system believes for everyday reasons it does not need a name for, and a
+ * team lead may put the level right by hand without waiting for the next
+ * count. Like a stock take's variance, no reason is recorded and there is no
+ * history to read back — the level just changes.
  *
  * **This column has now been rebuilt three times**: nine values guessed, then
- * six (migration `0011`), then these two (`0015`). Every one of those rebuilds
- * was caused by guessing what the charity wanted instead of asking. A third
- * value needs an answer, not a reasonable-sounding case.
+ * six (migration `0011`), then these three (`0015`, `0035`). Every one of
+ * those rebuilds was caused by guessing what the charity wanted instead of
+ * asking — this one is the exception, a settled decision recorded in
+ * `INITIAL_SPEC1.txt`.
  */
-export const STOCK_MOVEMENT_TYPES = ['opening_balance', 'parcel_issued'] as const;
+export const STOCK_MOVEMENT_TYPES = ['opening_balance', 'parcel_issued', 'correction'] as const;
 export type StockMovementType = (typeof STOCK_MOVEMENT_TYPES)[number];
 
 export const stockItems = sqliteTable(
@@ -66,6 +74,33 @@ export const stockItems = sqliteTable(
      */
     lowStockThreshold: integer('low_stock_threshold'),
 
+    /**
+     * The stock-take grouping this item sits under on the grouped stock-take
+     * screen. **Nullable, deliberately** — a crate member's row here is
+     * `NULL`, because its grouping comes from its crate instead. The create
+     * path defaults a new, non-member item to the seeded `Non-perishable`
+     * grouping when this is left out; nothing here keeps the two in sync
+     * afterwards, the same way `category` typos are never corrected — an item
+     * that is both directly grouped and a crate member is surfaced by
+     * `GET /stock/validation`, not rejected or fixed up.
+     */
+    groupingId: text('grouping_id').references(() => stockTakeGroupings.id),
+
+    /**
+     * How many of this item make up one pack, for an item the food bank buys
+     * and shelves by the pack rather than the unit. Optional: most items have
+     * none. `NULL` unless a positive value is supplied.
+     */
+    unitsPerPack: integer('units_per_pack'),
+    /**
+     * What to call one pack — "box", "sleeve" — shown beside the quantity
+     * wherever packs are. Only meaningful alongside `unitsPerPack`: normalised
+     * to `NULL` whenever that is absent, and a blank string when it is present
+     * reads as "packs" in the client rather than being stored as that literal
+     * text.
+     */
+    packUnitLabel: text('pack_unit_label'),
+
     isActive: integer('is_active').notNull().default(1),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
@@ -74,6 +109,10 @@ export const stockItems = sqliteTable(
     index('idx_stock_items_shelf').on(table.shelfSortKey),
     index('idx_stock_items_name').on(table.nameNormalised),
     check('stock_items_is_active_boolean', sql`${table.isActive} IN (0, 1)`),
+    check(
+      'stock_items_units_per_pack_positive',
+      sql`${table.unitsPerPack} IS NULL OR ${table.unitsPerPack} > 0`,
+    ),
   ],
 );
 
@@ -131,7 +170,13 @@ export const stockLedger = sqliteTable(
     parcelId: text('parcel_id'),
     sessionId: text('session_id').references(() => sessions.id),
 
-    /** Only on a `parcel_issued` row, and only ever null on a baseline. */
+    /**
+     * Stamped on a stock take's baseline and on a parcel issue: the volunteer
+     * who saved the count, and the team lead who issued the parcel. **Left
+     * `NULL` on a correction, deliberately** — the charity settled that
+     * nothing is kept about who made one, the same as no reason is kept for
+     * why (`INITIAL_SPEC1.txt`, "#Stock maintenance").
+     */
     actorUserId: text('actor_user_id').references(() => users.id),
     occurredAt: text('occurred_at').notNull(),
     createdAt: text('created_at').notNull(),
@@ -156,7 +201,7 @@ export const stockLedger = sqliteTable(
     check('stock_ledger_delta_non_zero', sql`${table.quantityDelta} <> 0`),
     check(
       'stock_ledger_movement_type_valid',
-      sql`${table.movementType} IN ('opening_balance', 'parcel_issued')`,
+      sql`${table.movementType} IN ('opening_balance', 'parcel_issued', 'correction')`,
     ),
   ],
 );

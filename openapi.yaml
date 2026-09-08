@@ -2301,6 +2301,11 @@ paths:
 
         **Defaults to shelf order**, unlike `GET /stock/items`, because the
         screen behind it is somebody walking the warehouse with a clipboard.
+
+        Each item carries a `shelfSortKey`, so a client that also lists
+        crates (`GET /stock/crates`) can interleave the two into one
+        shelf-walk sequence for the stock-take screen rather than showing
+        two separate lists.
       parameters:
         - { in: query, name: includeInactive, schema: { type: string, enum: ['true'] } }
         - { $ref: '#/components/parameters/StockOrder' }
@@ -2382,7 +2387,6 @@ paths:
           application/json:
             schema:
               type: object
-              # Unit is deliberately not part of stock maintenance.
               required: [name, category, shelfNumber]
               properties:
                 name: { type: string, maxLength: 120 }
@@ -2402,6 +2406,24 @@ paths:
                     Optional. Below this figure the item counts towards the
                     low-stock summary. Omitted or absent means the item is not
                     watched.
+                groupingId:
+                  type: [string, 'null']
+                  format: uuid
+                  description: >-
+                    Optional. Defaults to the seeded "Non-perishable" grouping
+                    when omitted. An explicit `null` is stored as `null`
+                    rather than defaulted — the state a crate member is
+                    expected to be in.
+                unitsPerPack:
+                  type: [integer, 'null']
+                  minimum: 1
+                  description: Optional. How many of this item make up one pack.
+                packUnitLabel:
+                  type: [string, 'null']
+                  maxLength: 40
+                  description: >-
+                    Optional. Forced to `null` whenever `unitsPerPack` is
+                    absent, whatever is sent here.
       responses:
         '201':
           description: Created
@@ -2458,6 +2480,20 @@ paths:
                   type: [integer, 'null']
                   minimum: 0
                   description: '`null` clears it, stopping the item being watched.'
+                groupingId:
+                  type: [string, 'null']
+                  format: uuid
+                  description: '`null` is how a client marks this item as a crate member.'
+                unitsPerPack:
+                  type: [integer, 'null']
+                  minimum: 1
+                  description: '`null` clears it, which also clears `packUnitLabel`.'
+                packUnitLabel:
+                  type: [string, 'null']
+                  maxLength: 40
+                  description: >-
+                    Ignored (stored as `null`) unless `unitsPerPack` is
+                    present on this item after the patch is applied.
                 isActive: { type: boolean }
       responses:
         '200':
@@ -2498,18 +2534,26 @@ paths:
 
         Locking is by process: the charity arranges that nothing else changes
         during a count, and the server does not enforce it.
+
+        **`crateCounts` counts a crate as one line.** The server decomposes it
+        into the same per-item deltas a direct count would produce, using the
+        crate's stock composition, and folds them into the same save — "zero
+        writes nothing" and repeat-safety apply identically. A stock item
+        named by more than one source in the same request — a direct count
+        and a crate, or two crates sharing a member — is the collision `400`
+        below.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [counts]
+              description: At least one of `counts` or `crateCounts` must be non-empty.
               properties:
                 counts:
                   type: array
-                  minItems: 1
                   maxItems: 200
+                  default: []
                   description: >-
                     The changed items only. 200 is a cap on one request, not the
                     page size — the client chooses that, and the screen shows 40.
@@ -2519,6 +2563,24 @@ paths:
                     properties:
                       stockItemId: { type: string, format: uuid }
                       countedQuantity: { type: integer, minimum: 0, maximum: 100000 }
+                crateCounts:
+                  type: array
+                  maxItems: 200
+                  default: []
+                  description: The changed crates only, same reasoning as `counts`.
+                  items:
+                    type: object
+                    required: [crateId, enteredCount]
+                    properties:
+                      crateId: { type: string, format: uuid }
+                      enteredCount:
+                        type: number
+                        minimum: 0
+                        maximum: 100000
+                        multipleOf: 0.1
+                        description: >-
+                          One decimal place, settled 2026-09-05 (was Q50) —
+                          the same shape as a target stock list's crate line.
       responses:
         '200':
           description: Applied
@@ -2528,10 +2590,14 @@ paths:
                 type: object
                 required: [applied, levels]
                 properties:
-                  applied: { type: integer }
+                  applied:
+                    type: integer
+                    description: The number of direct and crate count lines in the request.
                   levels:
                     type: array
-                    description: The resulting level of each item in the request.
+                    description: >-
+                      The resulting level of every item actually changed —
+                      directly counted or decomposed from a crate.
                     items:
                       type: object
                       required: [stockItemId, quantityOnHand]
@@ -2540,10 +2606,241 @@ paths:
                         quantityOnHand: { type: integer }
         '400':
           description: >-
-            Empty `counts`, a quantity out of range, or the same `stockItemId`
-            twice — two counts for one item is ambiguous and is refused rather
-            than resolved.
-        '404': { description: An unknown stock item. Nothing is written. }
+            Both `counts` and `crateCounts` empty, a quantity out of range,
+            the same `stockItemId` or `crateId` twice, or a stock item named
+            by more than one source — two figures for one item is ambiguous
+            and is refused rather than resolved.
+        '404': { description: An unknown stock item or crate. Nothing is written. }
+
+  /api/v1/stock/items/{id}/corrections:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    post:
+      tags: [Stock]
+      summary: Correct a stock item's level by hand
+      description: |
+        A team lead can put one item's level right between one stock take and
+        the next, when they discover it is wrong — the everyday reasons a
+        shelf drifts from what the system believes, that the charity does not
+        need a name for.
+
+        **This is a signed delta, not a fresh total.** Unlike `POST
+        /stock/take`, which enters a count and lets the server work out and
+        discard the difference, a correction is entered directly as the
+        amount the level is out by — negative to reduce it, positive to
+        increase it. It is added to whatever the ledger already holds; it
+        does not replace it.
+
+        No reason is recorded and there is no history to read back — the
+        same decision the charity already made about a stock take's
+        variance. Once the level is put right, nothing is kept about how it
+        came to be wrong.
+
+        Staff — `admin` and `team_lead`, the same as `POST /stock/take` it
+        belongs with. A team lead is who does it in practice, but an
+        administrator can do everything a team lead can.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [quantityDelta]
+              properties:
+                quantityDelta:
+                  type: integer
+                  minimum: -100000
+                  maximum: 100000
+                  description: >-
+                    Must not be zero — a delta saying nothing changed is
+                    refused rather than written as a no-op row.
+      responses:
+        '200':
+          description: Applied
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [quantityOnHand]
+                properties:
+                  quantityOnHand: { type: integer }
+        '400': { description: A zero, missing or out-of-range quantityDelta. }
+        '403': { description: The caller is not a team lead — an admin included. }
+        '404': { description: Unknown stock item. Nothing is written. }
+
+  /api/v1/stock/groupings:
+    get:
+      tags: [Stock]
+      summary: List stock-take groupings
+      description: >-
+        Admin and team lead — both roles use the grouped stock take. Ordered
+        by name.
+      responses:
+        '200':
+          description: Groupings
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/StockTakeGrouping' }
+    post:
+      tags: [Stock]
+      summary: Add a stock-take grouping
+      description: Admin only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, maxLength: 40 }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StockTakeGrouping' }
+        '409': { description: A grouping with that name already exists }
+
+  /api/v1/stock/groupings/{id}:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    patch:
+      tags: [Stock]
+      summary: Rename a stock-take grouping
+      description: Admin only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, maxLength: 40 }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StockTakeGrouping' }
+        '404': { description: No grouping with that id }
+        '409': { description: A grouping with that name already exists }
+
+  /api/v1/stock/crates:
+    get:
+      tags: [Stock]
+      summary: List crates
+      description: >-
+        Admin and team lead — both roles use the grouped stock take. Ordered
+        by name, each with its members. Each crate also carries a
+        `shelfSortKey`, computed fresh on every read, so a stock-take screen
+        can slot crates into the same shelf-walk order as `GET /stock/levels`
+        instead of listing them separately.
+      responses:
+        '200':
+          description: Crates
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Crate' }
+    post:
+      tags: [Stock]
+      summary: Add a crate
+      description: |
+        Admin only. **Hard-validated**, unlike a stock-item write: at least
+        two members, a unique `shelfKey`, a positive `sizePerCrate`, a
+        `groupingId` that exists, every `stockItemId` a known stock item, and
+        both percentage tables totalling exactly 100 with no all-zero
+        fallback. See `GET /stock/validation` for the drift these checks
+        cannot catch after the fact.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CrateInput' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Crate' }
+        '400': { description: Fewer than two members, an unknown grouping or stock item }
+        '409': { description: A crate on that shelf already exists }
+
+  /api/v1/stock/crates/{id}:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    patch:
+      tags: [Stock]
+      summary: Amend a crate
+      description: |
+        Admin only. Every field is optional, but `members`, if sent,
+        **replaces the membership wholesale** — like a target stock list's
+        lines — and is re-validated in full (two-member minimum, percentage
+        totals, and so on). Omit it to rename or resize a crate without
+        touching who is in it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CratePatchInput' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Crate' }
+        '400': { description: Fewer than two members, an unknown grouping or stock item }
+        '404': { description: No crate with that id }
+        '409': { description: A crate on that shelf already exists }
+    delete:
+      tags: [Stock]
+      summary: Delete a crate
+      description: >-
+        Admin only. Idempotent — deleting an id that is already gone still
+        returns `204`. A target stock list line that named this crate is left
+        exactly as it was saved — see `TargetStockLine`.
+      responses:
+        '204': { description: Deleted }
+
+  /api/v1/stock/validation:
+    get:
+      tags: [Stock]
+      summary: The non-blocking stock-consistency report
+      description: |
+        Admin only. A live report over the current stock list and crates,
+        computed fresh on every call and never stored. **Never used to reject
+        a write** — a stock-item create or patch always succeeds regardless of
+        what this would report, and the client calls this separately
+        afterwards and shows the result. `kind` is a stable, closed
+        vocabulary a client may key UI off; `message` is for display only.
+
+        **Retired items (`isActive: false`) take no part in any check.** A
+        retired item does not make a shelf it shares need a crate, is never
+        reported `item_uncounted`, and is not held to a crate's shelf. A crate
+        a retired item still belongs to stays valid — retiring a member never
+        trips `crate_too_few_members` — and its membership is left untouched.
+      responses:
+        '200':
+          description: Issues, if any
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [issues]
+                properties:
+                  issues:
+                    type: array
+                    items: { $ref: '#/components/schemas/StockValidationIssue' }
 
   # ---------------------------------------------------------- parcel rules --
   /api/v1/model-parcels:
@@ -2858,7 +3155,12 @@ paths:
       description: |
         Admin only. `lines` is stored **exactly as sent** — the server does
         not check `stockItemId` against the stock item catalogue and does not
-        overwrite `name`, settled 2026-08-31 (was Q46).
+        overwrite `name`, settled 2026-08-31 (was Q46). **One exception**: an
+        item-kind line naming a stock item that is currently a crate member is
+        refused with a `422` — the crate is what gets bought for that item,
+        not an individual target. This only checks lines being newly saved;
+        see the `PATCH` below for a line already stored before an item became
+        a crate member.
       requestBody:
         required: true
         content:
@@ -2870,7 +3172,9 @@ paths:
                 name: { type: string, maxLength: 80 }
                 lines:
                   type: array
-                  description: The same `stockItemId` may not appear twice.
+                  description: >-
+                    The same `stockItemId` (for an item line) or `crateId`
+                    (for a crate line) may not appear twice.
                   items: { $ref: '#/components/schemas/TargetStockLine' }
       responses:
         '201':
@@ -2879,6 +3183,8 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/TargetStockList' }
         '409': { description: A target stock list with that name already exists }
+        '422':
+          { description: An item-kind line names a stock item that is currently a crate member }
 
   /api/v1/target-stock-lists/{id}:
     parameters: [{ $ref: '#/components/parameters/Id' }]
@@ -2889,7 +3195,12 @@ paths:
         Admin only. `name` is amendable, settled 2026-08-31 (was Q44) —
         unlike a model parcel's, nothing else refers to a target stock list by
         name. `lines`, if sent, **replaces the array wholesale**, like
-        `PUT /parcel-grid` — there is no line-by-line merge.
+        `PUT /parcel-grid` — there is no line-by-line merge, and the same
+        crate-member exclusion as `POST` applies to whatever is sent (a `422`
+        on an item-kind line naming a current crate member). **Omitting
+        `lines` leaves whatever is stored untouched** — including a line for
+        an item that has since become a crate member, which is deliberately
+        not retroactively refused; see `TargetStockLine`.
       requestBody:
         required: true
         content:
@@ -2901,7 +3212,9 @@ paths:
                 name: { type: string, maxLength: 80 }
                 lines:
                   type: array
-                  description: The same `stockItemId` may not appear twice.
+                  description: >-
+                    The same `stockItemId` (for an item line) or `crateId`
+                    (for a crate line) may not appear twice.
                   items: { $ref: '#/components/schemas/TargetStockLine' }
       responses:
         '200':
@@ -2911,6 +3224,8 @@ paths:
               schema: { $ref: '#/components/schemas/TargetStockList' }
         '404': { description: No target stock list with that id }
         '409': { description: A target stock list with that name already exists }
+        '422':
+          { description: An item-kind line names a stock item that is currently a crate member }
     delete:
       tags: [Target stock lists]
       summary: Delete a target stock list
@@ -4934,8 +5249,20 @@ components:
 
     StockItem:
       type: object
-      # Unit is deliberately not part of stock maintenance.
-      required: [id, name, category, description, shelfNumber, lowStockThreshold, isActive]
+      required:
+        [
+          id,
+          name,
+          category,
+          description,
+          shelfNumber,
+          shelfSortKey,
+          lowStockThreshold,
+          groupingId,
+          unitsPerPack,
+          packUnitLabel,
+          isActive,
+        ]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
@@ -4957,6 +5284,15 @@ components:
             What the item is, in the charity's words. Printed on the pick list
             under the item name. `null` where the name says everything.
         shelfNumber: { type: string }
+        shelfSortKey:
+          type: string
+          description: >-
+            Opaque. Plain string comparison walks the aisle correctly — `A1`
+            before `A2` before `A10` — the same order `GET /stock/levels`
+            already returns when `order=shelf`. Returned so a client building
+            a combined stock-take screen can interleave crates among items:
+            `Crate.shelfSortKey` is computed the same way and compares
+            directly against this one. Do not parse it.
         lowStockThreshold:
           type: [integer, 'null']
           minimum: 0
@@ -4964,6 +5300,31 @@ components:
             Below this figure the item counts towards the low-stock summary.
             `null` where nobody has asked for the item to be watched — that is
             the default, not a warning level of zero.
+        groupingId:
+          type: [string, 'null']
+          format: uuid
+          description: >-
+            The `StockTakeGrouping` this item sits under on the grouped stock
+            take. **`null` on a crate member** — its grouping comes from its
+            crate instead — and otherwise defaults to the seeded
+            "Non-perishable" grouping when omitted on create. Nothing keeps
+            this in step with crate membership afterwards; an item that is
+            both directly grouped and a crate member is reported by
+            `GET /stock/validation`, not rejected.
+        unitsPerPack:
+          type: [integer, 'null']
+          minimum: 1
+          description: >-
+            How many of this item make up one pack, for an item shelved by the
+            pack rather than the unit. `null` for most items.
+        packUnitLabel:
+          type: [string, 'null']
+          maxLength: 40
+          description: >-
+            What to call one pack — "box", "sleeve". Only meaningful alongside
+            `unitsPerPack`: always `null` when that is absent, and a blank
+            string when it is present reads as "packs" in the client rather
+            than being stored as that literal text.
         isActive: { type: boolean }
 
     StockLevel:
@@ -4978,6 +5339,128 @@ components:
                 Derived by summing the ledger. **May be negative** — parcels go
                 out between counts, and nothing stops an item going below what
                 the last count said was there.
+
+    StockTakeGrouping:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: string, format: uuid }
+        name:
+          type: string
+          maxLength: 40
+          examples: ['Non-perishable']
+          description: Unique — settled 2026-09-05 (was Q51). A duplicate is a `409`.
+
+    CrateMember:
+      type: object
+      required: [stockItemId, stockCompositionPercent, shoppingCompositionPercent]
+      properties:
+        stockItemId: { type: string, format: uuid }
+        stockCompositionPercent:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: >-
+            This member's share of a *counted* crate. Every member's share
+            totals exactly 100 across the crate.
+        shoppingCompositionPercent:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: >-
+            This member's share of a crate-derived shopping shortfall,
+            calculated by the client from the crate definition, stock levels
+            and this table — never by the server. Totals exactly 100 across
+            the crate, independently of `stockCompositionPercent`.
+
+    CrateInput:
+      type: object
+      required: [name, shelfKey, groupingId, sizePerCrate, members]
+      properties:
+        name: { type: string, maxLength: 120 }
+        shelfKey:
+          type: string
+          maxLength: 20
+          description: >-
+            Unique across crates. A second crate claiming the same shelf is
+            refused with a `409`.
+        groupingId: { type: string, format: uuid }
+        sizePerCrate: { type: integer, minimum: 1 }
+        members:
+          type: array
+          minItems: 2
+          maxItems: 20
+          description: >-
+            At least two, no `stockItemId` repeated, and both percentage
+            columns totalling exactly 100 across the array — no all-zero
+            fallback.
+          items: { $ref: '#/components/schemas/CrateMember' }
+
+    CratePatchInput:
+      type: object
+      minProperties: 1
+      description: >-
+        Every field is optional, unlike `CrateInput` — a `PATCH` may rename or
+        resize a crate on its own. `members`, if sent, replaces the crate's
+        membership wholesale and is re-validated in full against the same
+        rules as a create.
+      properties:
+        name: { type: string, maxLength: 120 }
+        shelfKey:
+          type: string
+          maxLength: 20
+          description: >-
+            Unique across crates. A second crate claiming the same shelf is
+            refused with a `409`.
+        groupingId: { type: string, format: uuid }
+        sizePerCrate: { type: integer, minimum: 1 }
+        members:
+          type: array
+          minItems: 2
+          maxItems: 20
+          description: >-
+            At least two, no `stockItemId` repeated, and both percentage
+            columns totalling exactly 100 across the array — no all-zero
+            fallback. Omit entirely to leave the current membership untouched.
+          items: { $ref: '#/components/schemas/CrateMember' }
+
+    Crate:
+      allOf:
+        - $ref: '#/components/schemas/CrateInput'
+        - type: object
+          required: [id, shelfSortKey]
+          properties:
+            id: { type: string, format: uuid }
+            shelfSortKey:
+              type: string
+              description: >-
+                Computed from `shelfKey` the same way `StockItem.shelfSortKey`
+                is computed from `shelfNumber`, so the two compare directly.
+                Worked out fresh on every read rather than stored — a crate
+                has nothing else that depends on it staying in step. Opaque;
+                compare as a plain string, do not parse it.
+
+    StockValidationIssue:
+      type: object
+      required: [kind, message]
+      properties:
+        kind:
+          type: string
+          enum:
+            [
+              shelf_without_crate,
+              crate_too_few_members,
+              crate_member_shelf_mismatch,
+              item_uncounted,
+              item_grouped_and_crate_member,
+              item_in_multiple_crates,
+            ]
+          description: A stable, closed vocabulary — a client may key UI off this.
+        message:
+          type: string
+          description: Human-readable. Display only; do not parse it.
+        stockItemId: { type: string, format: uuid }
+        crateId: { type: string, format: uuid }
 
     StockRequirementLine:
       allOf:
@@ -5344,9 +5827,20 @@ components:
         is ever null on its own — `PUT` always writes both together.
 
     TargetStockLine:
+      oneOf:
+        - $ref: '#/components/schemas/ItemTargetStockLine'
+        - $ref: '#/components/schemas/CrateTargetStockLine'
+      discriminator:
+        propertyName: kind
+        mapping:
+          item: '#/components/schemas/ItemTargetStockLine'
+          crate: '#/components/schemas/CrateTargetStockLine'
+
+    ItemTargetStockLine:
       type: object
-      required: [stockItemId, name, targetQuantity]
+      required: [kind, stockItemId, name, targetQuantity]
       properties:
+        kind: { type: string, enum: [item] }
         stockItemId:
           type: string
           description: >-
@@ -5365,6 +5859,26 @@ components:
           description: >-
             `0` is never valid, settled 2026-08-31 (was Q45) — the same as not
             entered. Absence from the list is how "not on this list" is said.
+
+    CrateTargetStockLine:
+      type: object
+      required: [kind, crateId, crateName, targetQuantity]
+      properties:
+        kind: { type: string, enum: [crate] }
+        crateId:
+          type: string
+          description: A crate id, as a snapshot — same reasoning as an item line's `stockItemId`.
+        crateName:
+          type: string
+          maxLength: 120
+          description: The crate's name as it stood when this line was saved.
+        targetQuantity:
+          type: number
+          minimum: 0.1
+          multipleOf: 0.1
+          description: >-
+            Unlike an item line, allows one decimal place — a shopping run can
+            reasonably ask for half a crate.
 
     TargetStockList:
       type: object

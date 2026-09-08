@@ -16,12 +16,30 @@ export const MAX_SEARCH_TERM = 40;
 export const MAX_CATEGORY = 40;
 export const MAX_DESCRIPTION = 200;
 
+/**
+ * The ceiling on a direct stock-take count. Also the ceiling `stock.service.ts`
+ * holds a crate-decomposed quantity to — `sizePerCrate * enteredCount` is not
+ * itself bounded this tightly, so without that second check a large crate
+ * could write a ledger delta a direct count could never produce.
+ */
+export const MAX_COUNTED_QUANTITY = 100000;
+
+/**
+ * `groupingId` is nullable so an item can be explicitly cleared to `null` on
+ * patch — the state a crate member is expected to be in. `unitsPerPack` and
+ * `packUnitLabel` are likewise nullable so either can be cleared. See
+ * `stock.service.ts` for the normalisation between the two: `packUnitLabel`
+ * is forced to `null` whenever `unitsPerPack` is absent.
+ */
 export const stockItemInputSchema = z.object({
   name: z.string().trim().min(1).max(120),
   category: z.string().trim().min(1).max(MAX_CATEGORY),
   description: z.string().trim().max(MAX_DESCRIPTION).optional(),
   shelfNumber: z.string().trim().min(1).max(20),
   lowStockThreshold: z.number().int().min(0).max(100000).nullable().optional(),
+  groupingId: z.uuid().nullable().optional(),
+  unitsPerPack: z.number().int().min(1).max(100000).nullable().optional(),
+  packUnitLabel: z.string().trim().max(40).nullable().optional(),
 });
 
 export const stockItemPatchSchema = z
@@ -36,6 +54,9 @@ export const stockItemPatchSchema = z
     // Nullable too: clearing the threshold is how a client stops watching an
     // item, and `null` is how it says so — same pattern as `description`.
     lowStockThreshold: z.number().int().min(0).max(100000).nullable(),
+    groupingId: z.uuid().nullable(),
+    unitsPerPack: z.number().int().min(1).max(100000).nullable(),
+    packUnitLabel: z.string().trim().max(40).nullable(),
   })
   .partial()
   .refine((value) => Object.keys(value).length > 0, 'at least one field must be supplied');
@@ -66,22 +87,62 @@ export const stockSearchSchema = z.object({
  *
  * A count of zero is legitimate and means the shelf is empty. It is the reason
  * `countedQuantity` is `min(0)` rather than positive.
+ *
+ * `crateCounts` counts a crate as one line; the server decomposes it into the
+ * same per-item deltas a direct count would produce — see
+ * `crate-decomposition.ts`. Its numeric shape mirrors a crate *target* line:
+ * one decimal place, settled by Pete on 2026-09-05 (was Q50) — a half-empty
+ * crate on a shelf is plausible.
  */
-export const stockTakeCountsSchema = z.object({
-  counts: z
-    .array(
-      z.object({
-        stockItemId: z.uuid(),
-        countedQuantity: z.number().int().min(0).max(100000),
-      }),
-    )
-    .min(1)
-    .max(200)
-    // Two counts for one item in one page is a genuinely ambiguous
-    // instruction, and the server has no basis for picking the later one. It
-    // is far more likely to be a client bug than a volunteer's intent.
-    .refine(
-      (counts) => new Set(counts.map((count) => count.stockItemId)).size === counts.length,
-      'the same stock item must not appear twice',
-    ),
+export const stockTakeCountsSchema = z
+  .object({
+    counts: z
+      .array(
+        z.object({
+          stockItemId: z.uuid(),
+          countedQuantity: z.number().int().min(0).max(MAX_COUNTED_QUANTITY),
+        }),
+      )
+      .max(200)
+      // Two counts for one item in one page is a genuinely ambiguous
+      // instruction, and the server has no basis for picking the later one. It
+      // is far more likely to be a client bug than a volunteer's intent.
+      .refine(
+        (counts) => new Set(counts.map((count) => count.stockItemId)).size === counts.length,
+        'the same stock item must not appear twice',
+      )
+      .default([]),
+    crateCounts: z
+      .array(
+        z.object({
+          crateId: z.uuid(),
+          enteredCount: z.number().min(0).max(100000).multipleOf(0.1),
+        }),
+      )
+      .max(200)
+      .refine(
+        (crateCounts) =>
+          new Set(crateCounts.map((count) => count.crateId)).size === crateCounts.length,
+        'the same crate must not appear twice',
+      )
+      .default([]),
+  })
+  .refine(
+    (value) => value.counts.length > 0 || value.crateCounts.length > 0,
+    'at least one changed direct or crate count must be supplied',
+  );
+
+/**
+ * A team lead's hand correction to one item's level, between one stock take
+ * and the next. Unlike `stockTakeCountsSchema`'s `countedQuantity`, this is
+ * not a fresh total the server reconciles against the ledger — it is the
+ * signed amount the level is out by, applied directly.
+ */
+export const stockCorrectionSchema = z.object({
+  quantityDelta: z
+    .number()
+    .int()
+    .min(-MAX_COUNTED_QUANTITY)
+    .max(MAX_COUNTED_QUANTITY)
+    .refine((value) => value !== 0, 'quantityDelta must not be zero'),
 });
