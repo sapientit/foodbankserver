@@ -64,7 +64,8 @@ export function createPickListsRepository(db: Database) {
      *
      * This is what the picking screen and the print payload both read. At 25
      * parcels a per-parcel query would be 25+ on a plan that allows 50.
-     * Ordered by shelf so a picker walks the aisle once.
+     * Ordered by shelf number — a plain sort of the label as typed — so a
+     * picker walks the aisle once.
      */
     async listParcelsWithLines(pickListId: string): Promise<ParcelWithLines[]> {
       const parcelRows = await this.listParcels(pickListId);
@@ -80,7 +81,7 @@ export function createPickListsRepository(db: Database) {
             parcelRows.map((row) => row.id),
           ),
         )
-        .orderBy(asc(stockItems.shelfSortKey));
+        .orderBy(asc(stockItems.shelfNumber));
 
       const byParcel = new Map<string, (ParcelLine & { item: StockItem })[]>();
       for (const row of lineRows) {

@@ -59,6 +59,10 @@ export type FirstTimeMarker = 'first_time' | 'admin';
  * date, never the raw status. `no_previous_referral` reads `first_time`,
  * `unreviewed` (or a referral this couldn't be determined for at all) reads
  * `admin`, and a recorded previous-session date carries no marker at all.
+ *
+ * The listener sheet (`ListenerSheetHousehold`) shows the same marker: the
+ * listener is the person actually talking to the household, so they see
+ * whether it is new, just as the team leader does.
  */
 export function firstTimeMarkerFor(
   status: FirstTimeReviewStatus | undefined,

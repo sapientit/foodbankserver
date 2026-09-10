@@ -93,11 +93,44 @@ export interface ParcelResponse {
    * admin-only — see `derivations.ts#firstTimeMarkerFor`.
    */
   readonly firstTimeMarker: FirstTimeMarker | null;
+  /**
+   * The one voucher instruction for this household, shown to the team leader
+   * on the Run a session screen. `INITIAL_SPEC1.txt`, `#Christmas voucher and
+   * first-time selection`.
+   *
+   * Calculated fresh on every read, never stored on the parcel and never
+   * generated with the pick list: an administrator may make the
+   * first-time-review decision after the pick list already exists, and the
+   * screen must always show the current one. See
+   * `derivations.ts#voucherInstructionFor`.
+   *
+   * `null` whenever the session's date falls outside the configured voucher
+   * range, or no range has been configured. Like the marker above, this
+   * carries no historic date and no other referral detail.
+   */
+  readonly voucherInstruction: VoucherInstruction | null;
+}
+
+/** What `toParcelResponse` needs to work out `voucherInstruction`. */
+export interface VoucherContext {
+  readonly sessionDate: PlainDate;
+  readonly voucherRange: VoucherDateRange | undefined;
+}
+
+function toParcelLines(lines: ParcelWithLines['lines']): ParcelLineResponse[] {
+  return lines.map((line) => ({
+    stockItemId: line.stockItemId,
+    name: line.item.name,
+    description: line.item.description,
+    shelfNumber: line.item.shelfNumber,
+    quantity: line.quantity,
+  }));
 }
 
 export function toParcelResponse(
   { parcel, lines }: ParcelWithLines,
   referral: Referral | undefined,
+  voucher: VoucherContext,
 ): ParcelResponse {
   return {
     id: parcel.id,
@@ -114,13 +147,11 @@ export function toParcelResponse(
     notes: parcel.notes,
     answers: parseAnswers(referral?.answersJson ?? null),
     firstTimeMarker: firstTimeMarkerFor(referral?.firstTimeReviewStatus),
-    lines: lines.map((line) => ({
-      stockItemId: line.stockItemId,
-      name: line.item.name,
-      description: line.item.description,
-      shelfNumber: line.item.shelfNumber,
-      quantity: line.quantity,
-    })),
+    voucherInstruction: voucherInstructionFor(voucher.sessionDate, voucher.voucherRange, {
+      status: referral?.firstTimeReviewStatus ?? 'unreviewed',
+      previousSessionDate: referral?.firstTimeReviewDate ?? null,
+    }),
+    lines: toParcelLines(lines),
   };
 }
 
@@ -148,12 +179,10 @@ export function toParcelResponse(
  * - **No answers.** The preferences belong on the maintenance screen, where
  *   somebody is deciding what goes in the parcel; by print time that decision
  *   is in `lines`.
- * - **`voucherInstruction`** is calculated fresh on every print — never stored
- *   on the parcel and never generated with the pick list — because an
- *   administrator may make the first-time-review decision after the pick
- *   list already exists, and printing must always use the current one. See
- *   `derivations.ts#voucherInstructionFor`. Like the marker above, this
- *   carries no historic date and no other referral detail.
+ * - **No voucher instruction.** The Christmas-voucher decision is acted on at
+ *   the session, not off the carried sheet, so it rides on
+ *   `ParcelResponse.voucherInstruction` for the Run a session screen and is
+ *   deliberately absent here.
  */
 export interface PrintParcelResponse {
   readonly pickNumber: number;
@@ -167,20 +196,12 @@ export interface PrintParcelResponse {
   readonly deliveryPostcode: string | null;
   readonly deliveryPhone: string | null;
   readonly notes: string | null;
-  readonly voucherInstruction: VoucherInstruction | null;
   readonly lines: ParcelLineResponse[];
-}
-
-/** What `toPrintParcelResponse` needs to work out `voucherInstruction`. */
-export interface PrintVoucherContext {
-  readonly sessionDate: PlainDate;
-  readonly voucherRange: VoucherDateRange | undefined;
 }
 
 export function toPrintParcelResponse(
   entry: ParcelWithLines,
   referral: Referral | undefined,
-  voucher: PrintVoucherContext,
 ): PrintParcelResponse {
   // Bind the narrowed referral once: the address and phone number are only ever
   // read for a delivery, so there is no path where they reach a collection sheet.
@@ -198,11 +219,7 @@ export function toPrintParcelResponse(
     deliveryPostcode: delivery?.refereePostcode ?? null,
     deliveryPhone: delivery?.refereePhone ?? null,
     notes: entry.parcel.notes,
-    voucherInstruction: voucherInstructionFor(voucher.sessionDate, voucher.voucherRange, {
-      status: referral?.firstTimeReviewStatus ?? 'unreviewed',
-      previousSessionDate: referral?.firstTimeReviewDate ?? null,
-    }),
-    lines: toParcelResponse(entry, undefined).lines,
+    lines: toParcelLines(entry.lines),
   };
 }
 

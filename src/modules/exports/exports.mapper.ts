@@ -10,7 +10,7 @@ import type { Referral } from '../../db/schema/referrals.ts';
  * Response mappers stop a new column on `referrals` from silently widening an
  * API response. This does the same job for the spreadsheet, where the stakes
  * are higher: what goes through here ends up somewhere neither `requireRole`
- * nor the twelve-month purge can reach — see
+ * nor the fifteen-month purge can reach — see
  * `docs/engineering/personal-data.md`.
  *
  * The row is built field by field from an explicit list. **Never spread a

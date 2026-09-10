@@ -12,7 +12,7 @@ paths:
   `test/setup.ts` applies the real migrations, which makes **the migrations self-testing**.
 - Drive HTTP through `buildApp().request(...)`. Use `SELF.fetch()` only for the smaller set of tests
   that need genuine end-to-end middleware ordering.
-- Unit-test pure modules directly — the rules engine, date maths, shelf sorting, referrer matching.
+- Unit-test pure modules directly — the rules engine, date maths, referrer matching.
   Those are the highest-value tests here and they only exist because the code is written to allow
   them.
 - Assert on behaviour and public responses, not internal calls. **Do not mock what you own.**

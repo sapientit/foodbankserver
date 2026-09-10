@@ -7,6 +7,7 @@ import { createPickListsRepository } from '../pick-lists/pick-lists.repository.t
 import { createReferrersRepository } from '../referrers/referrers.repository.ts';
 import { createReferrersService } from '../referrers/referrers.service.ts';
 import { createSessionsRepository } from '../sessions/sessions.repository.ts';
+import { createVoucherConfigRepository } from '../voucher-config/voucher-config.repository.ts';
 import { createReferralsRepository } from './referrals.repository.ts';
 import { createReferralsService } from './referrals.service.ts';
 import { toReceiptResponse, type ReferralReceiptResponse } from './referrals.mapper.ts';
@@ -65,5 +66,6 @@ function serviceFor(c: Context<AppEnv>) {
     referrers,
     referrersService: createReferrersService({ repository: referrers, clock }),
     pickLists: createPickListsRepository(db),
+    voucherConfig: createVoucherConfigRepository(db),
   });
 }

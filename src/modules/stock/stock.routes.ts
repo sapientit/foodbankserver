@@ -15,7 +15,6 @@ import { createGroupingsService } from './groupings.service.ts';
 import { groupingInputSchema, groupingPatchSchema } from './groupings.schema.ts';
 import { createStockRepository, type StockLevel } from './stock.repository.ts';
 import { createStockService } from './stock.service.ts';
-import { shelfSortKey } from './shelf-sort.ts';
 import type { StockValidationIssue } from './stock-validation.ts';
 import {
   stockItemInputSchema,
@@ -33,7 +32,6 @@ interface StockItemResponse {
   readonly category: string;
   readonly description: string | null;
   readonly shelfNumber: string;
-  readonly shelfSortKey: string;
   readonly lowStockThreshold: number | null;
   readonly groupingId: string | null;
   readonly unitsPerPack: number | null;
@@ -52,6 +50,13 @@ interface StockCorrectionResponse {
 interface VolunteerCodeResponse {
   readonly code: string;
   readonly expiresAt: number;
+}
+
+interface LatestVolunteerCodeResponse {
+  readonly latest: {
+    readonly expiresAt: number;
+    readonly expiringSoon: boolean;
+  } | null;
 }
 
 interface StockLevelResponse extends StockItemResponse {
@@ -73,7 +78,6 @@ interface CrateResponse {
   readonly id: string;
   readonly name: string;
   readonly shelfKey: string;
-  readonly shelfSortKey: string;
   readonly groupingId: string;
   readonly sizePerCrate: number;
   readonly members: CrateMemberResponse[];
@@ -183,6 +187,18 @@ export function stockRoutes(): Hono<AppEnv> {
   });
 
   /**
+   * When the current volunteer code expires and whether it is within five days
+   * of lapsing, for the admin screen's "hand out a fresh code" warning
+   * (`INITIAL_SPEC1.txt`, #Stock maintenance). Admin only. Never returns the
+   * code — only a hash is stored. `latest` is `null` when there is no unexpired
+   * code: before the first is generated, or once the last has lapsed.
+   */
+  routes.get('/stock/take/volunteer-codes/latest', ...admins, async (c) => {
+    const latest = await volunteerCodeServiceFrom(c.get('db'), c.get('clock')).latest();
+    return c.json<LatestVolunteerCodeResponse>({ latest });
+  });
+
+  /**
    * A team lead's hand correction to one item's level, between one take and
    * the next. `...staff`, the same as the stock take it belongs with: an
    * administrator can do everything a team lead can, without exception.
@@ -255,7 +271,6 @@ function toItemResponse(item: {
   category: string;
   description: string | null;
   shelfNumber: string;
-  shelfSortKey: string;
   lowStockThreshold: number | null;
   groupingId: string | null;
   unitsPerPack: number | null;
@@ -268,7 +283,6 @@ function toItemResponse(item: {
     category: item.category,
     description: item.description,
     shelfNumber: item.shelfNumber,
-    shelfSortKey: item.shelfSortKey,
     lowStockThreshold: item.lowStockThreshold,
     groupingId: item.groupingId,
     unitsPerPack: item.unitsPerPack,
@@ -307,7 +321,6 @@ function toCrateResponse(entry: CrateWithMembers): CrateResponse {
     id: entry.crate.id,
     name: entry.crate.name,
     shelfKey: entry.crate.shelfKey,
-    shelfSortKey: shelfSortKey(entry.crate.shelfKey),
     groupingId: entry.crate.groupingId,
     sizePerCrate: entry.crate.sizePerCrate,
     members: entry.members.map((member) => ({

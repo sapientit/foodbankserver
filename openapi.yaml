@@ -950,6 +950,13 @@ paths:
         Deliberately minimal. **No address, postcode, phone, date of birth or
         anything about the referrer.** This ends up on paper in a hall.
 
+        The only thing beyond "what went wrong" is `firstTimeMarker` and
+        `voucherInstruction` — the **same two derived enums** `Parcel`
+        carries for the Run a session screen, with the same values. The
+        listener is the one talking to the household, so they see whether it
+        is new and what to do about a Christmas voucher. Both carry no
+        historic session date and nothing else about the referral.
+
         `answers` is the referral's dynamic answers **whole and unfiltered**, and
         **the client chooses which of them belong on the sheet**: its referral
         form marks them, because the client owns that definition and the server
@@ -1416,7 +1423,7 @@ paths:
         `POST /referrals/{id}/copy`, not moved.
 
         **A referral whose details have been forgotten cannot be amended or
-        moved either**, and is a `409`. Twelve months on there is no name and no
+        moved either**, and is a `409`. Fifteen months on there is no name and no
         answers left, so there is nothing to correct — and writing a name back
         onto one would put back exactly what the charity promised to forget.
       requestBody:
@@ -1449,7 +1456,7 @@ paths:
     parameters: [{ $ref: '#/components/parameters/Id' }]
     get:
       tags: [Referrals]
-      summary: Every referral this household has had in the last twelve months
+      summary: Every referral this household has had in the last fifteen months
       description: |
         **Admin only**, and the button behind `repeatReferrals` on the referral
         itself. A team lead gets a `403`.
@@ -1490,7 +1497,7 @@ paths:
         strength of a shared postcode would be the wrong kind of help. The
         charity was explicit about this.
 
-        The lookback is twelve months, counted from when each referral was
+        The lookback is fifteen months, counted from when each referral was
         made — the same clock the retention purge runs on, so a household whose
         details have been forgotten cannot be found. That is accepted, not a
         gap: there is nothing left on the row to match on.
@@ -1579,7 +1586,7 @@ paths:
         **This reaches every referral the food bank still holds details for,
         cancelled and rejected included** — "we turned that one away in March"
         is exactly what the caller is ringing about — and there is no
-        twelve-month window here, unlike the duplicate count. It cannot reach a
+        fifteen-month window here, unlike the duplicate count. It cannot reach a
         referral whose details have been forgotten: the purge nulls the very
         columns this searches on, so there is nothing left to match.
 
@@ -1704,7 +1711,7 @@ paths:
 
         A referral still `pending_review` is a `409`: decide it first. So is one
         already reviewed, rejected or cancelled, and so is one whose details
-        have been forgotten — twelve months on there is nothing left to read.
+        have been forgotten — fifteen months on there is nothing left to read.
       responses:
         '200':
           description: Marked as read
@@ -1801,7 +1808,7 @@ paths:
         chance**, copy the referral onto a later session with `POST
         /referrals/{id}/copy` and leave the no-show where it happened.
 
-        **A referral whose details have been forgotten is a `409` too.** Twelve
+        **A referral whose details have been forgotten is a `409` too.** Fifteen
         months on there is nothing left to cancel.
 
         **If a pick list has already been generated, this marks that household's
@@ -1884,8 +1891,8 @@ paths:
 
         **`referredAt` is the moment the copy was made**, not the original's.
         The copy is a new referral and reads as one on the search screen — and
-        `referredAt` is what the twelve-month purge counts from, so reusing the
-        original's would put a copy of an eleven-month-old referral a month from
+        `referredAt` is what the fifteen-month purge counts from, so reusing the
+        original's would put a copy of a fourteen-month-old referral a month from
         being forgotten.
 
         **`adminInfo` on the copy is set by the server** to `Copied from
@@ -2295,17 +2302,17 @@ paths:
       tags: [Stock]
       summary: Stock levels, ordered by shelf
       description: |
-        The stock-take screen. Ordered so a picker walks the aisle once: A1,
-        A2, A10 — not alphabetically. Levels are derived by summing the ledger;
-        there is no stored balance.
+        The stock-take screen. Ordered by a plain string sort of `shelfNumber`
+        as typed — `A10` sorts before `A2`, and numbering the shelves so the
+        walk comes out right is a labelling job. Levels are derived by summing
+        the ledger; there is no stored balance.
 
         **Defaults to shelf order**, unlike `GET /stock/items`, because the
         screen behind it is somebody walking the warehouse with a clipboard.
 
-        Each item carries a `shelfSortKey`, so a client that also lists
-        crates (`GET /stock/crates`) can interleave the two into one
-        shelf-walk sequence for the stock-take screen rather than showing
-        two separate lists.
+        A client that also lists crates (`GET /stock/crates`) interleaves the
+        two into one sequence by comparing `shelfNumber` and `Crate.shelfKey`
+        as plain strings, rather than showing two separate lists.
 
         Reachable with a signed-in admin or team lead token, **or** with a
         stock-take volunteer code in `X-Volunteer-Code`.
@@ -2641,9 +2648,11 @@ paths:
         `POST /stock/take`) and nothing else — not the item list, not a hand
         correction.
 
-        It lasts eight hours from issue. There is no way to revoke one sooner,
-        and nothing about it is kept once it lapses. Whatever is counted on it
-        is recorded against the team lead who generated it.
+        It lasts fourteen days from issue. There is no way to revoke one
+        sooner, and nothing about it is kept once it lapses. Generating another
+        code does not touch the earlier ones — each works until its own expiry.
+        Whatever is counted on it is recorded against the team lead who
+        generated it.
       responses:
         '201':
           description: A fresh code. Show it to the team lead once; nothing retrieves it again.
@@ -2660,7 +2669,40 @@ paths:
                       in `X-Volunteer-Code`; case and separators are normalised.
                   expiresAt:
                     type: integer
-                    description: Epoch seconds — eight hours after issue.
+                    description: Epoch seconds — fourteen days after issue.
+
+  /api/v1/stock/take/volunteer-codes/latest:
+    get:
+      tags: [Stock]
+      summary: When the current stock-take volunteer code expires
+      description: |
+        For the admin screen's warning that the current code is running out —
+        `INITIAL_SPEC1.txt`, #Stock maintenance. Admin only.
+
+        Returns when the unexpired code with the latest issue time stops
+        working, and whether it is within five days of that. It **never
+        returns the code itself** — only a hash is stored. `latest` is `null`
+        when there is no unexpired code: before the first is generated, or
+        once the last has lapsed (a lapsed code is not kept).
+      responses:
+        '200':
+          description: The current code's expiry, or `null` if there is no unexpired code.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [latest]
+                properties:
+                  latest:
+                    type: [object, 'null']
+                    required: [expiresAt, expiringSoon]
+                    properties:
+                      expiresAt:
+                        type: integer
+                        description: Epoch seconds — when this code stops working.
+                      expiringSoon:
+                        type: boolean
+                        description: '`true` once the code has under five days left.'
 
   /api/v1/stock/items/{id}/corrections:
     parameters: [{ $ref: '#/components/parameters/Id' }]
@@ -2791,9 +2833,9 @@ paths:
       description: >-
         Admin and team lead — both roles use the grouped stock take — **or** a
         stock-take volunteer code in `X-Volunteer-Code`. Ordered by name, each
-        with its members. Each crate also carries a `shelfSortKey`, computed
-        fresh on every read, so a stock-take screen can slot crates into the
-        same shelf-walk order as `GET /stock/levels` instead of listing them
+        with its members. A stock-take screen slots crates into the same order
+        as `GET /stock/levels` by comparing a crate's `shelfKey` against an
+        item's `shelfNumber` as plain strings, instead of listing them
         separately.
       security:
         - bearerAuth: []
@@ -3146,7 +3188,7 @@ paths:
       summary: The Christmas-voucher date range
       description: >
         Admin only, reading included — nobody else needs the raw range, only
-        the derived `Parcel.firstTimeMarker` and `PrintParcel.voucherInstruction`
+        the derived `Parcel.firstTimeMarker` and `Parcel.voucherInstruction`
         it already carries. `INITIAL_SPEC1.txt`, `#Christmas voucher and
         first-time selection`.
 
@@ -4024,8 +4066,8 @@ components:
       description: >-
         How to order the list. `category` sorts by category and then by item
         name within it — the maintenance screen and the pick-list amendment
-        screen. `shelf` follows the shelf numbers so a volunteer walks the
-        warehouse once — the stock take and the printed pick list. Each
+        screen. `shelf` is a plain string sort of the shelf label as typed
+        (`A10` before `A2`) — the stock take and the printed pick list. Each
         endpoint defaults to the one its own screen wants; an unrecognised
         value is a `400` rather than a silent fallback.
 
@@ -4964,7 +5006,7 @@ components:
     RepeatReferralSummary:
       type: object
       description: >
-        How many times this household has been referred in the last twelve
+        How many times this household has been referred in the last fifteen
         months, and the session date of the most recent of those.
       required: [count, mostRecentSessionDate]
       properties:
@@ -5274,7 +5316,7 @@ components:
             not be lost because a form page was saved without it. Amend it
             through `ReferralAmend.adminInfo`.
 
-            Null when there is no note. Cleared by the twelve-month purge along
+            Null when there is no note. Cleared by the fifteen-month purge along
             with the household's own fields and `answers` — unlike
             `reviewComment`, which survives it.
         repeatReferrals:
@@ -5327,7 +5369,6 @@ components:
           category,
           description,
           shelfNumber,
-          shelfSortKey,
           lowStockThreshold,
           groupingId,
           unitsPerPack,
@@ -5354,16 +5395,14 @@ components:
           description: >-
             What the item is, in the charity's words. Printed on the pick list
             under the item name. `null` where the name says everything.
-        shelfNumber: { type: string }
-        shelfSortKey:
+        shelfNumber:
           type: string
           description: >-
-            Opaque. Plain string comparison walks the aisle correctly — `A1`
-            before `A2` before `A10` — the same order `GET /stock/levels`
-            already returns when `order=shelf`. Returned so a client building
-            a combined stock-take screen can interleave crates among items:
-            `Crate.shelfSortKey` is computed the same way and compares
-            directly against this one. Do not parse it.
+            The shelf label as typed. Ordering the stock take and the printed
+            pick sheet is a plain string sort of this value — no cleverness
+            about numbers inside it, so `A10` sorts before `A2`. A client
+            building a combined stock-take screen interleaves crates among
+            items by comparing this against `Crate.shelfKey` as plain strings.
         lowStockThreshold:
           type: [integer, 'null']
           minimum: 0
@@ -5499,17 +5538,9 @@ components:
       allOf:
         - $ref: '#/components/schemas/CrateInput'
         - type: object
-          required: [id, shelfSortKey]
+          required: [id]
           properties:
             id: { type: string, format: uuid }
-            shelfSortKey:
-              type: string
-              description: >-
-                Computed from `shelfKey` the same way `StockItem.shelfSortKey`
-                is computed from `shelfNumber`, so the two compare directly.
-                Worked out fresh on every read rather than stored — a crate
-                has nothing else that depends on it staying in step. Opaque;
-                compare as a plain string, do not parse it.
 
     StockValidationIssue:
       type: object
@@ -5574,7 +5605,17 @@ components:
         One household on the listener sheet. The narrowest response in the API,
         and the only one carrying the reason for referral to a team leader.
       required:
-        [referralId, pickNumber, refereeFirstName, refereeSurname, reason, needsFuelHelp, answers]
+        [
+          referralId,
+          pickNumber,
+          refereeFirstName,
+          refereeSurname,
+          reason,
+          needsFuelHelp,
+          answers,
+          firstTimeMarker,
+          voucherInstruction,
+        ]
       properties:
         referralId: { type: string, format: uuid }
         pickNumber:
@@ -5601,6 +5642,38 @@ components:
             The dynamic answers, whole. Take whichever of them the client's
             referral form marks for this sheet; the server does not know which
             keys those are. `{}` once purged.
+        firstTimeMarker:
+          type: [string, 'null']
+          enum: [first_time, admin, null]
+          description: >
+            Whether this household is new — `INITIAL_SPEC1.txt`,
+            `#Listener sheet`. **Identical to `Parcel.firstTimeMarker`** and
+            derived by the same rule: `first_time` when the first-time review
+            recorded no previous session, `admin` while it is still
+            `unreviewed`, `null` once a previous-session date is recorded. The
+            listener sees this because they are the one talking to the
+            household. **Never the date itself or the raw review status** —
+            that is what makes it safe for a team lead.
+        voucherInstruction:
+          type: [string, 'null']
+          enum: [provide_voucher, already_received, refer_to_admin, null]
+          description: >
+            The one Christmas-voucher instruction for this household —
+            `INITIAL_SPEC1.txt`, `#Listener sheet`. **Identical to
+            `Parcel.voucherInstruction`**, derived fresh on every read from
+            the same rule and never persisted on the parcel: an administrator
+            may make the first-time-review decision after the sheet has been
+            produced once.
+
+            `null` — the session's date is outside the configured voucher
+            range, or no range is configured. `refer_to_admin` — in range,
+            first-time review still `unreviewed`. `provide_voucher` — in
+            range, and either no previous referral or a recorded
+            previous-session date outside the range. `already_received` — in
+            range, and the recorded previous-session date falls inside it too.
+
+            **Never the historic previous-session date or any other referral
+            data.**
 
     SessionReferralDetails:
       type: object
@@ -6026,7 +6099,7 @@ components:
             on a parcel — by then the note belongs to the team leader, who may
             have corrected it.
 
-            **Deleted along with the referral at the twelve-month purge**, on
+            **Deleted along with the referral at the fifteen-month purge**, on
             the same run as the referral's own answers — see
             `INITIAL_SPEC1.txt`, `#Forgetting a referral`. The purge job itself
             has not been rebuilt to do this yet (`STATUS.md`, "Agreed but not
@@ -6121,6 +6194,7 @@ components:
           notes,
           answers,
           firstTimeMarker,
+          voucherInstruction,
           lines,
         ]
       properties:
@@ -6160,7 +6234,7 @@ components:
             this rather than recomposing it from `answers`, which would hide
             any correction made to it.
 
-            Deleted along with the rest of the parcel at the twelve-month
+            Deleted along with the rest of the parcel at the fifteen-month
             purge, in the same run as `answers` — see `x-assumed` on
             `PickListInformationEntry.notes` for the current gap between that
             and what the purge job actually does today.
@@ -6190,6 +6264,36 @@ components:
             date has been recorded. **Never the date itself or anything else
             about the referral** — this is safe for a team lead precisely
             because it stops there.
+        voucherInstruction:
+          type: [string, 'null']
+          enum: [provide_voucher, already_received, refer_to_admin, null]
+          description: >
+            The one Christmas-voucher instruction for this household, shown to
+            the team leader on the Run a session screen — `INITIAL_SPEC1.txt`,
+            `#Christmas voucher and first-time selection`. **Calculated fresh
+            on every read, never stored on the parcel or generated with the
+            pick list** — an administrator may make the first-time-review
+            decision after this pick list already exists, so the screen must
+            always reflect the current one.
+
+            `null` — no instruction at all. Either the session's date is
+            outside the configured voucher range, or no range has been
+            configured.
+
+            `refer_to_admin` — the session is in range and this household's
+            first-time review is still `unreviewed`.
+
+            `provide_voucher` — the session is in range and either there is
+            no previous referral, or a previous-session date is recorded but
+            it falls outside the range.
+
+            `already_received` — the session is in range and the recorded
+            previous-session date falls inside it too.
+
+            **Never the historic date itself, and nothing else about the
+            referral** — only ever one of these three words or `null`. It is
+            not on `PrintParcel`: the voucher is acted on at the session, not
+            off the sheet carried round the hall.
         lines:
           type: array
           items: { $ref: '#/components/schemas/ParcelLine' }
@@ -6216,7 +6320,6 @@ components:
           deliveryPostcode,
           deliveryPhone,
           notes,
-          voucherInstruction,
           lines,
         ]
       properties:
@@ -6243,36 +6346,12 @@ components:
           description: >-
             The pick-list information as saved on the parcel — what the team
             leader meant the sheet to say, not the answers as they read today.
-        voucherInstruction:
-          type: [string, 'null']
-          enum: [provide_voucher, already_received, refer_to_admin, null]
-          description: >
-            The one voucher instruction for the top of this sheet —
-            `INITIAL_SPEC1.txt`, `#Christmas voucher and first-time
-            selection`. **Calculated fresh on every print, never stored on
-            the parcel or generated with the pick list** — an administrator
-            may make the first-time-review decision after this pick list
-            already exists, so printing must always reflect the current one.
-
-            `null` — no instruction at all, printed as nothing. Either the
-            session's date is outside the configured voucher range, or no
-            range has been configured.
-
-            `refer_to_admin` — the session is in range and this household's
-            first-time review is still `unreviewed`.
-
-            `provide_voucher` — the session is in range and either there is
-            no previous referral, or a previous-session date is recorded but
-            it falls outside the range.
-
-            `already_received` — the session is in range and the recorded
-            previous-session date falls inside it too.
-
-            **Never the historic date itself, and nothing else about the
-            referral** — only ever one of these three words or `null`.
         lines:
           type: array
           items: { $ref: '#/components/schemas/ParcelLine' }
+      # No `voucherInstruction`: the Christmas voucher is acted on at the
+      # session, so it rides on `Parcel.voucherInstruction` for the Run a
+      # session screen and is deliberately absent from the carried sheet.
 
     # ---- Admin setup: referrers and reasons ----
     # All mapped by exhaustive object literals, so every field is required.

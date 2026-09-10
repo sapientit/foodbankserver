@@ -38,8 +38,8 @@ Three consequences the charity accepted, recorded here because no code can enfor
 - **Residency past the browser is the Workspace's business.** A Google Workspace with EU data
   regions configured keeps the residency the D1 jurisdiction was chosen for; a personal Gmail
   account does not. Whoever owns the spreadsheet owns that decision.
-- **The purge cannot reach it.** Twelve months clears rows in D1 only. A name in the spreadsheet
-  stays until somebody deletes it by hand, so "we hold it for twelve months" is true of this system
+- **The purge cannot reach it.** Fifteen months clears rows in D1 only. A name in the spreadsheet
+  stays until somebody deletes it by hand, so "we hold it for fifteen months" is true of this system
   and not of the charity's records as a whole.
 - **Roles stop at the API boundary.** `requireRole` and the response mappers do not follow a row
   into a spreadsheet. Everyone it is shared with sees every column, including `reviewComment`, which
@@ -50,7 +50,7 @@ rather than by a timer, and every row passes through `toExtractRow()` — an all
 added to `referrals` cannot silently widen what leaves.
 
 `adminInfo` is the worked example of that allowlist doing its job: it is free text about a
-household, it is purged at twelve months, and it is **not** an extract column. A field the purge
+household, it is purged at fifteen months, and it is **not** an extract column. A field the purge
 clears must not be written somewhere the purge cannot reach.
 
 ### `sms_messages` is the other table holding personal data
@@ -134,13 +134,13 @@ referral's parcel is deleted along with it, pick-list information and all — `I
 but not yet built"); nothing should be written into `parcels` on the assumption that today's purge
 covers it, because it does not.
 
-The retention period is **twelve months**, settled by the charity on 2026-08-06 and recorded in
-`INITIAL_SPEC1.txt` under `#Forgetting a referral`. The schema isolates PII so a purge needs no
-table rebuild, and the job is written, tested and scheduled — it purges nothing until
-`PII_RETENTION_DAYS` is set to `365`, which is deliberately still pending, because setting it is the
-moment deletion begins.
+The retention period is **fifteen months**, settled by the charity on 2026-08-06 at twelve months
+and revised to fifteen on 2026-09-09, recorded in `INITIAL_SPEC1.txt` under `#Forgetting a referral`.
+The schema isolates PII so a purge needs no table rebuild, and the job is written, tested and
+scheduled — it purges nothing until `PII_RETENTION_DAYS` is set to `456`, which is deliberately still
+pending, because setting it is the moment deletion begins.
 
-Twelve months is not only a privacy decision. The repeat-referral count on the admin review screen
-looks back twelve months and matches on date of birth, postcode and phone — the columns this purge
+Fifteen months is not only a privacy decision. The repeat-referral count on the admin review screen
+looks back fifteen months and matches on date of birth, postcode and phone — the columns this purge
 nulls. A shorter period does not fail loudly; it makes that count under-report and tells an
 administrator a household is new when it is not. The two numbers are one decision.

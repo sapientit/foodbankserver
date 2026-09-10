@@ -28,18 +28,31 @@ export const JWT_CLOCK_LEEWAY_SECONDS = 60;
 /**
  * How long a stock-take volunteer code works, from the moment it was issued.
  *
- * Eight hours — the same span as a sign-in and for the same reasons: it covers
- * a morning's counting, and a code read out onto a shared tablet is useless by
- * the next session. A **separate constant on purpose**: it happens to equal
- * `SIGN_IN_TTL_SECONDS` today, but the two answer different questions and
- * there is no reason a change to one should drag the other with it.
+ * Fourteen days — a charity decision (`INITIAL_SPEC1.txt`, #Stock maintenance).
+ * A team leader hands a code to whoever is counting and it carries them across
+ * several weekly stock takes rather than a single morning; issuing a fresh one
+ * every session was busywork nobody wanted. A **separate constant on purpose**
+ * and no longer the same span as `SIGN_IN_TTL_SECONDS`: the two answer
+ * different questions and neither should drag the other.
  *
  * There is deliberately no way to end a code sooner. It reaches the stock take
  * and nothing with a name on it, so a loose one exposes little, and an
- * "end it now" control is surface for no real gain. See `INITIAL_SPEC1.txt`,
- * #Stock maintenance.
+ * "end it now" control is surface for no real gain. Making another code does
+ * not touch the earlier ones either — each works until its own expiry.
  */
-export const VOLUNTEER_CODE_TTL_SECONDS = 8 * 60 * 60;
+export const VOLUNTEER_CODE_TTL_SECONDS = 14 * 24 * 60 * 60;
+
+/**
+ * How much life a volunteer code must have left before the admin screen warns
+ * that it is running out and a fresh one should be handed round.
+ *
+ * Five days (`INITIAL_SPEC1.txt`, #Stock maintenance). Long enough that an
+ * administrator has a week or so of stock takes to react in, short enough that
+ * the warning is not on screen for most of a code's life. The warning states
+ * when the code expires; it cannot reproduce the code, which is stored only as
+ * a hash.
+ */
+export const VOLUNTEER_CODE_RENEWAL_WARNING_SECONDS = 5 * 24 * 60 * 60;
 
 export const JWT_ISSUER = 'foodbank-api';
 export const JWT_AUDIENCE = 'foodbank-web';
@@ -154,15 +167,16 @@ export const FUEL_HELP_WINDOW_DAYS = 14;
  * How far back the repeat-referral count on the review screen looks, counted
  * on `referredAt`.
  *
- * Twelve months, expressed as days — and **deliberately the same period as
- * the retention purge** (`INITIAL_SPEC1.txt`, "Forgetting a referral", and
- * `PII_RETENTION_DAYS` in `config/env.ts`). Once a household's identifying
- * columns have been nulled there is nothing left on the row to match on, so
- * the two periods only stay honest together: shortening this window without
- * shortening the purge's would silently under-report, and the reverse would
- * count against a household the charity has already promised to forget.
+ * Fifteen months, expressed as days (twelve months ≈ 365, plus three ≈ 91) —
+ * and **deliberately the same period as the retention purge**
+ * (`INITIAL_SPEC1.txt`, "Forgetting a referral", and `PII_RETENTION_DAYS` in
+ * `config/env.ts`). Once a household's identifying columns have been nulled
+ * there is nothing left on the row to match on, so the two periods only stay
+ * honest together: shortening this window without shortening the purge's would
+ * silently under-report, and the reverse would count against a household the
+ * charity has already promised to forget.
  */
-export const REPEAT_REFERRAL_LOOKBACK_DAYS = 365;
+export const REPEAT_REFERRAL_LOOKBACK_DAYS = 456;
 
 /**
  * How many repeat referrals the button behind the count will list.

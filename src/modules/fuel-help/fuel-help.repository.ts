@@ -63,7 +63,7 @@ export interface FuelHelpRow {
  * afterwards does not un-feed them. Fuel help follows the parcel, so it follows
  * them too.
  *
- * There is **no filter on `piiPurgedAt`**. Retention is twelve months and this
+ * There is **no filter on `piiPurgedAt`**. Retention is fifteen months and this
  * window is fourteen days, so a purged row cannot reach the list. Filtering on
  * it would imply it could, and invite somebody to widen the window later
  * without noticing what that costs.

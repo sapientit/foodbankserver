@@ -20,12 +20,12 @@ import {
 } from './helpers/picking-fixtures.ts';
 
 /**
- * `ParcelResponse.firstTimeMarker` (`GET /sessions/{sessionId}/pick-list`,
- * `GET /pick-lists/{id}`) and `PrintParcelResponse.voucherInstruction`
- * (`GET /pick-lists/{id}/print`) — `INITIAL_SPEC1.txt`, `#Christmas voucher
- * and first-time selection`. `setUpPickingWorld`'s session is dated
- * `2026-08-11`, which the voucher-range tests below deliberately straddle or
- * exclude.
+ * `ParcelResponse.firstTimeMarker` and `ParcelResponse.voucherInstruction`
+ * (`GET /sessions/{sessionId}/pick-list`, `GET /pick-lists/{id}`) —
+ * `INITIAL_SPEC1.txt`, `#Christmas voucher and first-time selection`. Both are
+ * for the Run a session screen; neither is on the printed sheet.
+ * `setUpPickingWorld`'s session is dated `2026-08-11`, which the voucher-range
+ * tests below deliberately straddle or exclude.
  */
 
 const db = createDatabase(env.DB);
@@ -203,53 +203,57 @@ describe('Parcel.firstTimeMarker', () => {
   });
 });
 
-describe('PrintParcelResponse.voucherInstruction', () => {
-  async function preparedPrint(
+describe('Parcel.voucherInstruction', () => {
+  async function instructionsByReferral(
     testApp: TestApp,
     token: string,
-    w: PickingWorld,
-  ): Promise<{ referralId: string; voucherInstruction: string | null }[]> {
-    const { id: pickListId } = await generatePickList(testApp, token, w.sessionId);
-    await reviewEveryParcel(testApp, token, pickListId);
-
-    const response = await testApp.request(`/api/v1/pick-lists/${pickListId}/print`, {
-      headers: authHeaders(token),
-    });
+    path: string,
+  ): Promise<Map<string, string | null>> {
+    const response = await testApp.request(path, { headers: authHeaders(token) });
     expect(response.status).toBe(200);
-    const body: {
-      parcels: { pickNumber: number; voucherInstruction: string | null }[];
-    } = await response.json();
-
-    // The print payload does not carry `referralId` directly (see
-    // `PrintParcelResponse`); recover it from the same order the maintenance
-    // view returns, matched by pick number, which both routes agree on.
-    const maintenance = await testApp.request(`/api/v1/pick-lists/${pickListId}`, {
-      headers: authHeaders(token),
-    });
-    const maintenanceBody: { parcels: { referralId: string; pickNumber: number }[] } =
-      await maintenance.json();
-    const referralByPickNumber = new Map(
-      maintenanceBody.parcels.map((p) => [p.pickNumber, p.referralId]),
-    );
-
-    return body.parcels.map((p) => ({
-      referralId: referralByPickNumber.get(p.pickNumber) ?? '',
-      voucherInstruction: p.voucherInstruction,
-    }));
+    const body: { parcels: { referralId: string; voucherInstruction: string | null }[] } =
+      await response.json();
+    return new Map(body.parcels.map((p) => [p.referralId, p.voucherInstruction]));
   }
 
-  it('gives the right instruction for each of the three states when the range includes the session date', async () => {
+  it('gives the right instruction for each of the three states on both Run a session routes when the range includes the session date', async () => {
     const { testApp, token, world: w } = await world();
     const referrals3 = await seedThreeStates(testApp, token, w);
     await setVoucherRange(testApp, token, { startDate: '2026-08-01', endDate: '2026-08-20' });
 
-    const results = await preparedPrint(testApp, token, w);
-    const byReferral = new Map(results.map((r) => [r.referralId, r.voucherInstruction]));
+    const { id: pickListId } = await generatePickList(testApp, token, w.sessionId);
 
-    expect(byReferral.get(referrals3.unreviewedId)).toBe('refer_to_admin');
-    expect(byReferral.get(referrals3.noPreviousId)).toBe('provide_voucher');
-    // Recorded date (2026-08-05) falls inside the configured range too.
-    expect(byReferral.get(referrals3.previousSessionId)).toBe('already_received');
+    for (const path of [
+      `/api/v1/sessions/${w.sessionId}/pick-list`,
+      `/api/v1/pick-lists/${pickListId}`,
+    ]) {
+      const byReferral = await instructionsByReferral(testApp, token, path);
+
+      expect(byReferral.get(referrals3.unreviewedId)).toBe('refer_to_admin');
+      expect(byReferral.get(referrals3.noPreviousId)).toBe('provide_voucher');
+      // Recorded date (2026-08-05) falls inside the configured range too.
+      expect(byReferral.get(referrals3.previousSessionId)).toBe('already_received');
+    }
+  });
+
+  it('is live-read rather than snapshotted at generation', async () => {
+    const { testApp, token, world: w } = await world();
+    const { id: referralId } = await submitReferral(testApp, w, { adults: 1, children: 0 });
+    await setVoucherRange(testApp, token, { startDate: '2026-08-01', endDate: '2026-08-20' });
+
+    const { id: pickListId } = await generatePickList(testApp, token, w.sessionId);
+    const path = `/api/v1/pick-lists/${pickListId}`;
+
+    expect((await instructionsByReferral(testApp, token, path)).get(referralId)).toBe(
+      'refer_to_admin',
+    );
+
+    // The decision is made *after* the pick list already exists.
+    await setFirstTimeReview(testApp, token, referralId, { noPreviousReferral: true });
+
+    expect((await instructionsByReferral(testApp, token, path)).get(referralId)).toBe(
+      'provide_voucher',
+    );
   });
 
   it('is null for every parcel when the configured range excludes the session date', async () => {
@@ -257,11 +261,16 @@ describe('PrintParcelResponse.voucherInstruction', () => {
     await seedThreeStates(testApp, token, w);
     await setVoucherRange(testApp, token, { startDate: '2026-09-01', endDate: '2026-09-10' });
 
-    const results = await preparedPrint(testApp, token, w);
+    const { id: pickListId } = await generatePickList(testApp, token, w.sessionId);
+    const byReferral = await instructionsByReferral(
+      testApp,
+      token,
+      `/api/v1/pick-lists/${pickListId}`,
+    );
 
-    expect(results).not.toHaveLength(0);
-    for (const { voucherInstruction } of results) {
-      expect(voucherInstruction).toBeNull();
+    expect(byReferral.size).toBeGreaterThan(0);
+    for (const instruction of byReferral.values()) {
+      expect(instruction).toBeNull();
     }
   });
 
@@ -269,15 +278,37 @@ describe('PrintParcelResponse.voucherInstruction', () => {
     const { testApp, token, world: w } = await world();
     await seedThreeStates(testApp, token, w);
 
-    const results = await preparedPrint(testApp, token, w);
+    const { id: pickListId } = await generatePickList(testApp, token, w.sessionId);
+    const byReferral = await instructionsByReferral(
+      testApp,
+      token,
+      `/api/v1/pick-lists/${pickListId}`,
+    );
 
-    expect(results).not.toHaveLength(0);
-    for (const { voucherInstruction } of results) {
-      expect(voucherInstruction).toBeNull();
+    expect(byReferral.size).toBeGreaterThan(0);
+    for (const instruction of byReferral.values()) {
+      expect(instruction).toBeNull();
     }
   });
 
-  it('never leaks the reason for referral, the historic previous-session date, or the answers', async () => {
+  it('is visible to a team lead on the Run a session screen, not just an admin', async () => {
+    const { testApp, token, world: w } = await world();
+    const { id: referralId } = await submitReferral(testApp, w, { adults: 1, children: 0 });
+    await setFirstTimeReview(testApp, token, referralId, { noPreviousReferral: true });
+    await setVoucherRange(testApp, token, { startDate: '2026-08-01', endDate: '2026-08-20' });
+
+    const { id: pickListId } = await generatePickList(testApp, token, w.sessionId);
+    const leadToken = await leadOf(testApp);
+
+    const byReferral = await instructionsByReferral(
+      testApp,
+      leadToken,
+      `/api/v1/pick-lists/${pickListId}`,
+    );
+    expect(byReferral.get(referralId)).toBe('provide_voucher');
+  });
+
+  it('never leaks the historic previous-session date onto the Run a session screen', async () => {
     const { testApp, token, world: w } = await world();
     const referral = await submitReferral(testApp, w, {
       adults: 1,
@@ -290,22 +321,20 @@ describe('PrintParcelResponse.voucherInstruction', () => {
     await setVoucherRange(testApp, token, { startDate: '2026-08-01', endDate: '2026-08-20' });
 
     const { id: pickListId } = await generatePickList(testApp, token, w.sessionId);
-    await reviewEveryParcel(testApp, token, pickListId);
-
-    const response = await testApp.request(`/api/v1/pick-lists/${pickListId}/print`, {
+    const response = await testApp.request(`/api/v1/pick-lists/${pickListId}`, {
       headers: authHeaders(token),
     });
     const text = await response.text();
 
-    expect(text).not.toContain('reasonId');
-    expect(text).not.toContain(w.reasonId);
-    // The historic date recorded on the first-time review, never the sheet.
+    // The instruction is derived from the recorded date, but that date — which
+    // falls outside the range, so the household still gets a voucher — never
+    // reaches the screen, and neither does the reason for referral.
+    expect(text).toContain('provide_voucher');
     expect(text).not.toContain('2025-11-30');
-    expect(text).not.toContain('answers');
-    expect(text).not.toContain('no nuts');
+    expect(text).not.toContain(w.reasonId);
   });
 
-  it('is visible to a team lead printing the sheet, not just an admin', async () => {
+  it('is no longer carried on the printed sheet', async () => {
     const { testApp, token, world: w } = await world();
     const { id: referralId } = await submitReferral(testApp, w, { adults: 1, children: 0 });
     await setFirstTimeReview(testApp, token, referralId, { noPreviousReferral: true });
@@ -313,14 +342,16 @@ describe('PrintParcelResponse.voucherInstruction', () => {
 
     const { id: pickListId } = await generatePickList(testApp, token, w.sessionId);
     await reviewEveryParcel(testApp, token, pickListId);
-    const leadToken = await leadOf(testApp);
 
     const response = await testApp.request(`/api/v1/pick-lists/${pickListId}/print`, {
-      headers: authHeaders(leadToken),
+      headers: authHeaders(token),
     });
     expect(response.status).toBe(200);
-    const body: { parcels: { voucherInstruction: string | null }[] } = await response.json();
+    const body: { parcels: Record<string, unknown>[] } = await response.json();
 
-    expect(body.parcels[0]?.voucherInstruction).toBe('provide_voucher');
+    expect(body.parcels).not.toHaveLength(0);
+    for (const parcel of body.parcels) {
+      expect(parcel).not.toHaveProperty('voucherInstruction');
+    }
   });
 });

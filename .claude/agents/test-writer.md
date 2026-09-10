@@ -25,8 +25,8 @@ through `buildApp().request(...)`; use `SELF.fetch()` only where genuine end-to-
 ordering is the thing under test.
 
 - Assert on behaviour and public responses, not internal calls. **Do not mock what you own.**
-- Unit-test pure modules directly — the rules engine, date maths, shelf sorting, referrer matching.
-  Highest value per line in this repo.
+- Unit-test pure modules directly — the rules engine, date maths, crate decomposition, referrer
+  matching. Highest value per line in this repo.
 - Name a test as the rule it enforces:
   `records stock movements exactly once when attendance is submitted twice`.
 

@@ -74,7 +74,6 @@ interface ItemFields {
   readonly category: string;
   readonly description: string | null;
   readonly shelfNumber: string;
-  readonly shelfSortKey: string;
   readonly lowStockThreshold: number | null;
   readonly groupingId: string | null;
   readonly unitsPerPack: number | null;
@@ -199,33 +198,28 @@ describe('stock levels', () => {
     expect(level?.quantityOnHand).toBe(0);
   });
 
-  it('orders the list by shelf so a picker walks the aisle once', async () => {
+  it('orders the list by a plain sort of the shelf number as typed', async () => {
     const { testApp, token } = await adminApp();
     await createItem(testApp, token, 'Tenth', 'A10');
     await createItem(testApp, token, 'Second', 'A2');
     await createItem(testApp, token, 'First', 'A1');
 
+    // A plain string sort, no cleverness about the number: 'A10' sorts before
+    // 'A2'. Numbering the shelves so the walk comes out right is a labelling
+    // job — INITIAL_SPEC1.txt, "#Stock maintenance".
     expect((await levels(testApp, token)).map((item) => item.name)).toEqual([
       'First',
-      'Second',
       'Tenth',
+      'Second',
+    ]);
+    expect((await items(testApp, token, 'shelf')).map((item) => item.name)).toEqual([
+      'First',
+      'Tenth',
+      'Second',
     ]);
   });
 
-  it('returns a shelfSortKey that plain string comparison walks in shelf order', async () => {
-    const { testApp, token } = await adminApp();
-    await createItem(testApp, token, 'Tenth', 'A10');
-    await createItem(testApp, token, 'Second', 'A2');
-    await createItem(testApp, token, 'First', 'A1');
-
-    const ordered = await items(testApp, token, 'shelf');
-    expect(ordered.map((item) => item.shelfSortKey)).toEqual(
-      [...ordered.map((item) => item.shelfSortKey)].sort(),
-    );
-    expect(ordered.map((item) => item.name)).toEqual(['First', 'Second', 'Tenth']);
-  });
-
-  it('keeps the shelf sort key in step when a shelf number changes', async () => {
+  it('re-sorts the list when a shelf number changes', async () => {
     const { testApp, token } = await adminApp();
     const a = await createItem(testApp, token, 'Alpha', 'B1');
     await createItem(testApp, token, 'Beta', 'A1');

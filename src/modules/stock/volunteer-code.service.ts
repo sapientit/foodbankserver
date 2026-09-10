@@ -1,4 +1,7 @@
-import { VOLUNTEER_CODE_TTL_SECONDS } from '../../config/constants.ts';
+import {
+  VOLUNTEER_CODE_RENEWAL_WARNING_SECONDS,
+  VOLUNTEER_CODE_TTL_SECONDS,
+} from '../../config/constants.ts';
 import type { Clock } from '../../core/clock.ts';
 import { mintVolunteerCode, normaliseVolunteerCode, sha256Hex } from '../../core/crypto/tokens.ts';
 import { UnauthorizedError } from '../../core/errors.ts';
@@ -25,6 +28,17 @@ export interface VolunteerCodeActor {
   readonly volunteerCodeId: string;
   /** The team lead who issued the code — who a count on it is recorded against. */
   readonly createdByUserId: string;
+}
+
+/**
+ * The most recently generated code that has not lapsed, for the admin "a
+ * fresh code is due" warning. Carries when it expires and nothing else — not
+ * the code (only a hash is stored), and not who made it.
+ */
+export interface LatestVolunteerCode {
+  readonly expiresAt: number;
+  /** True once the code has less than `VOLUNTEER_CODE_RENEWAL_WARNING_SECONDS` left. */
+  readonly expiringSoon: boolean;
 }
 
 export function createVolunteerCodeService(deps: VolunteerCodeServiceDeps) {
@@ -66,7 +80,24 @@ export function createVolunteerCodeService(deps: VolunteerCodeServiceDeps) {
     return { volunteerCodeId: row.id, createdByUserId: row.createdByUserId };
   }
 
-  return { generate, authenticate };
+  /**
+   * The unexpired code with the latest issue time, for the admin screen's
+   * warning that a replacement is due. `null` when there is no unexpired code
+   * — before the first is generated, or once the last has lapsed.
+   */
+  async function latest(): Promise<LatestVolunteerCode | null> {
+    const now = clock.nowEpochSeconds();
+    const row = await repository.findLatestActive(now);
+    if (row === undefined) {
+      return null;
+    }
+    return {
+      expiresAt: row.expiresAt,
+      expiringSoon: row.expiresAt - now < VOLUNTEER_CODE_RENEWAL_WARNING_SECONDS,
+    };
+  }
+
+  return { generate, authenticate, latest };
 }
 
 export type VolunteerCodeService = ReturnType<typeof createVolunteerCodeService>;

@@ -24,6 +24,7 @@ import type { ReferrersRepository } from '../referrers/referrers.repository.ts';
 import type { ReferrersService } from '../referrers/referrers.service.ts';
 import type { PickListsRepository } from '../pick-lists/pick-lists.repository.ts';
 import type { SessionsRepository } from '../sessions/sessions.repository.ts';
+import type { VoucherConfigRepository } from '../voucher-config/voucher-config.repository.ts';
 import { firstOfferableDate } from '../sessions/public-window.ts';
 import {
   hasAnythingToMatchOn,
@@ -41,6 +42,7 @@ import type {
 import {
   toListenerSheetHousehold,
   type ListenerSheetHousehold,
+  type ListenerSheetVoucherContext,
   type ReferralOutcome,
 } from './referrals.mapper.ts';
 import type { ReferralAmend, ReferralSearch, ReferralSubmission } from './referrals.schema.ts';
@@ -59,6 +61,12 @@ export interface ReferralsServiceDeps {
    * pick number against each household.
    */
   readonly pickLists: PickListsRepository;
+  /**
+   * Read once by `listenerSheet` to derive each household's
+   * `voucherInstruction` — the same range the pick list's own instruction is
+   * derived from. Never written here.
+   */
+  readonly voucherConfig: VoucherConfigRepository;
   readonly clock: Clock;
   readonly logger: Logger;
 }
@@ -77,7 +85,7 @@ export interface RepeatReferralMatch extends RepeatReferralCandidate {
   readonly matchedOn: readonly MatchKind[];
 }
 
-/** How many times this household has been referred in the last twelve months, and when. */
+/** How many times this household has been referred in the last fifteen months, and when. */
 export interface RepeatReferralSummary {
   readonly count: number;
   /** The most recent match's session date. May be a date **in the future** — it is the
@@ -113,7 +121,17 @@ const CANNOT_CANCEL_WITH_OUTCOME =
   'That referral already has an attendance outcome and can no longer be cancelled';
 
 export function createReferralsService(deps: ReferralsServiceDeps) {
-  const { db, repository, sessions, referrers, referrersService, pickLists, clock, logger } = deps;
+  const {
+    db,
+    repository,
+    sessions,
+    referrers,
+    referrersService,
+    pickLists,
+    voucherConfig,
+    clock,
+    logger,
+  } = deps;
 
   async function getReferral(id: string): Promise<Referral> {
     const referral = await repository.findById(id);
@@ -145,13 +163,13 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
   }
 
   /**
-   * Twelve months back from now, in London, as an ISO instant comparable
-   * with `referredAt`.
+   * `REPEAT_REFERRAL_LOOKBACK_DAYS` (fifteen months, as days) back from now,
+   * in London, as an ISO instant comparable with `referredAt`.
    *
    * Goes through `core/time` rather than subtracting milliseconds from the
-   * instant directly: a twelve-month window is calendar arithmetic, and
-   * doing calendar arithmetic on instants is how a cutoff ends up an hour
-   * out across the BST changeover. The wall-clock time of day carries
+   * instant directly: the window is counted in whole days on the London
+   * calendar, and doing that arithmetic on instants is how a cutoff ends up
+   * an hour out across the BST changeover. The wall-clock time of day carries
    * through unchanged; only the date moves.
    *
    * **Deliberately the same period as the retention purge** — see
@@ -198,7 +216,7 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
   }
 
   /**
-   * How many times this household has been referred in the last twelve
+   * How many times this household has been referred in the last fifteen
    * months, and the session date of the most recent of those.
    * `INITIAL_SPEC1.txt`, `#Reviewing a referral`: the count is of
    * referrals, not of parcels handed over — see `countRepeatReferrals` for
@@ -276,7 +294,7 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     }
 
     // One cutoff for all three queries, not one each: they must describe the
-    // same twelve months, and `repeatReferralCutoff()` reads the clock.
+    // same fifteen months, and `repeatReferralCutoff()` reads the clock.
     const cutoff = repeatReferralCutoff();
 
     // Issued together. The attendance query re-runs the predicate rather than
@@ -342,7 +360,7 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
    * short-circuit `listRepeatReferralsFor` takes, via the same
    * `hasAnythingToMatchOn`.
    *
-   * No self-exclusion, no twelve-month cutoff and no status filter — see
+   * No self-exclusion, no fifteen-month cutoff and no status filter — see
    * `referralSearchPredicate` in the repository for why this is not built by
    * generalising the repeat-referral one. Two queries issued together, the
    * same shape as `listRepeatReferralsFor`: an unbounded count and the rows
@@ -450,9 +468,14 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
    * for whoever is in front of them, so it is ordered by surname rather than by
    * when the referral arrived.
    *
-   * **Two queries whatever the session holds**: the referrals, and the reason
-   * list once. A reason lookup per household would be 25+ on a plan that allows
-   * 50, on a page opened at the start of every session.
+   * **A fixed number of queries whatever the session holds**: the referrals,
+   * the reason list once, the pick list, and the one voucher-config row. A
+   * reason lookup per household would be 25+ on a plan that allows 50, on a
+   * page opened at the start of every session.
+   *
+   * The voucher-config row feeds each household's derived `voucherInstruction`
+   * — worked out fresh here, never stored, exactly as the pick list's own is.
+   * `firstTimeMarker` needs only the referral's own review status.
    *
    * Retired reasons are included in that lookup. A referral cites the reason it
    * was made under, and the charity deactivating that reason afterwards must
@@ -485,13 +508,25 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
       throw new NotFoundError('Session not found');
     }
 
-    const [households, reasons, pickList] = await Promise.all([
+    const [households, reasons, pickList, voucherRow] = await Promise.all([
       repository.list({ sessionId }),
       referrers.listReasons(false),
       pickLists.findBySession(sessionId),
+      voucherConfig.find(),
     ]);
 
     const labelById = new Map(reasons.map((reason) => [reason.id, reason.label]));
+
+    // Derived fresh, exactly like the pick list's own voucher instruction: an
+    // administrator may make the first-time-review decision after the sheet
+    // has already been produced once.
+    const voucher: ListenerSheetVoucherContext = {
+      sessionDate: session.sessionDate,
+      voucherRange:
+        voucherRow === undefined
+          ? undefined
+          : { startDate: voucherRow.startDate, endDate: voucherRow.endDate },
+    };
 
     const coming = households.filter(
       (referral) =>
@@ -525,7 +560,7 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     return picked
       .sort((left, right) => bySurnameThenFirstName(left.referral, right.referral))
       .map(({ referral, pickNumber }) =>
-        toListenerSheetHousehold(referral, labelById.get(referral.reasonId), pickNumber),
+        toListenerSheetHousehold(referral, labelById.get(referral.reasonId), pickNumber, voucher),
       );
   }
 
@@ -934,7 +969,7 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
   /**
    * A referral whose details have been forgotten cannot be acted on at all.
    *
-   * Twelve months on there is no name, no address and no answers left, so
+   * Fifteen months on there is no name, no address and no answers left, so
    * there is nothing to correct, nothing to move to another session, nothing
    * to cancel and nothing to copy — `INITIAL_SPEC1.txt`, `#Referral
    * maintenance`. Amending is the sharpest of the four: writing a name back
@@ -1361,7 +1396,7 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
    *
    * `referredAt` is **now**, not the original's. The copy is a new referral and
    * the charity wants it read as one — and `referredAt` is what both the
-   * twelve-month purge and the repeat-referral lookback count from, so reusing
+   * fifteen-month purge and the repeat-referral lookback count from, so reusing
    * the original's would put a copy of an eleven-month-old referral a month
    * from being forgotten before the household had been fed.
    *

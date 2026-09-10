@@ -376,8 +376,8 @@ describe('ordering', () => {
 
     const { items } = await stockRequirement(testApp, token, w.sessionId);
 
-    // Cereal A1, Beans A2, Pasta A10 — shelf order, not category or insertion.
-    expect(items.map((item) => item.name)).toEqual(['Cereal', 'Beans', 'Pasta']);
+    // Pasta A1, Cereal A2, Beans A3 — shelf order, not category or insertion.
+    expect(items.map((item) => item.name)).toEqual(['Pasta', 'Cereal', 'Beans']);
   });
 
   it('sorts by category then normalised name when asked', async () => {
@@ -474,7 +474,6 @@ describe('stockRequirementLines (pure)', () => {
       description: null,
       category: 'Tinned Goods',
       shelfNumber: 'A1',
-      shelfSortKey: 'A00000001',
       lowStockThreshold: null,
       groupingId: null,
       unitsPerPack: null,
@@ -527,7 +526,6 @@ describe('stockRequirementSummaryLines (pure)', () => {
       description: null,
       category: 'Tinned Goods',
       shelfNumber: 'A1',
-      shelfSortKey: 'A00000001',
       lowStockThreshold: null,
       groupingId: null,
       unitsPerPack: null,

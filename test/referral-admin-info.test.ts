@@ -608,7 +608,7 @@ describe('the purge clears adminInfo alongside the household, and leaves reviewC
       db,
       clock: fixedClock(NOW),
       logger: createLogger('silent'),
-      retentionDays: 365,
+      retentionDays: 456,
     });
     expect(result.purged).toBe(1);
 

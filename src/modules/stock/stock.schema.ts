@@ -66,7 +66,8 @@ export const stockItemPatchSchema = z
  *
  * Two orders, because the screens genuinely want different ones: maintenance
  * and pick-list amendment group by category and read alphabetically inside it,
- * while the stock take and the printed pick list follow the shelves so that a
+ * while the stock take and the printed pick list follow the shelf number — a
+ * plain sort of the label exactly as typed, `A10` before `A2` — so that a
  * volunteer walks the warehouse once.
  */
 export const STOCK_ORDERS = ['category', 'shelf'] as const;

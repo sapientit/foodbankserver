@@ -27,10 +27,10 @@ other through services, never by reaching into another module's repository.
 
 ## Keep pure logic separable
 
-Pure, I/O-free modules (`engine.ts`, `matching.ts`, `materialisation.ts`, `shelf-sort.ts`) carry the
-highest-value tests in the codebase, and they only exist if the code is written to allow them. When
-a rule can be expressed without touching the database, put it in one of these rather than inside a
-service method.
+Pure, I/O-free modules (`engine.ts`, `matching.ts`, `materialisation.ts`, `crate-decomposition.ts`)
+carry the highest-value tests in the codebase, and they only exist if the code is written to allow
+them. When a rule can be expressed without touching the database, put it in one of these rather than
+inside a service method.
 
 ## Why `buildApp` takes a config
 

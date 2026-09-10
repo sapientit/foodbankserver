@@ -880,7 +880,7 @@ it('returns cancelled and rejected referrals, each carrying its own status', asy
   ]);
 });
 
-it('finds a referral referred more than twelve months ago, unlike the repeat-referral list which would exclude it', async () => {
+it('finds a referral referred more than fifteen months ago, unlike the repeat-referral list which would exclude it', async () => {
   const { testApp, token, world: w } = await referralWorld(NOW);
   const old = await submitReferral(
     testApp,
@@ -900,7 +900,7 @@ it('finds a referral referred more than twelve months ago, unlike the repeat-ref
     .set({ referredAt: '2020-01-01T00:00:00.000Z' })
     .where(eq(referrals.id, old.id));
 
-  // The contrast: the twelve-month repeat-referral count for `recent` does
+  // The contrast: the fifteen-month repeat-referral count for `recent` does
   // not see `old` at all.
   const detail = await testApp.request(`/api/v1/referrals/${recent.id}`, {
     headers: authHeaders(token),
@@ -908,7 +908,7 @@ it('finds a referral referred more than twelve months ago, unlike the repeat-ref
   const detailBody: { repeatReferrals?: { count: number } } = await detail.json();
   expect(detailBody.repeatReferrals?.count).toBe(0);
 
-  // The search reaches it anyway — there is no twelve-month window here.
+  // The search reaches it anyway — there is no fifteen-month window here.
   const response = await search(testApp, token, { postcode: 'GU43 1JJ' });
   expect(response.body.results.map((row) => row.referralId).sort()).toEqual(
     [old.id, recent.id].sort(),
@@ -943,7 +943,7 @@ it('does not find a referral once its personal data has been purged', async () =
     db,
     clock: fixedClock(NOW),
     logger: createLogger('silent'),
-    retentionDays: 365,
+    retentionDays: 456,
   });
 
   expect(await search(testApp, token, { postcode: 'GU44 2KK' })).toMatchObject({

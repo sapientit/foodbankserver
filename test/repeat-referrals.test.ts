@@ -655,14 +655,14 @@ describe('repeat-referral detection at review', () => {
       db,
       clock: fixedClock(NOW),
       logger: createLogger('silent'),
-      retentionDays: 365,
+      retentionDays: 456,
     });
 
     const after = await getReferral(testApp, token, self.id);
     expect(after.body.repeatReferrals).toEqual({ count: 0, mostRecentSessionDate: null });
   });
 
-  describe('the twelve-month window, on referredAt', () => {
+  describe('the fifteen-month window, on referredAt', () => {
     // London's date at this instant is 2026-08-21, one day ahead of the UTC
     // date 2026-08-20 — Britain is on BST (UTC+1) in August, so 23:30 UTC is
     // 00:30 the next day in London. That mismatch is deliberate: it is the
@@ -670,14 +670,14 @@ describe('repeat-referral detection at review', () => {
     // `.claude/rules/time.md`.
     const NOW_STRADDLING_BST = '2026-08-20T23:30:00.000Z';
 
-    // Twelve months (365 days — REPEAT_REFERRAL_LOOKBACK_DAYS) back from the
-    // London date above, 2026-08-21, is 2025-08-21 (no leap day falls between
-    // them). London is on BST in August 2025 too, so the cutoff instant —
-    // 2025-08-21 at 00:30 London — is 2025-08-20T23:30:00.000Z in UTC. Both
+    // Fifteen months (456 days — REPEAT_REFERRAL_LOOKBACK_DAYS) back from the
+    // London date above, 2026-08-21, is 2025-05-22 (no leap day falls between
+    // them). London is on BST in May 2025 too, so the cutoff instant —
+    // 2025-05-22 at 00:30 London — is 2025-05-21T23:30:00.000Z in UTC. Both
     // instants below are computed by hand, independently of the code under
     // test.
-    const JUST_INSIDE = '2025-08-20T23:30:00.000Z'; // exactly at the cutoff: inclusive
-    const JUST_OUTSIDE = '2025-08-20T23:29:00.000Z'; // one minute earlier: excluded
+    const JUST_INSIDE = '2025-05-21T23:30:00.000Z'; // exactly at the cutoff: inclusive
+    const JUST_OUTSIDE = '2025-05-21T23:29:00.000Z'; // one minute earlier: excluded
 
     it('includes a referral referred exactly at the cutoff and excludes one referred a minute earlier', async () => {
       const { testApp, token, world: w } = await referralWorld(NOW_STRADDLING_BST);
@@ -687,7 +687,7 @@ describe('repeat-referral detection at review', () => {
       // refuse all three of these. Submitted instead through a second app
       // instance clocked safely before the session, sharing the same
       // database; `referredAt` is overwritten explicitly below anyway, and
-      // the twelve-month window itself is read out through `testApp`'s own
+      // the fifteen-month window itself is read out through `testApp`'s own
       // clock via `getRepeatReferrals`.
       const submittingApp = buildTestApp({ clock: fixedClock('2026-08-09T09:00:00.000Z') });
       const inside = await submitReferral(
@@ -1392,13 +1392,13 @@ describe('the Exclude postcode matches checkbox (?excludePostcode)', () => {
     expect(list.body.count).toBeGreaterThan(list.body.matches.length);
   });
 
-  it('still applies the twelve-month window when excludePostcode=true', async () => {
-    // Same BST-straddling instants as "the twelve-month window, on
+  it('still applies the fifteen-month window when excludePostcode=true', async () => {
+    // Same BST-straddling instants as "the fifteen-month window, on
     // referredAt" above, computed by hand and independently of the code
     // under test.
     const NOW_STRADDLING_BST = '2026-08-20T23:30:00.000Z';
-    const JUST_INSIDE = '2025-08-20T23:30:00.000Z';
-    const JUST_OUTSIDE = '2025-08-20T23:29:00.000Z';
+    const JUST_INSIDE = '2025-05-21T23:30:00.000Z';
+    const JUST_OUTSIDE = '2025-05-21T23:29:00.000Z';
 
     const { testApp, token, world: w } = await referralWorld(NOW_STRADDLING_BST);
 

@@ -53,7 +53,6 @@ interface CrateResponseBody {
   readonly id: string;
   readonly name: string;
   readonly shelfKey: string;
-  readonly shelfSortKey: string;
   readonly groupingId: string;
   readonly sizePerCrate: number;
   readonly members: CrateMemberInput[];
@@ -160,16 +159,16 @@ describe('creating a crate', () => {
     );
   });
 
-  it('returns a shelfSortKey that interleaves with stock items in shelf-walk order', async () => {
+  it('carries a shelfKey a client can interleave with stock items by a plain string sort', async () => {
     const { testApp, token } = await loginAs('admin');
-    const before = await createItem(testApp, token, 'Before', 'A2');
-    const item1 = await createItem(testApp, token, 'Item One', 'A10');
-    const item2 = await createItem(testApp, token, 'Item Two', 'A10');
-    const after = await createItem(testApp, token, 'After', 'B1');
+    const before = await createItem(testApp, token, 'Before', 'B2');
+    const item1 = await createItem(testApp, token, 'Item One', 'C10');
+    const item2 = await createItem(testApp, token, 'Item Two', 'C10');
+    const after = await createItem(testApp, token, 'After', 'D1');
 
     const crate = await createCrate(testApp, token, {
       name: 'Mixed Crate',
-      shelfKey: 'A10',
+      shelfKey: 'C10',
       groupingId: NON_PERISHABLE_GROUPING_ID,
       sizePerCrate: 10,
       members: [
@@ -181,17 +180,15 @@ describe('creating a crate', () => {
     const itemsResponse = await testApp.request('/api/v1/stock/items?order=shelf', {
       headers: authHeaders(token),
     });
-    const { items: stockItems2 }: { items: { id: string; name: string; shelfSortKey: string }[] } =
+    const { items: stockItems2 }: { items: { id: string; name: string; shelfNumber: string }[] } =
       await itemsResponse.json();
 
     const merged = [
       ...stockItems2
         .filter((item) => item.id === before || item.id === after)
-        .map((item) => ({ name: item.name, shelfSortKey: item.shelfSortKey })),
-      { name: 'Mixed Crate', shelfSortKey: crate.shelfSortKey },
-    ].sort((a, b) =>
-      a.shelfSortKey < b.shelfSortKey ? -1 : a.shelfSortKey > b.shelfSortKey ? 1 : 0,
-    );
+        .map((item) => ({ name: item.name, key: item.shelfNumber })),
+      { name: 'Mixed Crate', key: crate.shelfKey },
+    ].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
 
     expect(merged.map((entry) => entry.name)).toEqual(['Before', 'Mixed Crate', 'After']);
   });

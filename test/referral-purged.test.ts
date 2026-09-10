@@ -23,7 +23,7 @@ import {
  * `assertNotPurged` — a referral whose details have been forgotten cannot be
  * acted on at all: no amend, no move, no cancel, no accept, no reject, no
  * mark-reviewed and no copy. `INITIAL_SPEC1.txt`, `#Referral maintenance`:
- * "twelve months on there is no name, no address and no answers left, so
+ * "fifteen months on there is no name, no address and no answers left, so
  * there is nothing to correct... nothing to move... nothing to cancel and
  * nothing to copy."
  */
@@ -58,7 +58,7 @@ async function purgedReferral(): Promise<{ testApp: TestApp; token: string; id: 
     db,
     clock: fixedClock(NOW),
     logger: createLogger('silent'),
-    retentionDays: 365,
+    retentionDays: 456,
   });
   expect(result.purged).toBe(1);
 
@@ -178,7 +178,7 @@ describe('a forgotten referral cannot be acted on', () => {
       db,
       clock: fixedClock(NOW),
       logger: createLogger('silent'),
-      retentionDays: 365,
+      retentionDays: 456,
     });
     expect(result.purged).toBe(1);
 
@@ -226,7 +226,7 @@ describe('a forgotten referral cannot be acted on', () => {
       db,
       clock: fixedClock(NOW),
       logger: createLogger('silent'),
-      retentionDays: 365,
+      retentionDays: 456,
     });
 
     const response = await testApp.request(`/api/v1/referrals/${held.id}/accept`, {
@@ -255,7 +255,7 @@ describe('a forgotten referral cannot be acted on', () => {
       db,
       clock: fixedClock(NOW),
       logger: createLogger('silent'),
-      retentionDays: 365,
+      retentionDays: 456,
     });
 
     const response = await testApp.request(`/api/v1/referrals/${held.id}/reject`, {

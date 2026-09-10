@@ -8,9 +8,8 @@ import {
   type PickList,
 } from '../../db/schema/pick-lists.ts';
 import { REFERRAL_STATUSES_HOLDING_A_PLACE, type Referral } from '../../db/schema/referrals.ts';
-import type { Session } from '../../db/schema/sessions.ts';
 import { instantToLondonWallClock } from '../../core/time/london.ts';
-import { startOfWeek } from '../../core/time/plain-date.ts';
+import { startOfWeek, type PlainDate } from '../../core/time/plain-date.ts';
 import type { VoucherConfigRepository } from '../voucher-config/voucher-config.repository.ts';
 import type { VoucherDateRange } from '../voucher-config/derivations.ts';
 import {
@@ -230,14 +229,15 @@ export function createPickListsService(deps: PickListsServiceDeps) {
   }
 
   /**
-   * What `toPrintParcelResponse` needs beyond the parcels themselves: the
-   * session's own date, to compare against the voucher range, and the range
-   * itself. Read fresh on every call — see `PrintParcelResponse` on why this
-   * is never cached alongside the pick list.
+   * What `toParcelResponse` needs beyond the parcels themselves to work out
+   * `voucherInstruction`: the session's own date, to compare against the
+   * voucher range, and the range itself. Read fresh on every call — see
+   * `ParcelResponse.voucherInstruction` on why this is never cached alongside
+   * the pick list.
    */
-  async function printContext(
+  async function voucherContext(
     pickList: PickList,
-  ): Promise<{ session: Session; voucherRange: VoucherDateRange | undefined }> {
+  ): Promise<{ sessionDate: PlainDate; voucherRange: VoucherDateRange | undefined }> {
     const session = await sessions.findById(pickList.sessionId);
     if (session === undefined) {
       throw new NotFoundError('Session not found');
@@ -245,7 +245,7 @@ export function createPickListsService(deps: PickListsServiceDeps) {
     const config = await voucherConfig.find();
 
     return {
-      session,
+      sessionDate: session.sessionDate,
       voucherRange:
         config === undefined ? undefined : { startDate: config.startDate, endDate: config.endDate },
     };
@@ -456,7 +456,7 @@ export function createPickListsService(deps: PickListsServiceDeps) {
       repository.listParcelsWithLines(pickListId),
     getParcel,
     listParcelsForPrint,
-    printContext,
+    voucherContext,
     setLine,
     removeLine,
     setParcelNotes,

@@ -322,7 +322,7 @@ describe('a purged household', () => {
       db,
       clock: fixedClock(NOW),
       logger: createLogger('silent'),
-      retentionDays: 365,
+      retentionDays: 456,
     });
 
     const details = await readDetails(testApp, token, world.sessionId);

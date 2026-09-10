@@ -1,10 +1,18 @@
 import type { Actor } from '../../core/actor.ts';
 import { parseAnswers } from '../../core/answers.ts';
+import type { PlainDate } from '../../core/time/plain-date.ts';
 import type {
   CollectionMethod,
   FirstTimeReviewStatus,
   Referral,
 } from '../../db/schema/referrals.ts';
+import {
+  firstTimeMarkerFor,
+  voucherInstructionFor,
+  type FirstTimeMarker,
+  type VoucherDateRange,
+  type VoucherInstruction,
+} from '../voucher-config/derivations.ts';
 import type { MatchKind } from './matching.ts';
 
 /**
@@ -107,7 +115,7 @@ export interface ReferralResponse {
    */
   readonly adminInfo?: string | null | undefined;
   /**
-   * How many times this household has been referred in the last twelve
+   * How many times this household has been referred in the last fifteen
    * months, and the session date of the most recent of those. Admin-only,
    * like the four fields above, and only present when the caller supplies
    * it — `GET /referrals/:id` fetches it for an administrator only, so a
@@ -286,6 +294,14 @@ export function toReceiptResponse(referral: Referral): ReferralReceiptResponse {
  * birth, nothing about the referrer. A listener needs to know what happened,
  * not where the household lives — and this ends up on paper in a hall.
  *
+ * `firstTimeMarker` and `voucherInstruction` are the one addition beyond
+ * "what went wrong": the listener is the person actually talking to the
+ * household, so they see whether it is new and what to do about a Christmas
+ * voucher — `INITIAL_SPEC1.txt`, `#Listener sheet`. They are the **same two
+ * derived enums** `Parcel` carries for the Run a session screen, with the
+ * same values and the same guarantee: no historic session date, nothing else
+ * about the referral. The client renders any wording.
+ *
  * `answers` is handed over **whole**, exactly as `toParcelResponse` does it.
  * The sheet's "Cause Details" is one of those answers, and which one is the
  * client's to know: it owns the form definition and the server holds none.
@@ -315,12 +331,36 @@ export interface ListenerSheetHousehold {
   readonly reason: string | null;
   readonly needsFuelHelp: boolean;
   readonly answers: Record<string, unknown>;
+  /**
+   * `first_time`, `admin` or no marker at all — identical to
+   * `Parcel.firstTimeMarker` and derived by the same
+   * `derivations.ts#firstTimeMarkerFor`. Tells the listener whether the
+   * household is new. Never the historic date or the raw review status;
+   * safe for a team lead for that reason.
+   */
+  readonly firstTimeMarker: FirstTimeMarker | null;
+  /**
+   * The one Christmas-voucher instruction for this household, or `null`
+   * outside the configured voucher range — identical to
+   * `Parcel.voucherInstruction` and derived by the same
+   * `derivations.ts#voucherInstructionFor`. Worked out fresh on every read,
+   * never persisted on the parcel: an administrator may make the
+   * first-time-review decision after the sheet has been produced once.
+   */
+  readonly voucherInstruction: VoucherInstruction | null;
+}
+
+/** The session's own date and the configured voucher range, for the derived status. */
+export interface ListenerSheetVoucherContext {
+  readonly sessionDate: PlainDate;
+  readonly voucherRange: VoucherDateRange | undefined;
 }
 
 export function toListenerSheetHousehold(
   referral: Referral,
   reasonLabel: string | undefined,
   pickNumber: number,
+  voucher: ListenerSheetVoucherContext,
 ): ListenerSheetHousehold {
   return {
     referralId: referral.id,
@@ -330,6 +370,11 @@ export function toListenerSheetHousehold(
     reason: reasonLabel ?? null,
     needsFuelHelp: referral.needsFuelHelp === 1,
     answers: parseAnswers(referral.answersJson),
+    firstTimeMarker: firstTimeMarkerFor(referral.firstTimeReviewStatus),
+    voucherInstruction: voucherInstructionFor(voucher.sessionDate, voucher.voucherRange, {
+      status: referral.firstTimeReviewStatus,
+      previousSessionDate: referral.firstTimeReviewDate,
+    }),
   };
 }
 

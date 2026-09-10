@@ -206,7 +206,7 @@ describe('the fuel help list', () => {
   });
 
   it('nulls the personal fields but keeps needsFuelHelp true on a purged referral', async () => {
-    // The retention window (twelve months) is far longer than this list's
+    // The retention window (fifteen months) is far longer than this list's
     // fourteen days, so this state cannot arise through the purge job itself
     // in the time this list looks back over — it is produced by hand to prove
     // the mapper's own behaviour rather than the job's reach. needsFuelHelp is
@@ -453,6 +453,7 @@ describe('the fuel help list', () => {
       '/api/v1/stock/levels',
       '/api/v1/stock/groupings',
       '/api/v1/stock/crates',
+      '/api/v1/stock/take/volunteer-codes/latest',
       '/api/v1/model-parcels',
       '/api/v1/parcel-grid',
       '/api/v1/users',

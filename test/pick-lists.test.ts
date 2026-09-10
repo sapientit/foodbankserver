@@ -674,8 +674,9 @@ describe('the printed sheet', () => {
     const body: { parcels: { lines: { name: string; shelfNumber: string }[] }[] } =
       await response.json();
 
-    // Cereal A1, Beans A2, Pasta A10 — not alphabetical, not insertion order.
-    expect(body.parcels[0]?.lines.map((l) => l.name)).toEqual(['Cereal', 'Beans', 'Pasta']);
+    // Pasta A1, Cereal A2, Beans A3 — a plain sort of the shelf label, not
+    // alphabetical by name, not insertion order.
+    expect(body.parcels[0]?.lines.map((l) => l.name)).toEqual(['Pasta', 'Cereal', 'Beans']);
   });
 
   it('orders parcel lines on the maintenance view by shelf too', async () => {
@@ -685,10 +686,10 @@ describe('the printed sheet', () => {
 
     const { parcels: rows } = await readPickList(testApp, token, id);
 
-    // Cereal A1, Beans A2, Pasta A10 is shelf order. Category order would
-    // read Cereal (Breakfast), Pasta (Dried Goods), Beans (Tinned Goods) —
-    // Beans and Pasta swapped — so this genuinely distinguishes the two.
-    expect(rows[0]?.lines.map((line) => line.name)).toEqual(['Cereal', 'Beans', 'Pasta']);
+    // Pasta A1, Cereal A2, Beans A3 is shelf order. Category order would read
+    // Cereal (Breakfast), Pasta (Dried Goods), Beans (Tinned Goods) — so this
+    // genuinely distinguishes the two.
+    expect(rows[0]?.lines.map((line) => line.name)).toEqual(['Pasta', 'Cereal', 'Beans']);
   });
 
   it('never carries the reason for referral', async () => {

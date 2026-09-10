@@ -76,7 +76,7 @@ alternatives for the same referral. `INITIAL_SPEC1.txt`, `#Copying a referral`.
 **A purged referral is terminal in a stronger sense**: amend, move, cancel, accept, reject,
 mark-reviewed and copy are all refused once `piiPurgedAt` is set. `assertNotPurged` is the shared
 guard for the paths that read first; `updateIfStatus` carries `pii_purged_at IS NULL` for the two
-that do not. Twelve months on there is nothing left to act on — `INITIAL_SPEC1.txt`,
+that do not. Fifteen months on there is nothing left to act on — `INITIAL_SPEC1.txt`,
 `#Referral maintenance`.
 
 **`outcome` is not `status`.** `status` is what became of the referral; `outcome` — `attended` |
@@ -254,17 +254,24 @@ Because cancellation has to reach `parcels` in the **same** `db.batch()` as the 
 back an unexecuted statement, and a second write outside the batch would be free to fail on its own,
 leaving exactly the state this removes with nothing recording it.
 
-**The voucher instruction is calculated at print time and never stored.** `PrintParcel.voucherInstruction`
+**The voucher instruction is calculated on every read and never stored.** `Parcel.voucherInstruction`
 (`modules/voucher-config/derivations.ts#voucherInstructionFor`) reads the session's date, the
 voucher range and the referral's `firstTimeReviewStatus`/`firstTimeReviewDate` fresh on every call to
-`GET /pick-lists/{id}/print` — nothing is written onto `parcels` and nothing is computed at
-generation. An administrator may make the first-time-review decision after a pick list already
-exists, and the spec is explicit that printing must reflect the decision as it stands **now**, not as
-it stood when the list was made. `Parcel.firstTimeMarker`
-(`derivations.ts#firstTimeMarkerFor`) is the same kind of derivation for the Run a session screen,
-computed in the mapper rather than the print service, and deliberately narrower: `first_time` or
-`admin` or no marker at all, never the historic date — that is what makes it safe to hand to a team
-lead when `firstTimeReview` itself is admin-only.
+`GET /sessions/{sessionId}/pick-list` and `GET /pick-lists/{id}` — nothing is written onto `parcels`
+and nothing is computed at generation. An administrator may make the first-time-review decision after
+a pick list already exists, and the spec is explicit that the Run a session screen must reflect the
+decision as it stands **now**, not as it stood when the list was made. It is **not** on
+`PrintParcel`: the voucher is handed over at the session, not off the sheet carried round the hall.
+`Parcel.firstTimeMarker` (`derivations.ts#firstTimeMarkerFor`) is the same kind of derivation for the
+same screen, and deliberately narrower: `first_time` or `admin` or no marker at all, never the
+historic date — that is what makes it safe to hand to a team lead when `firstTimeReview` itself is
+admin-only.
+
+`ListenerSheetHousehold` carries `firstTimeMarker` and `voucherInstruction` too — the **same two
+enums** with the same values, for the listener, who is the person actually talking to the household.
+`referrals.service.ts#listenerSheet` reads the voucher-config row and calls the same
+`firstTimeMarkerFor` / `voucherInstructionFor`, so the sheet and the Run a session screen can never
+disagree. No new derivation, and nothing exposed that the two parcel fields do not already expose.
 
 **`referrals.first_time_review_status` carries no `CHECK` constraint**, the same deliberate omission
 `collection_method` made in migration `0032`: `referrals` is a foreign-key parent (`parcels`,

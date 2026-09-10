@@ -8,8 +8,12 @@ import { users } from './users.ts';
  * an account the volunteer would never otherwise need. The code reaches the
  * grouped stock take and nothing else — not the item list, not a correction,
  * not anything with a household's name on it (see `INITIAL_SPEC1.txt`,
- * #Stock maintenance and #Login). It lasts eight hours and there is no record
- * of it once it has lapsed.
+ * #Stock maintenance and #Login). It lasts fourteen days
+ * (`VOLUNTEER_CODE_TTL_SECONDS`); nothing ends one sooner, and generating
+ * another leaves earlier codes valid to their own expiry. Lapsed rows are
+ * swept only when the next code is generated, so a lapsed row can linger in
+ * the table — but it is never surfaced ("nothing is kept once it has
+ * lapsed"): `authenticate` refuses it and `findLatestActive` filters it out.
  *
  * Only the SHA-256 hash of the normalised code is stored, exactly as refresh
  * tokens are — a database dump yields nothing usable. The code is 80 bits of

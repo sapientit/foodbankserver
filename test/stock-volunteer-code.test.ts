@@ -1,9 +1,12 @@
 import { env } from 'cloudflare:workers';
 import { eq } from 'drizzle-orm';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { VOLUNTEER_CODE_TTL_SECONDS } from '../src/config/constants.ts';
+import {
+  VOLUNTEER_CODE_RENEWAL_WARNING_SECONDS,
+  VOLUNTEER_CODE_TTL_SECONDS,
+} from '../src/config/constants.ts';
 import { fixedClock } from '../src/core/clock.ts';
-import { normaliseVolunteerCode, sha256Hex } from '../src/core/crypto/tokens.ts';
+import { mintVolunteerCode, normaliseVolunteerCode, sha256Hex } from '../src/core/crypto/tokens.ts';
 import { createDatabase } from '../src/db/client.ts';
 import { crateMembers, crates } from '../src/db/schema/crates.ts';
 import { stockItems, stockLedger } from '../src/db/schema/stock.ts';
@@ -89,7 +92,7 @@ beforeEach(async () => {
 });
 
 describe('minting a volunteer code', () => {
-  it('lets an admin mint a code shaped XXXX-XXXX-XXXX-XXXX that expires 8h after issue', async () => {
+  it('lets an admin mint a code shaped XXXX-XXXX-XXXX-XXXX that expires 14 days after issue', async () => {
     const { testApp, token } = await adminApp();
 
     const { code, expiresAt, status } = await generateCode(testApp, token);
@@ -98,7 +101,7 @@ describe('minting a volunteer code', () => {
     // Crockford base32 in four groups of four — no I, L, O or U.
     expect(code).toMatch(/^[0-9A-HJKMNP-TV-Z]{4}(-[0-9A-HJKMNP-TV-Z]{4}){3}$/);
     expect(expiresAt).toBe(issueEpochSeconds + VOLUNTEER_CODE_TTL_SECONDS);
-    expect(VOLUNTEER_CODE_TTL_SECONDS).toBe(8 * 60 * 60);
+    expect(VOLUNTEER_CODE_TTL_SECONDS).toBe(14 * 24 * 60 * 60);
   });
 
   it('lets a team lead mint a code', async () => {
@@ -278,10 +281,11 @@ describe('an unknown or expired code', () => {
     expect(body.error.message).toBe('Invalid volunteer code');
   });
 
-  it('holds the 8h window across the October BST->GMT changeover', async () => {
+  it('holds the 14-day window across the October BST->GMT changeover', async () => {
     // Issue at 22:30 UTC on changeover day; the clocks go back at 01:00 UTC, so
-    // the London wall clock is BST at issue and GMT at expiry. The window is
-    // still exactly 8h of real time.
+    // the London wall clock is BST at issue and GMT hours later. Fourteen days
+    // of real time still straddle the changeover, and the window is still
+    // exactly 14 days of real time — absolute epoch seconds, no wall-clock drift.
     const issue = '2026-10-25T22:30:00Z';
     const issueSecs = Math.floor(Date.parse(issue) / 1000);
     const issuer = buildTestApp({ clock: fixedClock(issue) });
@@ -304,6 +308,195 @@ describe('an unknown or expired code', () => {
 
     expect((await at(expiresAt - 1)).status).toBe(200);
     expect((await at(expiresAt)).status).toBe(401);
+  });
+});
+
+describe('the latest code and the expiring-soon warning', () => {
+  const LATEST_PATH = '/api/v1/stock/take/volunteer-codes/latest';
+
+  interface LatestBody {
+    readonly expiresAt: number;
+    readonly expiringSoon: boolean;
+  }
+
+  /** An admin token minted against `app`'s own clock, so it is not itself expired. */
+  async function adminOn(app: TestApp): Promise<string> {
+    const { accessToken } = await devLogin(app, { email: 'admin@foodbank.org' });
+    return accessToken;
+  }
+
+  async function readLatest(
+    app: TestApp,
+    token: string,
+  ): Promise<{ status: number; latest: LatestBody | null }> {
+    const response = await app.request(LATEST_PATH, { headers: authHeaders(token) });
+    const body: { latest: LatestBody | null } = await response.json();
+    return { status: response.status, latest: body.latest };
+  }
+
+  it('reports no latest code before any code has ever been generated', async () => {
+    const app = issuerApp();
+    const token = await adminOn(app);
+
+    const response = await app.request(LATEST_PATH, { headers: authHeaders(token) });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ latest: null });
+  });
+
+  it('reports a fresh code by its expiry time, with no warning and nothing else', async () => {
+    const { testApp: lead, token: leadToken } = await teamLeadApp();
+    await generateCode(lead, leadToken);
+
+    const app = issuerApp();
+    const token = await adminOn(app);
+    const { status, latest } = await readLatest(app, token);
+
+    expect(status).toBe(200);
+    // The whole object, so a widened response (a leaked column, the issuer's
+    // id) is caught here.
+    expect(latest).toEqual({
+      expiresAt: issueEpochSeconds + VOLUNTEER_CODE_TTL_SECONDS,
+      expiringSoon: false,
+    });
+  });
+
+  it('reports the newer code when more than one is still live', async () => {
+    const { testApp: lead, token: leadToken } = await teamLeadApp();
+    await generateCode(lead, leadToken);
+
+    // A few days on, still inside codeA's 14-day life, a second team lead mints codeB.
+    const daysOn = 3 * 24 * 60 * 60;
+    const later = laterApp(daysOn);
+    const { accessToken: laterLeadToken } = await devLogin(later, {
+      email: 'lead2@foodbank.org',
+      role: 'team_lead',
+    });
+    const codeB = await generateCode(later, laterLeadToken);
+    expect(codeB.status).toBe(201);
+
+    const adminLater = laterApp(daysOn);
+    const token = await adminOn(adminLater);
+    const { latest } = await readLatest(adminLater, token);
+
+    expect(latest?.expiresAt).toBe(codeB.expiresAt);
+    expect(latest?.expiresAt).toBe(issueEpochSeconds + daysOn + VOLUNTEER_CODE_TTL_SECONDS);
+  });
+
+  it('withholds the warning until the code is strictly inside the renewal window', async () => {
+    const { testApp: lead, token: leadToken } = await teamLeadApp();
+    await generateCode(lead, leadToken);
+
+    // At exactly `TTL - WINDOW` from issue, secondsLeft === WINDOW, and the test
+    // is `secondsLeft < WINDOW` — so still no warning.
+    const atBoundary = laterApp(
+      VOLUNTEER_CODE_TTL_SECONDS - VOLUNTEER_CODE_RENEWAL_WARNING_SECONDS,
+    );
+    const boundaryToken = await adminOn(atBoundary);
+    expect((await readLatest(atBoundary, boundaryToken)).latest?.expiringSoon).toBe(false);
+
+    // One second later, secondsLeft === WINDOW - 1 < WINDOW — warning on.
+    const justInside = laterApp(
+      VOLUNTEER_CODE_TTL_SECONDS - VOLUNTEER_CODE_RENEWAL_WARNING_SECONDS + 1,
+    );
+    const insideToken = await adminOn(justInside);
+    expect((await readLatest(justInside, insideToken)).latest?.expiringSoon).toBe(true);
+  });
+
+  it('reports nothing once the last code has lapsed, though its row lingers unswept', async () => {
+    const { testApp: lead, token: leadToken } = await teamLeadApp();
+    await generateCode(lead, leadToken);
+
+    // Past expiry. Only `generate` sweeps, so the row is still in the table —
+    // but a lapsed code is not kept, so the endpoint reports none.
+    const afterExpiry = laterApp(VOLUNTEER_CODE_TTL_SECONDS + 1);
+    const token = await adminOn(afterExpiry);
+    const { status, latest } = await readLatest(afterExpiry, token);
+
+    expect(status).toBe(200);
+    expect(latest).toBeNull();
+    expect(await db.select().from(volunteerCodes)).toHaveLength(1);
+  });
+
+  it('leaves earlier still-valid codes authenticating when a newer code is minted', async () => {
+    const { testApp: lead, token: leadToken } = await teamLeadApp();
+    const codeA = await generateCode(lead, leadToken);
+    expect(codeA.status).toBe(201);
+
+    const daysOn = 3 * 24 * 60 * 60;
+    const later = laterApp(daysOn);
+    const { accessToken: laterLeadToken } = await devLogin(later, {
+      email: 'lead2@foodbank.org',
+      role: 'team_lead',
+    });
+    const codeB = await generateCode(later, laterLeadToken);
+    expect(codeB.status).toBe(201);
+
+    // Both codes still open the stock take at the later moment.
+    for (const [label, code] of [
+      ['codeA', codeA.code],
+      ['codeB', codeB.code],
+    ] as const) {
+      const response = await laterApp(daysOn).request('/api/v1/stock/levels', {
+        headers: codeHeader(code),
+      });
+      expect(response.status, label).toBe(200);
+    }
+
+    // The admin warning names the newer code.
+    const adminLater = laterApp(daysOn);
+    const token = await adminOn(adminLater);
+    expect((await readLatest(adminLater, token)).latest?.expiresAt).toBe(codeB.expiresAt);
+  });
+
+  it('honours a code stored with a shorter 8-hour expiry, up to and refused at that instant', async () => {
+    const app = issuerApp();
+    const { userId } = await devLogin(app, { email: 'lead@foodbank.org', role: 'team_lead' });
+
+    const code = mintVolunteerCode();
+    await db.insert(volunteerCodes).values({
+      id: crypto.randomUUID(),
+      codeHash: await sha256Hex(normaliseVolunteerCode(code)),
+      createdByUserId: userId,
+      createdAt: issueEpochSeconds,
+      expiresAt: issueEpochSeconds + 8 * 60 * 60,
+    });
+
+    const justBefore = await laterApp(8 * 60 * 60 - 1).request('/api/v1/stock/levels', {
+      headers: codeHeader(code),
+    });
+    expect(justBefore.status).toBe(200);
+
+    const atExpiry = await laterApp(8 * 60 * 60).request('/api/v1/stock/levels', {
+      headers: codeHeader(code),
+    });
+    expect(atExpiry.status).toBe(401);
+  });
+
+  it('is reachable only with an admin bearer token', async () => {
+    // Signed out.
+    expect((await issuerApp().request(LATEST_PATH)).status).toBe(401);
+
+    // A real volunteer code, presented as the header — no bearer token.
+    const { testApp: lead, token: leadToken } = await teamLeadApp();
+    const { code } = await generateCode(lead, leadToken);
+    const withCode = await issuerApp().request(LATEST_PATH, { headers: codeHeader(code) });
+    expect(withCode.status).toBe(401);
+
+    // A team lead bearer token: authenticated, but not an admin.
+    const leadBearer = issuerApp();
+    const { accessToken: tlToken } = await devLogin(leadBearer, {
+      email: 'lead@foodbank.org',
+      role: 'team_lead',
+    });
+    const asLead = await leadBearer.request(LATEST_PATH, { headers: authHeaders(tlToken) });
+    expect(asLead.status).toBe(403);
+
+    // An admin bearer token.
+    const adminBearer = issuerApp();
+    const adminToken = await adminOn(adminBearer);
+    const asAdmin = await adminBearer.request(LATEST_PATH, { headers: authHeaders(adminToken) });
+    expect(asAdmin.status).toBe(200);
   });
 });
 

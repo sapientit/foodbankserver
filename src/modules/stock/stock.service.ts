@@ -9,7 +9,6 @@ import { isUniqueViolation } from '../../db/unique-violation.ts';
 import { standardiseCategory } from './category.ts';
 import { decomposeCrateCount } from './crate-decomposition.ts';
 import type { CratesRepository } from './crates.repository.ts';
-import { shelfSortKey } from './shelf-sort.ts';
 import { computeStockValidationIssues, type StockValidationIssue } from './stock-validation.ts';
 import type { StockLevel, StockRepository } from './stock.repository.ts';
 import { MAX_COUNTED_QUANTITY, type StockOrder } from './stock.schema.ts';
@@ -101,7 +100,6 @@ export function createStockService({
         category: standardiseCategory(input.category),
         description: emptyToNull(input.description),
         shelfNumber: input.shelfNumber,
-        shelfSortKey: shelfSortKey(input.shelfNumber),
         lowStockThreshold: input.lowStockThreshold ?? null,
         groupingId,
         unitsPerPack: input.unitsPerPack ?? null,
@@ -133,10 +131,9 @@ export function createStockService({
 
     const next: Patch<NewStockItem> = { ...patch, updatedAt: clock.nowIso() };
 
-    // Both derived columns must move with the value they are derived from,
-    // or the list silently sorts or matches on stale data.
+    // `name_normalised` must move with the name it is derived from, or the list
+    // silently sorts or matches on stale data.
     if (patch.name !== undefined) next.nameNormalised = patch.name.trim().toLowerCase();
-    if (patch.shelfNumber !== undefined) next.shelfSortKey = shelfSortKey(patch.shelfNumber);
 
     // The category is settled the same way on amendment as on creation, or an
     // administrator correcting a typo would be the one person who can create a

@@ -8,6 +8,7 @@ import { createPickListsRepository } from '../pick-lists/pick-lists.repository.t
 import { createReferrersRepository } from '../referrers/referrers.repository.ts';
 import { createReferrersService } from '../referrers/referrers.service.ts';
 import { createSessionsRepository } from '../sessions/sessions.repository.ts';
+import { createVoucherConfigRepository } from '../voucher-config/voucher-config.repository.ts';
 import type { Referral } from '../../db/schema/referrals.ts';
 import { createReferralsRepository } from './referrals.repository.ts';
 import { createReferralsService, type ReferralsService } from './referrals.service.ts';
@@ -117,7 +118,7 @@ export function referralRoutes(): Hono<AppEnv> {
 
   /**
    * The button behind the summary above: this household's referrals from the
-   * last twelve months, each shown in full — capped at the fifty most recent,
+   * last fifteen months, each shown in full — capped at the fifty most recent,
    * while `count` stays the true total.
    *
    * Admin only, and more sensitive than the summary — it carries another
@@ -343,5 +344,6 @@ function serviceFor(c: Context<AppEnv>) {
     referrers,
     referrersService: createReferrersService({ repository: referrers, clock }),
     pickLists: createPickListsRepository(db),
+    voucherConfig: createVoucherConfigRepository(db),
   });
 }

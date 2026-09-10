@@ -92,7 +92,7 @@ configuration.**
    whatever `Origin` arrives, which is no policy at all. Empty means same-origin only, which is
    correct if the frontend ships as Workers static assets.
 4. Implement Google auth. `AUTH_MODE=google` currently means "no way to log in".
-5. Set `PII_RETENTION_DAYS=365` — the period is settled; see below.
+5. Set `PII_RETENTION_DAYS=456` — the period is settled; see below.
 6. Set the spreadsheet extract's two values, if and when the charity wants it running. **Neither is
    a secret and neither is a Google credential** — the server has none. They are plain `vars` in
    `wrangler.jsonc`, with **different values per environment**, so a test deployment cannot write
@@ -108,7 +108,7 @@ configuration.**
    Two things to be deliberate about before turning it on, both the charity's to weigh and neither
    enforceable from here: **residency** — a Workspace with EU data regions keeps the residency the
    D1 jurisdiction was chosen for, a personal Gmail account does not — and the fact that **the
-   twelve-month purge cannot reach the spreadsheet**. See
+   fifteen-month purge cannot reach the spreadsheet**. See
    [`../engineering/personal-data.md`](../engineering/personal-data.md).
 
    Note there is nothing to `wrangler secret put` here. If you find yourself creating a Google
@@ -146,13 +146,13 @@ is refused with a `403` rather than answered.
 
 ## Retention
 
-The period is **twelve months**, settled by the charity on 2026-08-06 (`INITIAL_SPEC1.txt`,
-`#Forgetting a referral`). `PII_RETENTION_DAYS` is nonetheless still **unset**, so the purge runs
-nightly and purges nothing. Setting it to `365` is the whole change — and it is the moment the
-system starts deleting personal data, which is why it is a deliberate step at go-live rather than
-something already done.
+The period is **fifteen months**, settled by the charity on 2026-08-06 at twelve months and revised
+to fifteen on 2026-09-09 (`INITIAL_SPEC1.txt`, `#Forgetting a referral`). `PII_RETENTION_DAYS` is
+nonetheless still **unset**, so the purge runs nightly and purges nothing. Setting it to `456` is
+the whole change — and it is the moment the system starts deleting personal data, which is why it is
+a deliberate step at go-live rather than something already done.
 
-Twelve months is also the lookback the repeat-referral count on the review screen depends on. Do not
+Fifteen months is also the lookback the repeat-referral count on the review screen depends on. Do not
 shorten one without the other: a shorter retention makes that count under-report silently.
 
 ## Migrating production the first time

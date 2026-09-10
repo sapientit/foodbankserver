@@ -277,7 +277,7 @@ describe('purging personal data', () => {
   it("removes every one of the referee's own columns once it does", async () => {
     const { id } = await seedOldReferral();
 
-    const result = await purgeReferralPii(deps(365));
+    const result = await purgeReferralPii(deps(456));
 
     expect(result.purged).toBe(1);
     const [row] = await db.select().from(referrals).where(eq(referrals.id, id));
@@ -302,7 +302,7 @@ describe('purging personal data', () => {
   it("keeps the referrer's own details, which the purge is not aimed at", async () => {
     const { id } = await seedOldReferral();
 
-    await purgeReferralPii(deps(365));
+    await purgeReferralPii(deps(456));
     const [row] = await db.select().from(referrals).where(eq(referrals.id, id));
 
     // The retention period exists to stop holding details of the household that
@@ -315,7 +315,7 @@ describe('purging personal data', () => {
   it('keeps what reporting needs, because it is no longer personal data', async () => {
     const { id } = await seedOldReferral();
 
-    await purgeReferralPii(deps(365));
+    await purgeReferralPii(deps(456));
     const [row] = await db.select().from(referrals).where(eq(referrals.id, id));
 
     // "We fed 340 households, 890 people, 22% for benefit delay" must survive.
@@ -330,7 +330,7 @@ describe('purging personal data', () => {
   it('drops the dynamic answers whole, because nothing can classify them', async () => {
     const { id } = await seedOldReferral();
 
-    await purgeReferralPii(deps(365));
+    await purgeReferralPii(deps(456));
     const [row] = await db.select().from(referrals).where(eq(referrals.id, id));
 
     // The form is client configuration, so the server has no `isPii` flag to
@@ -344,7 +344,7 @@ describe('purging personal data', () => {
     const world = await setUpReferralWorld(testApp, accessToken);
     const { id } = await submitReferral(testApp, world);
 
-    const result = await purgeReferralPii(deps(365));
+    const result = await purgeReferralPii(deps(456));
 
     expect(result.purged).toBe(0);
     const [row] = await db.select().from(referrals).where(eq(referrals.id, id));
@@ -354,8 +354,8 @@ describe('purging personal data', () => {
   it('is idempotent — a second run purges nothing further', async () => {
     await seedOldReferral();
 
-    expect((await purgeReferralPii(deps(365))).purged).toBe(1);
-    expect((await purgeReferralPii(deps(365))).purged).toBe(0);
+    expect((await purgeReferralPii(deps(456))).purged).toBe(1);
+    expect((await purgeReferralPii(deps(456))).purged).toBe(0);
   });
 });
 

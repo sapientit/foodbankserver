@@ -9,6 +9,7 @@ import { createPickListsRepository } from '../pick-lists/pick-lists.repository.t
 import { createReferrersRepository } from '../referrers/referrers.repository.ts';
 import { createReferrersService } from '../referrers/referrers.service.ts';
 import { createSessionsRepository } from '../sessions/sessions.repository.ts';
+import { createVoucherConfigRepository } from '../voucher-config/voucher-config.repository.ts';
 import {
   createExportsService,
   extractConfig,
@@ -107,6 +108,7 @@ function serviceFor(c: Context<AppEnv>) {
       referrers,
       referrersService,
       pickLists: createPickListsRepository(db),
+      voucherConfig: createVoucherConfigRepository(db),
     }),
     referrersService,
     clock,

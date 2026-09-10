@@ -94,11 +94,14 @@ export function pickListRoutes(): Hono<AppEnv> {
     const service = serviceFor(c);
     const pickList = await service.getPickListForSession(c.req.param('sessionId'));
     const parcels = await service.listParcelsWithLines(pickList.id);
+    const voucher = await service.voucherContext(pickList);
     const byId = await referralsBySession(c, pickList.sessionId);
 
     return c.json<{ pickList: ReturnType<typeof toPickListResponse>; parcels: ParcelResponse[] }>({
       pickList: toPickListResponse(pickList),
-      parcels: parcels.map((entry) => toParcelResponse(entry, byId.get(entry.parcel.referralId))),
+      parcels: parcels.map((entry) =>
+        toParcelResponse(entry, byId.get(entry.parcel.referralId), voucher),
+      ),
     });
   });
 
@@ -136,11 +139,14 @@ export function pickListRoutes(): Hono<AppEnv> {
     const service = serviceFor(c);
     const pickList = await service.getPickList(c.req.param('id'));
     const parcels = await service.listParcelsWithLines(pickList.id);
+    const voucher = await service.voucherContext(pickList);
     const byId = await referralsBySession(c, pickList.sessionId);
 
     return c.json({
       pickList: toPickListResponse(pickList),
-      parcels: parcels.map((entry) => toParcelResponse(entry, byId.get(entry.parcel.referralId))),
+      parcels: parcels.map((entry) =>
+        toParcelResponse(entry, byId.get(entry.parcel.referralId), voucher),
+      ),
     });
   });
 
@@ -162,7 +168,6 @@ export function pickListRoutes(): Hono<AppEnv> {
     const service = serviceFor(c);
     const pickList = await service.getPickList(c.req.param('id'));
     const parcels = await service.listParcelsForPrint(pickList.id);
-    const { session, voucherRange } = await service.printContext(pickList);
 
     const byId = await referralsBySession(c, pickList.sessionId);
 
@@ -172,10 +177,7 @@ export function pickListRoutes(): Hono<AppEnv> {
     }>({
       pickList: toPickListResponse(pickList),
       parcels: parcels.map((entry) =>
-        toPrintParcelResponse(entry, byId.get(entry.parcel.referralId), {
-          sessionDate: session.sessionDate,
-          voucherRange,
-        }),
+        toPrintParcelResponse(entry, byId.get(entry.parcel.referralId)),
       ),
     });
   });

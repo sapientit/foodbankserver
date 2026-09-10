@@ -20,13 +20,16 @@ export interface StockLevel {
  *
  * Category order falls back to the name — `name_normalised` rather than `name`,
  * so `beans` and `Beans` do not sort into different places within a group.
- * Shelf order needs no tiebreak: `shelf_sort_key` is what the picker follows,
- * and two items on one shelf are in whatever order the shelf has them.
+ * Shelf order is a plain sort of `shelf_number` exactly as it was typed: the
+ * charity does not want the system being clever about numbers inside the label,
+ * so `A10` sorts before `A2` and labelling the shelves so the walk comes out
+ * right is a warehouse job. No tiebreak — two items on one shelf are in
+ * whatever order the shelf has them.
  */
 function orderColumns(order: StockOrder) {
   return order === 'category'
     ? [asc(stockItems.category), asc(stockItems.nameNormalised)]
-    : [asc(stockItems.shelfSortKey)];
+    : [asc(stockItems.shelfNumber)];
 }
 
 export function createStockRepository(db: Database) {

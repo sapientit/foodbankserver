@@ -237,7 +237,7 @@ describe('POST /referrals/{id}/first-time-review', () => {
       db,
       clock: fixedClock(NOW),
       logger: createLogger('silent'),
-      retentionDays: 365,
+      retentionDays: 456,
     });
     expect(result.purged).toBe(1);
 
@@ -301,7 +301,7 @@ describe('POST /referrals/{id}/first-time-review', () => {
     });
   });
 
-  it('survives the twelve-month PII purge, unlike the referee’s own fields', async () => {
+  it('survives the fifteen-month PII purge, unlike the referee’s own fields', async () => {
     const { testApp, token, world: w } = await world();
     const { id } = await submitReferral(testApp, w);
 
@@ -319,7 +319,7 @@ describe('POST /referrals/{id}/first-time-review', () => {
       db,
       clock: fixedClock(NOW),
       logger: createLogger('silent'),
-      retentionDays: 365,
+      retentionDays: 456,
     });
     expect(result.purged).toBe(1);
 

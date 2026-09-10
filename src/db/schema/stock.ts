@@ -61,10 +61,13 @@ export const stockItems = sqliteTable(
      */
     category: text('category').notNull().default('Uncategorised'),
 
-    /** As displayed: 'A1', '12b'. Alphanumeric, because shelves are labelled by people. */
+    /**
+     * As displayed: 'A1', '12b'. Alphanumeric, because shelves are labelled by
+     * people. The order for the stock take and the printed pick sheet is a
+     * plain sort of this string exactly as typed — 'A10' sorts before 'A2', and
+     * numbering the shelves so the walk comes out right is a labelling job.
+     */
     shelfNumber: text('shelf_number').notNull(),
-    /** Zero-padded so 'A2' sorts before 'A10'. Computed on write in TypeScript. */
-    shelfSortKey: text('shelf_sort_key').notNull(),
 
     /**
      * Below this, the item counts towards the low-stock summary. Optional,
@@ -106,7 +109,7 @@ export const stockItems = sqliteTable(
     updatedAt: text('updated_at').notNull(),
   },
   (table) => [
-    index('idx_stock_items_shelf').on(table.shelfSortKey),
+    index('idx_stock_items_shelf').on(table.shelfNumber),
     index('idx_stock_items_name').on(table.nameNormalised),
     check('stock_items_is_active_boolean', sql`${table.isActive} IN (0, 1)`),
     check(

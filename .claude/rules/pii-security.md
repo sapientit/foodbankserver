@@ -59,7 +59,7 @@ anonymised, and on 2026-08-23 (closing Q32 and Q43) that its parcel — pick-lis
 — is deleted with it — `INITIAL_SPEC1.txt`, `#Forgetting a referral`. The code below hasn't been
 rewritten to match; that's tracked in `STATUS.md` under "Agreed but not yet built". Two FKs will need
 handling when it is: `parcels.referral_id` (`NOT NULL`, no `ON DELETE`) and `sms_messages.referral_id`
-(nullable, also no `ON DELETE` — in practice always empty by twelve months, since SMS rows live
+(nullable, also no `ON DELETE` — in practice always empty by fifteen months, since SMS rows live
 thirty days, but the purge can't assume that). Not urgent while the system isn't live. Don't restore
 the anonymising design once this is rebuilt.
 
@@ -72,9 +72,9 @@ identifying columns are null those become statistics, which is how reporting sur
 only works because the reason is chosen from a list rather than typed.
 
 It is wired into the nightly cron and **does nothing until `PII_RETENTION_DAYS` is set**. The
-charity has settled the period at **twelve months** (`INITIAL_SPEC1.txt`, `#Forgetting a referral`),
-so the value is `365` — but the variable is still unset, because setting it is what actually starts
-deleting. Do not change the period; twelve months is also the floor the repeat-referral count on the
+charity has settled the period at **fifteen months** (`INITIAL_SPEC1.txt`, `#Forgetting a referral`),
+so the value is `456` — but the variable is still unset, because setting it is what actually starts
+deleting. Do not change the period; fifteen months is also the floor the repeat-referral count on the
 review screen depends on, and shortening it silently makes that count under-report.
 
 ## Validation

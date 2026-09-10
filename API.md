@@ -198,7 +198,7 @@ gap — say so rather than assuming this closes it.
 
 A team lead can hand a volunteer a code to count the stock with, so somebody
 with no account can do the weekly stock take. It is a header, not a token, it
-reaches the stock take and nothing else, and it lapses after eight hours. See
+reaches the stock take and nothing else, and it lapses after fourteen days. See
 §4, "Counting the stock without an account".
 
 ---
@@ -678,7 +678,7 @@ Six things to build around:
   the call; a rule that turned a household away on the strength of a shared
   postcode would be the wrong kind of help. The charity was explicit about this.
 
-The lookback is twelve months, counted from when each referral was made — the
+The lookback is fifteen months, counted from when each referral was made — the
 same clock the retention purge runs on, so a household whose details have been
 forgotten cannot be found. That is accepted, not a bug: there is nothing left to
 match on.
@@ -734,7 +734,7 @@ them slightly wrong, and a search insisting they all agree would fail exactly
 when it was needed.
 
 **Cancelled and rejected referrals are searchable and returned**, and there is
-no twelve-month window here — unlike the duplicate count. A referral whose
+no fifteen-month window here — unlike the duplicate count. A referral whose
 details have been purged cannot be found, because the purge nulls the columns
 this searches on.
 
@@ -923,7 +923,7 @@ dated YYYY-MM-DD`, the date the **original** was submitted, London. It replaces
 rather than extends — the original's note does not come across.
 
 **`referredAt` is the moment the copy was made**, not the original's, so it
-sorts as a new referral on the search screen and gets its own twelve months
+sorts as a new referral on the search screen and gets its own fifteen months
 before the purge.
 
 **`reasonId` comes across even if the charity has since retired it** — unlike
@@ -951,7 +951,7 @@ refuse a second copy for you.
 
 Once `piiPurgedAt` is set, `PATCH /referrals/{id}` (correcting **or** moving),
 `POST /referrals/{id}/cancel`, `/accept`, `/reject`, `/review` and `/copy` are
-all a `409`. Twelve months on there is no name, no address and no answers left,
+all a `409`. Fifteen months on there is no name, no address and no answers left,
 so there is nothing to correct, decide on, read through, move or copy. Hide
 those controls on a purged referral rather than letting the user find out by
 pressing one.
@@ -1154,7 +1154,10 @@ POST /api/v1/stock/take/volunteer-codes   →  201 { code, expiresAt }
 
 `code` is `XXXX-XXXX-XXXX-XXXX`. It is in that response and nowhere else — only
 a hash is stored, so nothing retrieves it again; if it is lost, generate
-another and let the old one lapse. Show it to the team lead once.
+another and let the old one lapse. Show it to the team lead once, with
+`expiresAt` (epoch seconds) alongside so they can see when it stops working.
+Generating another code does not invalidate an earlier one — each works until
+its own expiry.
 
 The volunteer then sends it on every stock-take request as a header, instead of
 a bearer token:
@@ -1167,9 +1170,21 @@ Case and separators are normalised, so what the volunteer types need only be
 close. The code reaches exactly four operations — `GET /stock/levels`,
 `GET /stock/groupings`, `GET /stock/crates`, `POST /stock/take` — and every
 other endpoint answers `401`, the item list and hand corrections included. It
-stops working eight hours after it was issued; there is no way to end one
+stops working fourteen days after it was issued; there is no way to end one
 sooner, and nothing about it survives. A page saved on a code is recorded
 against the team lead who issued it.
+
+For the admin screen's "a fresh code is due" warning:
+
+```
+GET /api/v1/stock/take/volunteer-codes/latest
+  →  200 { latest: { expiresAt, expiringSoon } | null }
+```
+
+Admin only. `expiresAt` is the expiry of the unexpired code with the latest
+issue time; `expiringSoon` is `true` once it has under five days left.
+`latest` is `null` when there is no unexpired code — before the first is
+generated, or once the last has lapsed. It never returns the code.
 
 Build the counting screen to accept a code on a device that never signs in.
 Everything else about the stock take — the paging, "send only what changed",
@@ -1282,9 +1297,8 @@ Defaults to shelf order.
 ## 5. Printing
 
 `GET /pick-lists/{id}/print` is a `409` until every parcel has been reviewed. Once available, it
-returns one object per parcel, **lines already
-ordered by shelf** so a picker walks the aisle once (`A1, A2, A10` — not
-alphabetically). Render in the order given.
+returns one object per parcel, **lines already ordered by shelf** — a plain string sort of the
+shelf label as typed, so `A10` comes before `A2`. Render in the order given.
 
 `POST /pick-lists/{id}/print` is a `409` on the same rule, and it stays one on a **reprint**:
 reconciling a late referral adds its parcel unreviewed, so a list already stamped `printed` refuses
@@ -1337,7 +1351,7 @@ purged.
 GET /api/v1/sessions/{sessionId}/listener-sheet
   → 200 { sessionId, households: [ { referralId, pickNumber, refereeFirstName,
                                      refereeSurname, reason, needsFuelHelp,
-                                     answers } ] }
+                                     answers, firstTimeMarker, voucherInstruction } ] }
   → 409 NEW_CLIENTS_ASSIGNED { error: { details: { missingParcels: [referralId] } } }
 ```
 
@@ -1363,8 +1377,26 @@ guess — the same reason `answers` comes through whole on a parcel.
 
 The sheet is deliberately minimal: **no address, postcode, phone, date of birth
 or anything about the referrer.** It ends up on paper in a hall. If a screen
-needs more than these five fields, that is a conversation rather than a field to
-add.
+needs more than these fields, that is a conversation rather than a field to add.
+
+**`firstTimeMarker` and `voucherInstruction` are the same two derived enums
+`Parcel` carries** — identical values, derived by the same rules, never
+stored on the parcel. The listener is the person actually talking to the
+household, so they see whether it is new and what to do about a Christmas
+voucher; the client renders whatever wording it likes.
+
+- `firstTimeMarker`: `"first_time"` (review recorded no previous session),
+  `"admin"` (review still `unreviewed`), or `null` (a previous-session date
+  is recorded). Same as `Parcel.firstTimeMarker`.
+- `voucherInstruction`: `null` outside the configured voucher range or with
+  no range set; otherwise `"refer_to_admin"` (review still `unreviewed`),
+  `"provide_voucher"` (no previous referral, or a previous-session date
+  outside the range), or `"already_received"` (previous-session date inside
+  the range). Same as `Parcel.voucherInstruction`, and **worked out fresh on
+  every read** so a later admin decision shows straight away.
+
+Neither carries the historic previous-session date or anything else about the
+referral — that is what makes them safe to hand a team lead.
 
 **Who is on it: the households coming to the session in person.** Settled, no
 longer assumed. Awaiting review, accepted and read alike — whether an admin has
@@ -1790,7 +1822,7 @@ repository already filters on it, so the field is not telling you anything the
 row's presence doesn't. It is here anyway, as a plain boolean rather than
 something to infer, because it is the same fixed field the client form shows
 everywhere else it appears. Unlike the rest of the row it is not personal data
-and does not go on the twelve-month purge.
+and does not go on the fifteen-month purge.
 
 ---
 
@@ -2103,25 +2135,29 @@ itself:
 - `null` — a previous-session date is recorded. No marker at all, and never
   the date.
 
-### Derived value 2: the printed voucher instruction
+### Derived value 2: the voucher instruction
 
-`PrintParcel.voucherInstruction`, on `GET /pick-lists/{id}/print`, **worked
-out fresh on every print** — never stored on the parcel, never generated
-with the pick list, so a first-time-review decision made after the pick list
-already exists still reaches the sheet next time it is printed:
+`Parcel.voucherInstruction`, on `GET /sessions/{sessionId}/pick-list` and
+`GET /pick-lists/{id}` — for the Run a session screen, alongside the marker
+above. **Worked out fresh on every read** — never stored on the parcel,
+never generated with the pick list, so a first-time-review decision made
+after the pick list already exists is reflected the next time the screen is
+opened:
 
-- `null` — no instruction on the sheet. The session's date is outside the
-  configured range, or nothing has been configured.
+- `null` — no instruction. The session's date is outside the configured
+  range, or nothing has been configured.
 - `"refer_to_admin"` — in range, `unreviewed`.
 - `"provide_voucher"` — in range, and either no previous referral or a
   recorded previous-session date that itself falls outside the range.
 - `"already_received"` — in range, and the recorded previous-session date
   falls inside the range too.
 
-Print exactly one instruction where this is non-null; render nothing where it
+Show exactly one instruction where this is non-null; render nothing where it
 is `null`. As with the marker above, this is never the historic date and
-carries nothing else about the referral — `PrintParcel` still has no
-`answers` and no reason for referral, see **5**.
+carries nothing else about the referral. It is **not** on `PrintParcel`: the
+voucher is handed over at the session, not off the sheet carried round the
+hall, which still has no `answers`, no reason for referral and now no voucher
+instruction — see **5**.
 
 ---
 
@@ -2133,19 +2169,13 @@ one **crate**. Both are new maintenance concepts alongside the existing stock
 item list, and both follow the same role split: `admin` and `team_lead` can
 read them (both roles use the grouped stock take), only `admin` writes them.
 
-### `StockItem` gains four fields
+### `StockItem` gains three fields
 
-`groupingId` (nullable uuid), `unitsPerPack` (nullable positive integer),
-`packUnitLabel` (nullable string) and `shelfSortKey` (string) join the
-existing fields on `GET /stock/items`, `GET /stock/levels`,
-`POST /stock/items` and `PATCH /stock/items/{id}`.
-
-- **`shelfSortKey`** is opaque — compare it as a plain string, do not parse
-  it. It sorts the way `shelfNumber` already orders `GET /stock/levels`:
-  `A1` before `A2` before `A10`. It exists so a client building a combined
-  stock-take screen can interleave crates among items by comparing this
-  against `Crate.shelfSortKey` below, without reimplementing the server's
-  shelf-number parsing itself.
+`groupingId` (nullable uuid), `unitsPerPack` (nullable positive integer) and
+`packUnitLabel` (nullable string) join the existing fields on
+`GET /stock/items`, `GET /stock/levels`, `POST /stock/items` and
+`PATCH /stock/items/{id}`. (An earlier version of this section also added a
+`shelfSortKey` — that has since been removed, see §5m.)
 
 - **`groupingId`** is `null` on a crate member — its grouping comes from its
   crate instead — and otherwise defaults to the seeded `"Non-perishable"`
@@ -2187,12 +2217,9 @@ shopping-calculation endpoint.
 `DELETE` is idempotent (`204` on an already-gone id). A target stock list
 line that names a deleted crate is not cleaned up — see below.
 
-`Crate` also carries a `shelfSortKey`, computed from `shelfKey` fresh on
-every read (there is no stored column for it) using the same shelf-number
-parsing as `StockItem.shelfSortKey`. The list itself stays **ordered by
-name** — that has not changed — but a client can use the key to slot crates
-into the same shelf-walk order as `GET /stock/levels` for a combined
-stock-take screen.
+The crate list stays **ordered by name**. To slot crates into the same order
+as `GET /stock/levels` for a combined stock-take screen, compare a crate's
+`shelfKey` against an item's `shelfNumber` as plain strings (see §5m).
 
 ### `POST /stock/take` gains `crateCounts`
 
@@ -2300,6 +2327,25 @@ can do everything a team lead can, without exception.
 take on that item still discards this row along with everything else the
 ledger held for it — a correction does not get special treatment from the
 "two deletes" rule.
+
+---
+
+## 5m. Shelf ordering is a plain string sort — `shelfSortKey` removed
+
+`StockItem.shelfSortKey` and `Crate.shelfSortKey` are **gone**. They were a
+derived natural-sort key (`A2` before `A10`); the charity decided the server
+should not be clever about numbers inside a shelf label.
+
+Wherever a list comes back in shelf order — `order=shelf` on
+`GET /stock/levels` and `GET /stock/items`, and the line order on
+`GET`/`POST /pick-lists/{id}/print` — it is now a **plain string sort of
+`shelfNumber` exactly as typed**, so `"A10"` sorts before `"A2"`. Numbering
+the shelves so the walk comes out in the right order is a labelling job, not
+the server's.
+
+To interleave crates with items on a combined stock-take screen, sort on
+`Crate.shelfKey` and `StockItem.shelfNumber` together as plain strings — the
+same comparison the server now uses. Nothing needs the old opaque key.
 
 ---
 
@@ -2477,7 +2523,7 @@ form is yours and so are the columns.
 > **This is the one place personal data leaves the system**, including
 > `reviewComment`, which is admin-only in the API because it can name a
 > referrer. Everyone the spreadsheet is shared with sees every column, and the
-> twelve-month purge cannot reach it. The charity decided that knowingly.
+> fifteen-month purge cannot reach it. The charity decided that knowingly.
 
 Nothing is offered before its session is confirmed, so an administrator who
 cannot find a session in the spreadsheet should check it has been signed off.

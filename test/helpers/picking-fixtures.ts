@@ -38,14 +38,15 @@ export async function setUpPickingWorld(
     Pasta: '',
     Cereal: '',
   };
-  // Categories that genuinely differ from one another and from shelf order,
-  // so a test asserting category grouping cannot pass by accident against
-  // shelf grouping: category order is Breakfast, Dried Goods, Tinned Goods
-  // while shelf order is Cereal (A1), Beans (A2), Pasta (A10).
+  // Shelf order, category order and insertion order are deliberately all
+  // different, so a test asserting one cannot pass by accident against
+  // another. Shelf order is a plain sort of the label as typed — Pasta (A1),
+  // Cereal (A2), Beans (A3); category order is Breakfast (Cereal), Dried Goods
+  // (Pasta), Tinned Goods (Beans); insertion order is Beans, Pasta, Cereal.
   for (const [name, category, shelf] of [
-    ['Beans', 'Tinned Goods', 'A2'],
-    ['Pasta', 'Dried Goods', 'A10'],
-    ['Cereal', 'Breakfast', 'A1'],
+    ['Beans', 'Tinned Goods', 'A3'],
+    ['Pasta', 'Dried Goods', 'A1'],
+    ['Cereal', 'Breakfast', 'A2'],
   ] as const) {
     const response = await testApp.request('/api/v1/stock/items', {
       method: 'POST',

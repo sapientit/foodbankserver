@@ -86,7 +86,7 @@ export interface RepeatReferralCandidate {
  * Callers guard `hasAnythingToMatchOn` before reaching here, so `matchers`
  * below is never empty — but the throw is not decoration. An empty `or(...)`
  * returns `undefined`, `and(...)` silently drops an `undefined` term, and the
- * predicate would then match **every referral in the twelve-month window**.
+ * predicate would then match **every referral in the fifteen-month window**.
  * On the summary that is a wrong number; on the list it is every household
  * the food bank has fed this year, with their names, addresses and phone
  * numbers, handed to whoever opened one referral. Failing loudly is the only
@@ -173,14 +173,14 @@ export interface ReferralSearchCandidate {
  *
  * **Deliberately not built by generalising `repeatReferralPredicate`.** That
  * one carries three conditions this search must not: it excludes the
- * referral under review, it stops at twelve months, and it drops cancelled
+ * referral under review, it stops at fifteen months, and it drops cancelled
  * and rejected referrals. A search reaches every referral the food bank
  * still holds details for, whatever became of it —
  * `INITIAL_SPEC1.txt`, `#Searching for a referral` — because "we turned that
  * one away in March" is exactly what the person on the phone is ringing
  * about. Threading a flag through one shared function to turn three
  * conditions on and off would risk the flag being wrong in the one place —
- * cancelled and rejected referrals leaking into the twelve-month duplicate
+ * cancelled and rejected referrals leaking into the fifteen-month duplicate
  * list — that actually matters.
  *
  * Purged referrals cannot match: the purge nulls `refereeDateOfBirth`,
@@ -348,7 +348,7 @@ export function createReferralsRepository(db: Database) {
      *
      * **Also refuses a referral whose details have been forgotten**, which is
      * the second thing the caller has to tell apart when nothing matches.
-     * There is nothing left to accept, reject or read through twelve months on
+     * There is nothing left to accept, reject or read through fifteen months on
      * — `INITIAL_SPEC1.txt`, `#Referral maintenance` — and the condition rides
      * here with the status one rather than being read first, for the same
      * reason.

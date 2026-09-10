@@ -10,6 +10,7 @@ import { modelParcels, parcelGrid } from '../src/db/schema/rules.ts';
 import { recurringSessions, sessions } from '../src/db/schema/sessions.ts';
 import { stockItems, stockLedger } from '../src/db/schema/stock.ts';
 import { refreshTokens, users } from '../src/db/schema/users.ts';
+import { voucherConfig } from '../src/db/schema/voucher-config.ts';
 import { authHeaders, buildTestApp, devLogin, type TestApp } from './helpers/app.ts';
 import {
   generatePickList,
@@ -45,6 +46,8 @@ interface Household {
   reason: string | null;
   needsFuelHelp: boolean;
   answers: Record<string, unknown>;
+  firstTimeMarker: 'first_time' | 'admin' | null;
+  voucherInstruction: 'provide_voucher' | 'already_received' | 'refer_to_admin' | null;
 }
 
 async function adminWorld(options: { deliveryCapacity?: number } = {}): Promise<{
@@ -86,6 +89,7 @@ beforeEach(async () => {
   await db.delete(recurringSessions);
   await db.delete(refreshTokens);
   await db.delete(users);
+  await db.delete(voucherConfig);
 });
 
 describe('the listener sheet', () => {
@@ -111,6 +115,10 @@ describe('the listener sheet', () => {
       // The whole map. **Cause Details is extracted by the client**, because
       // the client owns the form and the server holds no definition of it.
       answers: { 'Cause Details': 'Landlord sold the house', Dietary: 'no pork' },
+      // This referral is unreviewed and no voucher range is configured: the
+      // marker mirrors Parcel.firstTimeMarker, the instruction is absent.
+      firstTimeMarker: 'admin',
+      voucherInstruction: null,
     });
   });
 
@@ -355,5 +363,202 @@ describe('the listener sheet and pick numbers', () => {
 
     expect(sheet.status).toBe(200);
     expect(sheet.households).toHaveLength(2);
+  });
+});
+
+describe('the listener sheet first-time marker and voucher instruction', () => {
+  async function setFirstTimeReview(
+    testApp: TestApp,
+    token: string,
+    referralId: string,
+    body: { noPreviousReferral: true } | { previousSessionDate: string },
+  ): Promise<void> {
+    const response = await testApp.request(`/api/v1/referrals/${referralId}/first-time-review`, {
+      method: 'POST',
+      headers: json(token),
+      body: JSON.stringify(body),
+    });
+    expect(response.status).toBe(200);
+  }
+
+  async function setVoucherRange(
+    testApp: TestApp,
+    token: string,
+    range: { startDate: string; endDate: string },
+  ): Promise<void> {
+    const response = await testApp.request('/api/v1/voucher-config', {
+      method: 'PUT',
+      headers: json(token),
+      body: JSON.stringify(range),
+    });
+    expect(response.status).toBe(200);
+  }
+
+  /**
+   * Four households on the session dated 2026-08-11, one in each shape the
+   * derivation cares about. Distinct surnames so the sheet's surname sort is
+   * deterministic; results are mapped back by referral id regardless.
+   */
+  async function seedFourStates(
+    testApp: TestApp,
+    token: string,
+    world: PickingWorld,
+  ): Promise<{
+    unreviewed: string;
+    noPrevious: string;
+    previousInRange: string;
+    previousOutOfRange: string;
+  }> {
+    const unreviewed = await submitReferral(testApp, world, {
+      adults: 1,
+      children: 0,
+      refereeSurname: 'Ashdown',
+    });
+    const noPrevious = await submitReferral(testApp, world, {
+      adults: 1,
+      children: 0,
+      refereeSurname: 'Bracken',
+    });
+    const previousInRange = await submitReferral(testApp, world, {
+      adults: 1,
+      children: 0,
+      refereeSurname: 'Cotswold',
+    });
+    const previousOutOfRange = await submitReferral(testApp, world, {
+      adults: 1,
+      children: 0,
+      refereeSurname: 'Dashwood',
+    });
+
+    await setFirstTimeReview(testApp, token, noPrevious.id, { noPreviousReferral: true });
+    // A recorded previous-session date that itself falls inside the voucher range.
+    await setFirstTimeReview(testApp, token, previousInRange.id, {
+      previousSessionDate: '2026-08-05',
+    });
+    // A recorded previous-session date well before any voucher range used here.
+    await setFirstTimeReview(testApp, token, previousOutOfRange.id, {
+      previousSessionDate: '2025-12-20',
+    });
+
+    return {
+      unreviewed: unreviewed.id,
+      noPrevious: noPrevious.id,
+      previousInRange: previousInRange.id,
+      previousOutOfRange: previousOutOfRange.id,
+    };
+  }
+
+  async function markersByReferral(
+    testApp: TestApp,
+    token: string,
+    sessionId: string,
+  ): Promise<Map<string, { firstTimeMarker: string | null; voucherInstruction: string | null }>> {
+    const sheet = await readSheet(testApp, token, sessionId);
+    expect(sheet.status).toBe(200);
+    return new Map(
+      (sheet.households ?? []).map((h) => [
+        h.referralId,
+        { firstTimeMarker: h.firstTimeMarker, voucherInstruction: h.voucherInstruction },
+      ]),
+    );
+  }
+
+  it('carries only the first-time marker, mirroring Parcel.firstTimeMarker, when no voucher range is configured', async () => {
+    const { testApp, token, world } = await adminWorld();
+    const ids = await seedFourStates(testApp, token, world);
+    await generatePickList(testApp, token, world.sessionId);
+
+    const byReferral = await markersByReferral(testApp, token, world.sessionId);
+
+    expect(byReferral.get(ids.unreviewed)).toEqual({
+      firstTimeMarker: 'admin',
+      voucherInstruction: null,
+    });
+    expect(byReferral.get(ids.noPrevious)).toEqual({
+      firstTimeMarker: 'first_time',
+      voucherInstruction: null,
+    });
+    expect(byReferral.get(ids.previousInRange)).toEqual({
+      firstTimeMarker: null,
+      voucherInstruction: null,
+    });
+    expect(byReferral.get(ids.previousOutOfRange)).toEqual({
+      firstTimeMarker: null,
+      voucherInstruction: null,
+    });
+  });
+
+  it('leaves voucherInstruction null when the session date falls outside the configured voucher range', async () => {
+    const { testApp, token, world } = await adminWorld();
+    const ids = await seedFourStates(testApp, token, world);
+    // Range is December 2026; the session is 2026-08-11, so no instruction belongs.
+    await setVoucherRange(testApp, token, { startDate: '2026-12-01', endDate: '2026-12-31' });
+    await generatePickList(testApp, token, world.sessionId);
+
+    const byReferral = await markersByReferral(testApp, token, world.sessionId);
+
+    for (const id of Object.values(ids)) {
+      expect(byReferral.get(id)?.voucherInstruction).toBeNull();
+    }
+    expect(byReferral.get(ids.unreviewed)?.firstTimeMarker).toBe('admin');
+    expect(byReferral.get(ids.noPrevious)?.firstTimeMarker).toBe('first_time');
+  });
+
+  it('carries the voucher instruction alongside the marker when the session is in range', async () => {
+    const { testApp, token, world } = await adminWorld();
+    const ids = await seedFourStates(testApp, token, world);
+    await setVoucherRange(testApp, token, { startDate: '2026-08-01', endDate: '2026-08-31' });
+    await generatePickList(testApp, token, world.sessionId);
+
+    const byReferral = await markersByReferral(testApp, token, world.sessionId);
+
+    expect(byReferral.get(ids.unreviewed)).toEqual({
+      firstTimeMarker: 'admin',
+      voucherInstruction: 'refer_to_admin',
+    });
+    expect(byReferral.get(ids.noPrevious)).toEqual({
+      firstTimeMarker: 'first_time',
+      voucherInstruction: 'provide_voucher',
+    });
+  });
+
+  it('reports already_received only when the recorded previous-session date is itself in range', async () => {
+    const { testApp, token, world } = await adminWorld();
+    const ids = await seedFourStates(testApp, token, world);
+    await setVoucherRange(testApp, token, { startDate: '2026-08-01', endDate: '2026-08-31' });
+    await generatePickList(testApp, token, world.sessionId);
+
+    const byReferral = await markersByReferral(testApp, token, world.sessionId);
+
+    // Previous session 2026-08-05 is inside the range: the client has had one.
+    expect(byReferral.get(ids.previousInRange)).toEqual({
+      firstTimeMarker: null,
+      voucherInstruction: 'already_received',
+    });
+    // Previous session 2025-12-20 is outside the range: treated as if new.
+    expect(byReferral.get(ids.previousOutOfRange)).toEqual({
+      firstTimeMarker: null,
+      voucherInstruction: 'provide_voucher',
+    });
+  });
+
+  it('exposes neither the historic previous-session date nor the raw review status', async () => {
+    const { testApp, token, world } = await adminWorld();
+    await seedFourStates(testApp, token, world);
+    await setVoucherRange(testApp, token, { startDate: '2026-08-01', endDate: '2026-08-31' });
+    await generatePickList(testApp, token, world.sessionId);
+
+    const sheet = await readSheet(testApp, token, world.sessionId);
+    const raw = JSON.stringify(sheet.households);
+
+    expect(raw).not.toContain('2026-08-05');
+    expect(raw).not.toContain('2025-12-20');
+    expect(raw).not.toContain('previous_session');
+    expect(raw).not.toContain('unreviewed');
+    for (const household of sheet.households ?? []) {
+      const record = household as unknown as Record<string, unknown>;
+      expect(record).not.toHaveProperty('firstTimeReviewStatus');
+      expect(record).not.toHaveProperty('firstTimeReviewDate');
+    }
   });
 });
