@@ -2349,6 +2349,55 @@ same comparison the server now uses. Nothing needs the old opaque key.
 
 ---
 
+## 5n. Dev/test bulk referral import
+
+`POST /api/v1/dev-test/referral-imports` — **not registered in production; it
+404s there because the route does not exist, not because it is refused.**
+Admin only where it does exist. For your own test-data loader: pick a valid
+current reason, attach a session, send prepared anonymised scenarios under one
+stable `importKey`, then check the resulting referrals and pick list.
+
+```
+POST /api/v1/dev-test/referral-imports
+{
+  "importKey": "stable-uuid-for-this-run",
+  "sessionId": "target-session-uuid",
+  "reasonId": "current-dev-or-test-reason-uuid",
+  "referrals": [ /* up to 30 prepared scenarios, ReferralSubmission-shaped
+                   minus sessionId/reasonId */ ]
+}
+→
+{
+  "sessionId": "…",
+  "importKey": "…",
+  "referrals": [ { "sourceIndex": 1, "referralId": "…" } ]
+}
+```
+
+What is different from a real submission, all deliberate:
+
+- **Every referral is created `active`.** The referrer-authorisation decision
+  a real submission makes — checking `referrerEmail` against the authorised
+  list — never runs here.
+- **The 16:00-the-day-before booking cutoff does not apply.** A scenario can
+  target a session later today.
+- **Session-open and capacity still apply**, including delivery capacity,
+  checked against the whole batch at once rather than one referral at a time.
+- **Every `referrerEmail` must end `example.test`.** Refused otherwise with a
+  `400`, regardless of environment — this is defence-in-depth on top of the
+  route not existing in production, not instead of it.
+
+**Atomic**: one call creates every referral in it or none of them.
+**`importKey` is idempotent**: repeat the same call with the same key and
+body and you get the same `referrals` mapping back rather than a second
+import; reuse the key with a different body and it is a `409`.
+
+`sourceIndex` in the response is 1-based, following the position of each
+scenario in your own `referrals` array — use it to line up which prepared
+scenario became which referral id.
+
+---
+
 ## 6. Errors
 
 Every failure has the same shape:

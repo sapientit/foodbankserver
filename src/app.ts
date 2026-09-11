@@ -4,6 +4,7 @@ import { requestContext, securityHeaders, type ContextOptions } from './http/con
 import { cors } from './http/cors.ts';
 import { errorHandler, notFoundHandler } from './http/error-handler.ts';
 import { authRoutes } from './modules/auth/auth.routes.ts';
+import { devTestImportRoutes } from './modules/dev-test/dev-test.routes.ts';
 import { healthRoutes } from './modules/health/health.routes.ts';
 import { referrerAdminRoutes } from './modules/referrers/admin.routes.ts';
 import { publicReferrerRoutes } from './modules/referrers/public.routes.ts';
@@ -68,6 +69,9 @@ export function buildApp(config: AppConfig, options: ContextOptions = {}): Hono<
   // It carries its own credential check and rate limiter rather than sitting
   // behind `requireAuth`, because TheSMSWorks has no account with us.
   app.route(API_PREFIX, webhookRoutes());
+  // Dev/test only — see the route builder for why this is built against
+  // config rather than guarded, the same as the auth module's dev-login.
+  app.route(API_PREFIX, devTestImportRoutes(config));
 
   return app;
 }

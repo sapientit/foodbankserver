@@ -66,6 +66,11 @@ tags:
   - name: Pick lists
   - name: Admin setup
   - name: Ops
+  - name: Dev/test tooling
+    description: >-
+      Not registered in production — see each operation for the exact gate.
+      Exists for the client's own automated test scenarios, never for real
+      referrals.
 
 security:
   - bearerAuth: []
@@ -4023,6 +4028,74 @@ paths:
                   sessionsCreated: { type: integer }
                   referralsPurged: { type: integer }
 
+  # -------------------------------------------------------- dev/test tooling --
+  /api/v1/dev-test/referral-imports:
+    post:
+      tags: [Dev/test tooling]
+      summary: Bulk-load prepared, anonymised referral scenarios
+      description: |
+        **Not registered in production — the route does not exist there, and
+        that is what actually protects it.** Built for the client's own
+        dev/test automation: it picks a valid current reason, attaches a
+        session, sends prepared scenarios under one stable `importKey`, then
+        checks the resulting referrals and pick list.
+
+        **Admin only**, on top of the environment gate. Every referral is
+        created `active` — the referrer-authorisation decision a real
+        submission makes is never run, because there is no real referrer to
+        protect here — and the 16:00-the-day-before booking cutoff does not
+        apply, so a scenario can target a session later today. The session
+        must still be open (not confirmed or cancelled) and have room,
+        including delivery capacity, for every referral in the request.
+
+        **Defence-in-depth, not the only protection:** every `referrerEmail`
+        must end `example.test` and is refused otherwise, regardless of the
+        environment gate above.
+
+        **Atomic.** One request either creates every referral in it or none
+        of them — there is no partial import to clean up.
+
+        **`importKey` is idempotent.** Repeating the same call with the same
+        key and body returns the same `referrals` mapping rather than
+        importing a second time. Reusing a key with a **different** body is
+        refused with `409` — it is not silently replayed and not silently
+        re-run.
+
+        `sourceIndex` in the response is 1-based and follows the position of
+        each scenario in the request's own `referrals` array, so the caller
+        can tell which prepared scenario became which referral.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReferralImportRequest' }
+      responses:
+        '200':
+          description: Every scenario imported (or replayed from an earlier call with this importKey)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReferralImportResponse' }
+        '400':
+          description: >-
+            Request validation failed, or an email did not end
+            `example.test` — `details.issues` names the fields, never their
+            values
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '403':
+          description: The caller is not an administrator
+        '404':
+          description: >-
+            Session not found — or, in production, this route does not exist
+            and every method on this path 404s
+        '409':
+          description: >-
+            The session is full, cancelled or confirmed, or `importKey` was
+            already used for a different request
+        '422':
+          description: That reason for referral is no longer offered
+
 components:
   securitySchemes:
     bearerAuth:
@@ -4476,6 +4549,93 @@ components:
             16KB once serialised. Exceeding any of those is a `400`.
           maxProperties: 100
           additionalProperties: true
+
+    ReferralImportReferral:
+      type: object
+      description: >-
+        One prepared, anonymised scenario. The same shape as
+        `ReferralSubmission` minus `sessionId` and `reasonId` — both shared
+        across the whole import and supplied once on `ReferralImportRequest`
+        — and with `referrerEmail` restricted to `example.test`.
+      required:
+        [
+          referrerName,
+          referrerEmail,
+          referrerOrganisation,
+          referrerPhone,
+          refereeFirstName,
+          refereeSurname,
+          refereeDateOfBirth,
+          refereeAddress,
+          refereePostcode,
+          adults,
+          children,
+          collectionMethod,
+        ]
+      properties:
+        referrerName: { type: string, maxLength: 200 }
+        referrerEmail:
+          type: string
+          format: email
+          description: Must end `example.test`. Anything else is a `400`.
+        referrerOrganisation: { type: string, maxLength: 200 }
+        referrerPhone: { type: string, minLength: 5, maxLength: 30 }
+        refereeFirstName: { type: string, maxLength: 100 }
+        refereeSurname: { type: string, maxLength: 100 }
+        refereeDateOfBirth: { type: string, format: date }
+        refereeAddress: { type: string, maxLength: 500 }
+        refereePostcode: { type: string, minLength: 2, maxLength: 12 }
+        refereePhone: { type: string, minLength: 5, maxLength: 30 }
+        needsFuelHelp: { type: boolean, default: false }
+        adults: { type: integer, minimum: 1, maximum: 30 }
+        children: { type: integer, minimum: 0, maximum: 30 }
+        collectionMethod:
+          type: string
+          enum: [collection, delivery, referrer_collect]
+        answers:
+          type: object
+          maxProperties: 100
+          additionalProperties: true
+
+    ReferralImportRequest:
+      type: object
+      required: [importKey, sessionId, reasonId, referrals]
+      properties:
+        importKey:
+          type: string
+          format: uuid
+          description: >-
+            The caller's own stable key for this run. Repeating a call with
+            the same key and the same body returns the original result rather
+            than importing twice; the same key with a different body is a
+            `409`.
+        sessionId: { type: string, format: uuid }
+        reasonId:
+          type: string
+          format: uuid
+          description: Must currently be offered, the same rule a real submission follows.
+        referrals:
+          type: array
+          minItems: 1
+          maxItems: 30
+          items: { $ref: '#/components/schemas/ReferralImportReferral' }
+
+    ReferralImportResponse:
+      type: object
+      required: [sessionId, importKey, referrals]
+      properties:
+        sessionId: { type: string, format: uuid }
+        importKey: { type: string, format: uuid }
+        referrals:
+          type: array
+          items:
+            type: object
+            required: [sourceIndex, referralId]
+            properties:
+              sourceIndex:
+                type: integer
+                description: 1-based position of this scenario in the request's own `referrals` array.
+              referralId: { type: string, format: uuid }
 
     ReferralAmend:
       type: object

@@ -12,6 +12,7 @@
  *   a CHECK constraint without rebuilding the table.
  */
 export * from './crates.ts';
+export * from './dev-test-imports.ts';
 export * from './jobs.ts';
 export * from './pick-lists.ts';
 export * from './referrals.ts';
