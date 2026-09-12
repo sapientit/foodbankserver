@@ -84,13 +84,18 @@ interface GraphQlResponse {
       }[];
     };
   } | null;
-  readonly errors?: readonly { readonly message: string }[];
+  /**
+   * Present, `null` and `[]` are all observed on real Cloudflare responses —
+   * confirmed against a live account, see `collect-usage.ts`'s job history.
+   * Never assume `undefined` is the only "no errors" shape here.
+   */
+  readonly errors?: readonly { readonly message: string }[] | null;
 }
 
 interface D1DatabaseResponse {
   readonly result: { readonly file_size: number } | null;
   readonly success: boolean;
-  readonly errors?: readonly { readonly message: string }[];
+  readonly errors?: readonly { readonly message: string }[] | null;
 }
 
 /**
@@ -185,11 +190,13 @@ async function postGraphQl(
     throw new Error('Cloudflare GraphQL Analytics API returned a non-JSON response');
   }
 
-  // The API returns HTTP 200 even when the query itself failed.
-  if (parsed.errors !== undefined && parsed.errors.length > 0) {
-    throw new Error(
-      `Cloudflare GraphQL Analytics API query failed: ${parsed.errors.map((e) => e.message).join('; ')}`,
-    );
+  // The API returns HTTP 200 even when the query itself failed — and
+  // `errors` comes back `null` on success, not omitted or `[]`. Checking
+  // `!== undefined` alone reads `.length` on `null` and throws a confusing
+  // TypeError instead of the intended error message; confirmed live.
+  const graphqlErrors = errorMessages(parsed.errors);
+  if (graphqlErrors.length > 0) {
+    throw new Error(`Cloudflare GraphQL Analytics API query failed: ${graphqlErrors.join('; ')}`);
   }
 
   return parsed;
@@ -219,9 +226,22 @@ async function fetchD1StorageBytes(config: CloudflareAnalyticsConfig): Promise<n
   }
 
   if (!parsed.success || parsed.result === null) {
-    const detail = parsed.errors?.map((e) => e.message).join('; ') ?? 'no result';
+    const errors = errorMessages(parsed.errors);
+    const detail = errors.length > 0 ? errors.join('; ') : 'no result';
     throw new Error(`Cloudflare D1 REST API query failed: ${detail}`);
   }
 
   return parsed.result.file_size;
+}
+
+/**
+ * `errors` is `null`, `[]` or an array on real responses — never assume
+ * `undefined` is the only "no errors" shape. Written as a named helper
+ * rather than an inline `Array.isArray` guard because that guard narrows a
+ * readonly array to `any[]` here, which is worse than this being explicit.
+ */
+function errorMessages(
+  errors: readonly { readonly message: string }[] | null | undefined,
+): string[] {
+  return errors === null || errors === undefined ? [] : errors.map((e) => e.message);
 }
