@@ -122,11 +122,16 @@ export function sessionRoutes(): Hono<AppEnv> {
    * the same function the scheduled handler does.
    */
   routes.post('/jobs/session-materialisation/run', ...admins, async (c) => {
+    const config = c.get('config');
     const result = await runScheduledJobs({
       db: c.get('db'),
       clock: c.get('clock'),
       logger: c.get('logger'),
-      piiRetentionDays: c.get('config').piiRetentionDays,
+      piiRetentionDays: config.piiRetentionDays,
+      cfAccountId: config.cfAccountId,
+      cfD1DatabaseId: config.cfD1DatabaseId,
+      cfWorkerScriptName: config.cfWorkerScriptName,
+      cfAnalyticsApiToken: config.cfAnalyticsApiToken,
     });
     return c.json(result);
   });

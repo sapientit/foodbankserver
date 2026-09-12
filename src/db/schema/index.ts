@@ -15,6 +15,7 @@ export * from './crates.ts';
 export * from './dev-test-imports.ts';
 export * from './jobs.ts';
 export * from './pick-lists.ts';
+export * from './platform-stats.ts';
 export * from './referrals.ts';
 export * from './referrers.ts';
 export * from './rules.ts';

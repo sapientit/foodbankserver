@@ -482,3 +482,12 @@ An outcome can be taken back while the session is still open.  Marking a househo
 Confirming the session is the end of it.  Once a session is confirmed no outcome on it can be changed, because a session that has been signed off must not have its figures move underneath it afterwards.
 
 The session is then closed.  Every referee on the session must be marked either attended (or delivered) or absent (or not in) before the session can be closed, so a session is never closed with people unaccounted for and stock figures that do not add up.  If anyone is still unmarked the close is refused and the ones outstanding are named.
+
+#Platform usage monitoring
+The system runs on Cloudflare's free plan, which caps how much a Worker and a D1 database may be used before Cloudflare starts refusing requests or queries.  So that the food bank can tell whether it is safely inside those caps, or needs to move to a paid plan, the system records its own usage against Cloudflare every day: how many requests the Worker served and how many failed, how much processing time and how many outgoing calls each request needed, and how many rows the database read and wrote and how much space it is using.
+
+An administrator can review this for any date range: for each day, the actual figures alongside Cloudflare's published caps, with the days and measures running close to or over a cap marked so they stand out rather than needing to be read off one by one.  The same figures also feed an alert: a count of how many of the last fourteen days had any measure marked that way, so a problem developing against the free plan's caps is visible without opening the detailed report.
+
+This is an administrator's report, about running the system rather than about the food bank's own work, so nobody else sees it.
+
+How close to a cap counts as running close to it - and, for the two measures Cloudflare puts no cap on at all, what counts as worrying in the first place - is not yet settled.  See OPEN-QUESTIONS.md.

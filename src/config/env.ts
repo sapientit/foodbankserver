@@ -130,6 +130,29 @@ const configSchema = z
     GOOGLE_SHEETS_SPREADSHEET_ID: blankIsUnset,
     /** The public OAuth client id the browser asks for Sheets consent against. */
     GOOGLE_OAUTH_CLIENT_ID: blankIsUnset,
+
+    /**
+     * The daily platform-usage job's four settings, for calling Cloudflare's
+     * own GraphQL Analytics API and D1 REST API about this deployment's own
+     * Worker and database — see `INITIAL_SPEC1.txt`,
+     * `#Platform usage monitoring`.
+     *
+     * None of the four is a credential over food bank data — an account id,
+     * a database id and a script name are the same kind of identifier as the
+     * `database_id` already sitting in `wrangler.jsonc`, not secrets — except
+     * `CF_ANALYTICS_API_TOKEN`, which is a genuine Cloudflare API token and a
+     * Worker secret like `SMS_API_KEY`.
+     *
+     * All four are optional and there is deliberately **no production
+     * tripwire**: the same reasoning as the spreadsheet extract. An
+     * unconfigured job is a closed feature reporting itself closed via
+     * `collectPlatformUsage`'s early return, not an open door — nothing here
+     * ever touches a referral or a household.
+     */
+    CF_ACCOUNT_ID: blankIsUnset,
+    CF_D1_DATABASE_ID: blankIsUnset,
+    CF_WORKER_SCRIPT_NAME: blankIsUnset,
+    CF_ANALYTICS_API_TOKEN: z.string().min(1).optional(),
   })
   .superRefine((value, ctx) => {
     // The dummy provider accepts any email address and issues a real admin
@@ -213,6 +236,10 @@ export interface AppConfig {
   readonly smsLiveNumber: string | undefined;
   readonly googleSpreadsheetId: string | undefined;
   readonly googleOauthClientId: string | undefined;
+  readonly cfAccountId: string | undefined;
+  readonly cfD1DatabaseId: string | undefined;
+  readonly cfWorkerScriptName: string | undefined;
+  readonly cfAnalyticsApiToken: string | undefined;
   readonly isProduction: boolean;
 }
 
@@ -252,6 +279,10 @@ export function loadConfig(bindings: object): AppConfig {
     smsLiveNumber: result.data.SMS_LIVE_NUMBER,
     googleSpreadsheetId: result.data.GOOGLE_SHEETS_SPREADSHEET_ID,
     googleOauthClientId: result.data.GOOGLE_OAUTH_CLIENT_ID,
+    cfAccountId: result.data.CF_ACCOUNT_ID,
+    cfD1DatabaseId: result.data.CF_D1_DATABASE_ID,
+    cfWorkerScriptName: result.data.CF_WORKER_SCRIPT_NAME,
+    cfAnalyticsApiToken: result.data.CF_ANALYTICS_API_TOKEN,
     isProduction: result.data.ENVIRONMENT === 'production',
   };
 

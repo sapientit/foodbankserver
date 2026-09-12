@@ -2398,6 +2398,63 @@ scenario became which referral id.
 
 ---
 
+## 5o. Platform usage monitoring
+
+New screen: the server now records its own Cloudflare Worker and D1 usage
+every night, so an administrator can tell whether the food bank is safely
+inside the free plan's caps. Admin only, throughout — this is about running
+the system, not the food bank's own work.
+
+```
+GET /api/v1/platform-stats/usage?from=2026-09-01&to=2026-09-11
+→
+{
+  "days": [
+    {
+      "date": "2026-09-01",
+      "workerRequestsAccountWide": { "value": 41203, "cap": 100000, "threshold": 80000, "exceeded": false },
+      "workerRequestsThisApp": { "value": 38940 },
+      "workerErrorRateThisApp": { "value": 0.004, "threshold": 0.05, "exceeded": false },
+      "workerCpuTimeP99Us": { "value": 6200, "cap": 10000, "threshold": 8000, "exceeded": false },
+      "workerSubrequestsAvgPerInvocation": { "value": 9.3, "cap": 50, "threshold": 40, "exceeded": false },
+      "workerWallTimeP99Ms": { "value": 310 },
+      "d1RowsRead": { "value": 812004, "cap": 5000000, "threshold": 4000000, "exceeded": false },
+      "d1RowsWritten": { "value": 22110, "cap": 100000, "threshold": 80000, "exceeded": false },
+      "d1StorageBytes": { "value": 41943040, "cap": 524288000, "threshold": 419430400, "exceeded": false }
+    }
+  ]
+}
+```
+
+A date with no row in `days` means the job has not captured that day — not
+yet configured, not yet run, or a run was missed — rather than a day known to
+be clear. Both `from` and `to` are required.
+
+`cap` is one of Cloudflare's own published free-plan limits — a fact.
+`threshold` is the level the build currently treats as worth flagging, and
+**that number is a guess, not a settled requirement** — see `x-assumed` on
+`CappedMeasure`/`UncappedMeasure` in `openapi.yaml` and Q44 in
+`OPEN-QUESTIONS.md`. `workerRequestsAccountWide` is every Worker on the
+account, not just this one, because the 100,000/day cap is shared with the
+unrelated `losttemple-api` Worker. `workerSubrequestsAvgPerInvocation` is an
+average standing in for a true per-invocation maximum, which Cloudflare's
+daily aggregates cannot give — also part of Q44. Two measures carry no `cap`
+or `threshold` at all: `workerRequestsThisApp` (context for the account-wide
+figure) and `workerWallTimeP99Ms` (the free plan sets no duration cap for
+HTTP-triggered Workers).
+
+```
+GET /api/v1/platform-stats/usage/alert-summary
+→
+{ "windowDays": 14, "daysWithExceededThreshold": 2 }
+```
+
+A count for the alert section, not a list — the fourteen days with a
+captured row, not literally the last fourteen calendar days if some are
+missing.
+
+---
+
 ## 6. Errors
 
 Every failure has the same shape:

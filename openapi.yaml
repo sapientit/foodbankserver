@@ -66,6 +66,11 @@ tags:
   - name: Pick lists
   - name: Admin setup
   - name: Ops
+  - name: Platform usage
+    description: >-
+      This deployment's own Cloudflare Worker and D1 usage against the free
+      plan's caps. Admin only — about running the system, not the food
+      bank's own work.
   - name: Dev/test tooling
     description: >-
       Not registered in production — see each operation for the exact gate.
@@ -4027,6 +4032,72 @@ paths:
                   occurrencesPlanned: { type: integer }
                   sessionsCreated: { type: integer }
                   referralsPurged: { type: integer }
+                  platformUsageDate:
+                    type: [string, 'null']
+                    format: date
+                    description: >-
+                      The UTC day of Cloudflare usage collected by this run, or
+                      null if the platform-usage settings are not all
+                      configured yet. See `GET /platform-stats/usage`.
+
+  # ------------------------------------------------------------ platform stats --
+  /api/v1/platform-stats/usage:
+    get:
+      tags: [Platform usage]
+      summary: Cloudflare usage against the free-plan caps, for a date range
+      description: |
+        Admin only. For each day in `[from, to]` that the nightly job has
+        captured, this deployment's own Cloudflare Worker and D1 usage
+        alongside Cloudflare's published free-plan caps, so an administrator
+        can see at a glance whether anything is running close to one.
+
+        A date with no row — the job has not run yet, or has not been
+        configured, or a run was missed — is simply absent from `days` rather
+        than reported as zero.
+
+        See `INITIAL_SPEC1.txt`, `#Platform usage monitoring`.
+      parameters:
+        - name: from
+          in: query
+          required: true
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          required: true
+          schema: { type: string, format: date }
+      responses:
+        '200':
+          description: Usage report
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  days:
+                    type: array
+                    items: { $ref: '#/components/schemas/PlatformStatsDay' }
+
+  /api/v1/platform-stats/usage/alert-summary:
+    get:
+      tags: [Platform usage]
+      summary: How many of the last 14 days had a worrying measure
+      description: |
+        Admin only. A count, not a list — for the alert section of the new
+        screen this feeds, rather than the detailed report `GET
+        /platform-stats/usage` gives. A day with no captured row does not
+        count either way; see that operation.
+      responses:
+        '200':
+          description: Alert summary
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  windowDays:
+                    type: integer
+                    description: Always 14 today — see `INITIAL_SPEC1.txt`.
+                  daysWithExceededThreshold: { type: integer }
 
   # -------------------------------------------------------- dev/test tooling --
   /api/v1/dev-test/referral-imports:
@@ -6573,3 +6644,107 @@ components:
             is no way to discard a take once opened.
         note: { type: [string, 'null'] }
         committedAt: { type: [string, 'null'], format: date-time }
+
+    CappedMeasure:
+      type: object
+      description: >-
+        A measure Cloudflare puts a free-plan cap on. `cap` is that published
+        limit, a fact; `threshold` is the assumed level for "worrying" —
+        `x-assumed`, see below — and `exceeded` is `value >= threshold`.
+      required: [value, cap, threshold, exceeded]
+      x-assumed: >-
+        `threshold` is a flat 80% of `cap`, Pete's decision to make, not
+        Cloudflare's or the build's. Tracked as Q44 in `OPEN-QUESTIONS.md`;
+        only Pete may close it.
+      properties:
+        value: { type: number }
+        cap: { type: number }
+        threshold: { type: number }
+        exceeded: { type: boolean }
+
+    UncappedMeasure:
+      type: object
+      description: >-
+        A measure with an assumed worrying level but no Cloudflare cap behind
+        it at all — currently only the Worker error rate.
+      required: [value, threshold, exceeded]
+      x-assumed: >-
+        `threshold` (a flat 5% error rate) is guessed outright, not derived
+        from any Cloudflare limit — there is none to derive it from. Tracked
+        as Q44 in `OPEN-QUESTIONS.md`; only Pete may close it.
+      properties:
+        value: { type: number }
+        threshold: { type: number }
+        exceeded: { type: boolean }
+
+    InformationalMeasure:
+      type: object
+      description: Carried for context only. No cap, no threshold, never "exceeded".
+      required: [value]
+      properties:
+        value: { type: number }
+
+    PlatformStatsDay:
+      type: object
+      description: >-
+        One captured Cloudflare usage day. See `INITIAL_SPEC1.txt`,
+        `#Platform usage monitoring`.
+      required:
+        [
+          date,
+          workerRequestsAccountWide,
+          workerRequestsThisApp,
+          workerErrorRateThisApp,
+          workerCpuTimeP99Us,
+          workerSubrequestsAvgPerInvocation,
+          workerWallTimeP99Ms,
+          d1RowsRead,
+          d1RowsWritten,
+          d1StorageBytes,
+        ]
+      properties:
+        date:
+          type: string
+          format: date
+          description: >-
+            UTC, not London — Cloudflare's own usage day, which resets at UTC
+            midnight regardless of where the food bank is.
+        workerRequestsAccountWide:
+          allOf:
+            - $ref: '#/components/schemas/CappedMeasure'
+            - description: >-
+                Every Worker on the account, not just this one — the cap is
+                account-wide and shared with the unrelated `losttemple-api`
+                Worker.
+        workerRequestsThisApp:
+          allOf:
+            - $ref: '#/components/schemas/InformationalMeasure'
+            - description: This app's own script only — context for the figure above.
+        workerErrorRateThisApp: { $ref: '#/components/schemas/UncappedMeasure' }
+        workerCpuTimeP99Us:
+          allOf:
+            - $ref: '#/components/schemas/CappedMeasure'
+            - description: >-
+                P99 CPU time across this app's invocations that day, in
+                microseconds, against the 10ms-per-invocation cap.
+        workerSubrequestsAvgPerInvocation:
+          allOf:
+            - $ref: '#/components/schemas/CappedMeasure'
+            - description: >-
+                Average subrequests per invocation that day, standing in for
+                the true 50-per-invocation cap: Cloudflare's daily aggregates
+                give no per-invocation maximum to compare directly. Part of
+                Q44 in `OPEN-QUESTIONS.md`.
+        workerWallTimeP99Ms:
+          allOf:
+            - $ref: '#/components/schemas/InformationalMeasure'
+            - description: >-
+                P99 wall-clock time across this app's invocations that day.
+                The free plan sets no duration cap for HTTP-triggered
+                Workers, so this carries no threshold.
+        d1RowsRead: { $ref: '#/components/schemas/CappedMeasure' }
+        d1RowsWritten: { $ref: '#/components/schemas/CappedMeasure' }
+        d1StorageBytes:
+          allOf:
+            - $ref: '#/components/schemas/CappedMeasure'
+            - description: A snapshot at collection time, not a daily figure.

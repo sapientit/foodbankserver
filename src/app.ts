@@ -13,6 +13,7 @@ import { referralRoutes } from './modules/referrals/referrals.routes.ts';
 import { exportRoutes } from './modules/exports/exports.routes.ts';
 import { fuelHelpRoutes } from './modules/fuel-help/fuel-help.routes.ts';
 import { pickListRoutes } from './modules/pick-lists/pick-lists.routes.ts';
+import { platformStatsRoutes } from './modules/platform-stats/platform-stats.routes.ts';
 import { ruleRoutes } from './modules/rules/rules.routes.ts';
 import { publicSessionRoutes } from './modules/sessions/public.routes.ts';
 import { smsRoutes } from './modules/sms/sms.routes.ts';
@@ -63,6 +64,7 @@ export function buildApp(config: AppConfig, options: ContextOptions = {}): Hono<
   app.route(API_PREFIX, ruleRoutes());
   app.route(API_PREFIX, voucherConfigRoutes());
   app.route(API_PREFIX, pickListRoutes());
+  app.route(API_PREFIX, platformStatsRoutes());
   app.route(API_PREFIX, userRoutes());
   app.route(API_PREFIX, smsRoutes());
   // Unauthenticated, like the public routes above — the provider posts here.

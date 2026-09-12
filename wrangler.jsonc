@@ -32,6 +32,16 @@
     // secret when a deployment of this environment needs to test a real
     // account against one real number instead.
     "SMS_SIMULATE": "true",
+    // The daily platform-usage job's settings — none of these three is a
+    // secret, see config/env.ts. The database id and script name are copied
+    // from this same file, below; the account id is the one every Worker on
+    // this account shares (confirmed via `wrangler whoami`/`d1 list` against
+    // the databases below, not guessed). CF_ANALYTICS_API_TOKEN is the one
+    // genuine credential here and is set with `wrangler secret put`, never
+    // here.
+    "CF_ACCOUNT_ID": "ea7ad751ffa489bc577330c6eedd7500",
+    "CF_D1_DATABASE_ID": "7804f3df-2d3f-40dd-85c1-ecab0d19e760",
+    "CF_WORKER_SCRIPT_NAME": "foodbank-server",
   },
 
   "d1_databases": [
@@ -110,6 +120,13 @@
         // here (rather than omitted) only so `wrangler types --strict-vars`
         // keeps the key honest across every environment.
         "SMS_SIMULATE": "",
+        // Same account as the dev/test block above — every Worker here
+        // shares one Cloudflare account, confirmed rather than guessed, see
+        // the comment there. Database id and script name copied from this
+        // file's own `d1_databases`/`name` below; token set as a secret.
+        "CF_ACCOUNT_ID": "ea7ad751ffa489bc577330c6eedd7500",
+        "CF_D1_DATABASE_ID": "975ce6e4-3d3c-4811-bd60-feb0cbfad966",
+        "CF_WORKER_SCRIPT_NAME": "foodbank-server-production",
       },
       "d1_databases": [
         {

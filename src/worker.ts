@@ -43,6 +43,10 @@ export default {
         clock: systemClock,
         logger,
         piiRetentionDays: config.piiRetentionDays,
+        cfAccountId: config.cfAccountId,
+        cfD1DatabaseId: config.cfD1DatabaseId,
+        cfWorkerScriptName: config.cfWorkerScriptName,
+        cfAnalyticsApiToken: config.cfAnalyticsApiToken,
       });
 
       logger.info('scheduled run finished', { count: result.sessionsCreated });
