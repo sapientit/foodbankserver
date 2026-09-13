@@ -18,6 +18,13 @@ rendering and no PDF — printing and layout are the client's.
 `/health` and `/ready` sit at the **root**, not under `/api/v1`. Everything else
 is under the base path.
 
+`/health`'s `version` is the deployed commit's git SHA, stamped by `npm run
+deploy`/`deploy:test`. `null` normally means the Worker was not deployed that
+way — local dev, CI's dry run, or a manual `wrangler deploy` that skipped the
+stamp — rather than proof nothing real is running; there is no server-side
+guarantee tying the two together. Compare it against what you expect to have
+deployed if a release ever looks like it did not take.
+
 The test system runs dummy authentication, so anyone who knows a seeded address
 is an admin. **Never put real personal data in it.** The seeded address is
 deliberately not written down here — ask Pete for it.
@@ -2414,8 +2421,8 @@ GET /api/v1/platform-stats/usage?from=2026-09-01&to=2026-09-11
       "date": "2026-09-01",
       "workerRequestsAccountWide": { "value": 41203, "cap": 100000, "threshold": 80000, "exceeded": false },
       "workerRequestsThisApp": { "value": 38940 },
-      "workerErrorRateThisApp": { "value": 0.004, "threshold": 0.05, "exceeded": false },
-      "workerCpuTimeP99Us": { "value": 6200, "cap": 10000, "threshold": 8000, "exceeded": false },
+      "workerErrorsThisApp": { "value": 0, "threshold": 0, "exceeded": false },
+      "workerCpuTimeP99Us": { "value": 6200, "cap": 10000 },
       "workerSubrequestsAvgPerInvocation": { "value": 9.3, "cap": 50, "threshold": 40, "exceeded": false },
       "workerWallTimeP99Ms": { "value": 310 },
       "d1RowsRead": { "value": 812004, "cap": 5000000, "threshold": 4000000, "exceeded": false },
@@ -2432,16 +2439,25 @@ be clear. Both `from` and `to` are required.
 
 `cap` is one of Cloudflare's own published free-plan limits — a fact.
 `threshold` is the level the build currently treats as worth flagging, and
-**that number is a guess, not a settled requirement** — see `x-assumed` on
-`CappedMeasure`/`UncappedMeasure` in `openapi.yaml` and Q44 in
+**that number is a guess, not a settled requirement** for the measures that
+still carry `x-assumed` on `CappedMeasure` in `openapi.yaml` — see Q44 in
 `OPEN-QUESTIONS.md`. `workerRequestsAccountWide` is every Worker on the
 account, not just this one, because the 100,000/day cap is shared with the
 unrelated `losttemple-api` Worker. `workerSubrequestsAvgPerInvocation` is an
 average standing in for a true per-invocation maximum, which Cloudflare's
-daily aggregates cannot give — also part of Q44. Two measures carry no `cap`
-or `threshold` at all: `workerRequestsThisApp` (context for the account-wide
-figure) and `workerWallTimeP99Ms` (the free plan sets no duration cap for
-HTTP-triggered Workers).
+daily aggregates cannot give — also part of Q44.
+
+Two measures are settled, not guessed: `workerErrorsThisApp` is a raw count,
+not a rate, and `exceeded` is `value > 0` — a single Worker error is worrying
+on its own. `workerCpuTimeP99Us` carries a `cap` for reference but no
+`threshold` or `exceeded` at all (`CapReferenceMeasure`, not `CappedMeasure`)
+— the recorded P99 mixes every kind of invocation this Worker handles,
+including its own nightly maintenance run, not only the food bank's own
+request traffic, so it can never meaningfully mark a day as worrying.
+
+Two measures carry no `cap` or `threshold` at all: `workerRequestsThisApp`
+(context for the account-wide figure) and `workerWallTimeP99Ms` (the free
+plan sets no duration cap for HTTP-triggered Workers).
 
 ```
 GET /api/v1/platform-stats/usage/alert-summary

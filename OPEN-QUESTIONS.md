@@ -65,13 +65,15 @@ grep -n -A3 'x-assumed' openapi.yaml
 `Status: open`
 `Raised by: Claude`
 
-The platform usage report (`INITIAL_SPEC1.txt`, `#Platform usage monitoring`) compares each day's Worker and D1 usage against Cloudflare's published free-plan caps, and marks a line - and counts a day toward the fourteen-day alert - once a measure is close enough to worry about. Cloudflare's caps themselves are facts, not guesses: 100,000 Worker requests per day (account-wide, shared with the unrelated `losttemple-api` Worker on the same account), 10ms CPU time and 50 subrequests per Worker invocation, 5,000,000 D1 rows read per day, 100,000 D1 rows written per day, and 500MB per D1 database. How much margin before that counts as worrying is not.
+The platform usage report (`INITIAL_SPEC1.txt`, `#Platform usage monitoring`) compares each day's Worker and D1 usage against Cloudflare's published free-plan caps, and marks a line - and counts a day toward the fourteen-day alert - once a measure is close enough to worry about. Cloudflare's caps themselves are facts, not guesses: 100,000 Worker requests per day (account-wide, shared with the unrelated `losttemple-api` Worker on the same account), 50 subrequests per Worker invocation, 5,000,000 D1 rows read per day, 100,000 D1 rows written per day, and 500MB per D1 database. How much margin before that counts as worrying is not.
 
-Two of the measures Pete asked for have no Cloudflare cap to take a margin of at all: the Worker error rate, and subrequests, where Cloudflare's analytics only give a daily total rather than a true per-invocation maximum, so the build uses the average subrequests per invocation as a stand-in for the 50-per-invocation cap rather than the cap itself.
+Two measures are settled and no longer part of this question: processing time is now reference-only against Cloudflare's 10ms-per-invocation CPU cap and never marks a day or feeds the alert, because the figure mixes every kind of invocation - including the nightly maintenance run - not just the food bank's own request traffic, so closeness to that particular cap doesn't mean what it would for a pure request-handling measure (2026-09-13). And the Worker error count is worrying the moment it is non-zero at all - not a rate, and not a margin (2026-09-13).
 
-Until Pete decides, the build assumes a flat 80% of each Cloudflare cap counts as worrying, a flat 5% error rate, and 80% of the 50-subrequest cap (i.e. an average of 40) for the subrequests stand-in.
+One measure still has no Cloudflare cap to take a margin of at all: subrequests, where Cloudflare's analytics only give a daily total rather than a true per-invocation maximum, so the build uses the average subrequests per invocation as a stand-in for the 50-per-invocation cap rather than the cap itself.
 
-**Question:** What margin should count as worrying against each Cloudflare cap - one flat percentage for all of them, or a different one per measure? And what error rate should count as worrying, since there is no Cloudflare cap to take a percentage of?
+Until Pete decides, the build assumes a flat 80% of each remaining Cloudflare cap counts as worrying, and 80% of the 50-subrequest cap (i.e. an average of 40) for the subrequests stand-in.
+
+**Question:** What margin should count as worrying against each remaining Cloudflare cap (Worker requests account-wide, D1 rows read, D1 rows written, D1 storage) - one flat percentage for all of them, or a different one per measure? And what average-subrequests figure should count as worrying, given it's a stand-in rather than the cap itself?
 
 `x-assumed` in `openapi.yaml` marks the fields resting on this:
 

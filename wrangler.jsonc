@@ -19,6 +19,13 @@
     // Dummy auth accepts any email. config/env.ts refuses to boot if this is
     // set while ENVIRONMENT is production.
     "AUTH_MODE": "dummy",
+    // The commit deployed. Blank here — the deploy scripts (`deploy` and
+    // `deploy:test` in package.json) stamp the real value with `wrangler
+    // deploy --var GIT_SHA:$(git rev-parse HEAD)`, so it is never committed
+    // and is always whatever HEAD was at deploy time, not whatever this file
+    // last said. Blank in local dev and CI's dry run, where nothing is
+    // actually being deployed. Read `GET /health` to see it.
+    "GIT_SHA": "",
     // The spreadsheet extract. Neither is a secret: the OAuth client id is
     // public by design, and a spreadsheet id is useless without access to the
     // spreadsheet. Deliberately DIFFERENT values from production, so a test
@@ -111,6 +118,10 @@
         // until real authentication exists. Change to "google" only when the
         // Google provider is actually implemented — never to make it start.
         "AUTH_MODE": "dummy",
+        // Blank for the same reason as the top-level block: `npm run deploy`
+        // stamps the real commit at deploy time via `--var`, so nothing here
+        // needs editing per release.
+        "GIT_SHA": "",
         // The charity's real spreadsheet and OAuth client. Set these before
         // the extract can run; until they are set the button reports itself
         // unconfigured rather than failing at Google.

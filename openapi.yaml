@@ -95,9 +95,14 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [status]
+                required: [status, version]
                 properties:
                   status: { type: string, enum: [ok] }
+                  version:
+                    type: [string, 'null']
+                    description: >
+                      The deployed commit's git SHA, stamped at deploy time.
+                      Null where none was stamped (local dev, CI's dry run).
 
   /ready:
     get:
@@ -6665,13 +6670,11 @@ components:
     UncappedMeasure:
       type: object
       description: >-
-        A measure with an assumed worrying level but no Cloudflare cap behind
-        it at all — currently only the Worker error rate.
+        A measure with a worrying level but no Cloudflare cap behind it at
+        all — currently only the Worker error count, where `threshold` is
+        always `0`: Pete settled 2026-09-13 that a single error is worrying,
+        not some rate or proportion of requests.
       required: [value, threshold, exceeded]
-      x-assumed: >-
-        `threshold` (a flat 5% error rate) is guessed outright, not derived
-        from any Cloudflare limit — there is none to derive it from. Tracked
-        as Q44 in `OPEN-QUESTIONS.md`; only Pete may close it.
       properties:
         value: { type: number }
         threshold: { type: number }
@@ -6684,6 +6687,22 @@ components:
       properties:
         value: { type: number }
 
+    CapReferenceMeasure:
+      type: object
+      description: >-
+        A measure shown against a Cloudflare cap for context, but that never
+        marks a day or counts toward the fourteen-day alert — currently only
+        processing time. Pete settled 2026-09-13 that this doesn't get a
+        threshold at all: the recorded P99 mixes every kind of invocation
+        this Worker handles, including its own nightly maintenance run, not
+        only the requests the food bank's own use produces, so a high
+        reading here doesn't mean the food bank is pushing the system toward
+        the cap.
+      required: [value, cap]
+      properties:
+        value: { type: number }
+        cap: { type: number }
+
     PlatformStatsDay:
       type: object
       description: >-
@@ -6694,7 +6713,7 @@ components:
           date,
           workerRequestsAccountWide,
           workerRequestsThisApp,
-          workerErrorRateThisApp,
+          workerErrorsThisApp,
           workerCpuTimeP99Us,
           workerSubrequestsAvgPerInvocation,
           workerWallTimeP99Ms,
@@ -6720,13 +6739,19 @@ components:
           allOf:
             - $ref: '#/components/schemas/InformationalMeasure'
             - description: This app's own script only — context for the figure above.
-        workerErrorRateThisApp: { $ref: '#/components/schemas/UncappedMeasure' }
+        workerErrorsThisApp:
+          allOf:
+            - $ref: '#/components/schemas/UncappedMeasure'
+            - description: >-
+                Count of failed invocations of this app's own script that
+                day — not a rate. `exceeded` is `value > 0`.
         workerCpuTimeP99Us:
           allOf:
-            - $ref: '#/components/schemas/CappedMeasure'
+            - $ref: '#/components/schemas/CapReferenceMeasure'
             - description: >-
-                P99 CPU time across this app's invocations that day, in
-                microseconds, against the 10ms-per-invocation cap.
+                P99 CPU time across every invocation of this app's script
+                that day, in microseconds, against the 10ms-per-invocation
+                cap — reference only, see `CapReferenceMeasure`.
         workerSubrequestsAvgPerInvocation:
           allOf:
             - $ref: '#/components/schemas/CappedMeasure'

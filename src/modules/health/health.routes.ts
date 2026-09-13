@@ -5,6 +5,8 @@ import type { AppEnv } from '../../http/types.ts';
 
 export interface HealthResponse {
   readonly status: 'ok';
+  /** The deployed commit, or `null` where none was stamped (local dev, CI's dry run). */
+  readonly version: string | null;
 }
 
 export interface ReadyResponse {
@@ -15,9 +17,14 @@ export interface ReadyResponse {
 export function healthRoutes(): Hono<AppEnv> {
   const routes = new Hono<AppEnv>();
 
-  /** Liveness. Touches nothing downstream, so it stays up while D1 is not. */
+  /**
+   * Liveness. Touches nothing downstream, so it stays up while D1 is not.
+   * `version` is the git commit stamped at deploy time (see `config/env.ts`)
+   * — a deploy script or a human can curl this after a deploy and compare it
+   * against `git rev-parse HEAD` to confirm the edge picked up the release.
+   */
   routes.get('/health', (c) => {
-    return c.json<HealthResponse>({ status: 'ok' });
+    return c.json<HealthResponse>({ status: 'ok', version: c.get('config').gitSha ?? null });
   });
 
   /** Readiness. Confirms the D1 binding actually answers. */

@@ -8,7 +8,15 @@ describe('health routes', () => {
     const response = await testApp.request('/health');
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ status: 'ok' });
+    expect(await response.json()).toEqual({ status: 'ok', version: null });
+  });
+
+  it('reports the stamped commit as version', async () => {
+    const stamped = buildTestApp({ bindings: { GIT_SHA: 'abc1234' } });
+
+    const response = await stamped.request('/health');
+
+    expect(await response.json()).toEqual({ status: 'ok', version: 'abc1234' });
   });
 
   it('reports ready when D1 answers', async () => {

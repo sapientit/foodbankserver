@@ -33,6 +33,15 @@ const configSchema = z
     LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error', 'silent']).default('info'),
     AUTH_MODE: z.enum(['dummy', 'google']).default('dummy'),
     /**
+     * The commit deployed, stamped by `npm run deploy` / `deploy:test` via
+     * `wrangler deploy --var GIT_SHA:$(git rev-parse HEAD)` — never the
+     * committed placeholder in `wrangler.jsonc`. Blank in local dev and in
+     * CI's dry run, where nothing is actually deployed. Exposed at
+     * `GET /health` so a deploy script or a human can confirm the edge is
+     * serving the commit that was just pushed, rather than a stale isolate.
+     */
+    GIT_SHA: blankIsUnset,
+    /**
      * HMAC key for access tokens. A Worker secret, never a var — it must not
      * appear in wrangler.jsonc. Deliberately has no default: a missing signing
      * key must stop the Worker, not silently produce forgeable tokens.
@@ -225,6 +234,7 @@ export interface AppConfig {
   readonly environment: RawConfig['ENVIRONMENT'];
   readonly logLevel: RawConfig['LOG_LEVEL'];
   readonly authMode: RawConfig['AUTH_MODE'];
+  readonly gitSha: string | undefined;
   readonly jwtSecret: string;
   readonly turnstileSecret: string | undefined;
   readonly allowedOrigins: readonly string[];
@@ -266,6 +276,7 @@ export function loadConfig(bindings: object): AppConfig {
     environment: result.data.ENVIRONMENT,
     logLevel: result.data.LOG_LEVEL,
     authMode: result.data.AUTH_MODE,
+    gitSha: result.data.GIT_SHA,
     jwtSecret: result.data.AUTH_JWT_SECRET,
     turnstileSecret: result.data.TURNSTILE_SECRET_KEY,
     allowedOrigins: result.data.ALLOWED_ORIGINS.split(',')

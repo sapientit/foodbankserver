@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import type { PlatformDailyStats } from '../src/db/schema/platform-stats.ts';
 import {
   ASSUMED_WARNING_FRACTION_OF_CAP,
-  ASSUMED_WORRYING_ERROR_RATE,
   CLOUDFLARE_FREE_PLAN_CAPS,
   evaluateDay,
   hasAnyExceeded,
@@ -55,25 +54,40 @@ describe('evaluateDay', () => {
     );
   });
 
-  it('computes the error rate from errors over this app’s own requests, not the account-wide total', () => {
+  it('carries processing time as reference-only — a value and a cap, nothing else', () => {
+    // Pete settled 2026-09-13: the recorded P99 mixes every invocation this
+    // Worker handles, including its own nightly maintenance run, not just
+    // the food bank's own request traffic, so it never marks a day worrying.
     const day = evaluateDay(
+      quietDay({ workerCpuTimeP99Us: 10 * CLOUDFLARE_FREE_PLAN_CAPS.workerCpuTimePerInvocationUs }),
+    );
+    expect(day.workerCpuTimeP99Us).toEqual({
+      value: 10 * CLOUDFLARE_FREE_PLAN_CAPS.workerCpuTimePerInvocationUs,
+      cap: CLOUDFLARE_FREE_PLAN_CAPS.workerCpuTimePerInvocationUs,
+    });
+    expect(day.workerCpuTimeP99Us).not.toHaveProperty('threshold');
+    expect(day.workerCpuTimeP99Us).not.toHaveProperty('exceeded');
+  });
+
+  it('marks any non-zero Worker error count as exceeded, not a rate past some margin', () => {
+    // Pete settled 2026-09-13: one error is worrying on its own.
+    const oneError = evaluateDay(
       quietDay({
         workerRequestsAccountWide: 10_000,
         workerRequestsThisApp: 200,
-        workerErrorsThisApp: 20,
+        workerErrorsThisApp: 1,
       }),
     );
-    expect(day.workerErrorRateThisApp.value).toBeCloseTo(0.1);
-    expect(day.workerErrorRateThisApp.threshold).toBe(ASSUMED_WORRYING_ERROR_RATE);
-    expect(day.workerErrorRateThisApp.exceeded).toBe(true);
+    expect(oneError.workerErrorsThisApp).toEqual({ value: 1, threshold: 0, exceeded: true });
+
+    const noErrors = evaluateDay(quietDay({ workerErrorsThisApp: 0 }));
+    expect(noErrors.workerErrorsThisApp).toEqual({ value: 0, threshold: 0, exceeded: false });
   });
 
   it('does not divide by zero on a day with no requests', () => {
     const day = evaluateDay(
       quietDay({ workerRequestsThisApp: 0, workerErrorsThisApp: 0, workerSubrequestsSum: 0 }),
     );
-    expect(day.workerErrorRateThisApp.value).toBe(0);
-    expect(day.workerErrorRateThisApp.exceeded).toBe(false);
     expect(day.workerSubrequestsAvgPerInvocation.value).toBe(0);
     expect(day.workerSubrequestsAvgPerInvocation.exceeded).toBe(false);
   });
@@ -103,13 +117,24 @@ describe('hasAnyExceeded', () => {
     expect(hasAnyExceeded(day)).toBe(true);
   });
 
-  it('is true when only the uncapped error rate is over its assumed margin', () => {
-    const day = evaluateDay(quietDay({ workerRequestsThisApp: 100, workerErrorsThisApp: 50 }));
+  it('is true the moment there is a single Worker error', () => {
+    const day = evaluateDay(quietDay({ workerRequestsThisApp: 100, workerErrorsThisApp: 1 }));
     expect(hasAnyExceeded(day)).toBe(true);
   });
 
   it('ignores the informational measures — no wall-time spike counts toward the alert', () => {
     const day = evaluateDay(quietDay({ workerWallTimeP99Ms: 999_999 }));
+    expect(hasAnyExceeded(day)).toBe(false);
+  });
+
+  it('ignores processing time no matter how far over the cap it runs', () => {
+    // The whole point of making this reference-only: it must never be able
+    // to trip the alert on its own, however extreme the reading.
+    const day = evaluateDay(
+      quietDay({
+        workerCpuTimeP99Us: 1000 * CLOUDFLARE_FREE_PLAN_CAPS.workerCpuTimePerInvocationUs,
+      }),
+    );
     expect(hasAnyExceeded(day)).toBe(false);
   });
 });
