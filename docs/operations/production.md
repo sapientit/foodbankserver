@@ -105,6 +105,14 @@ configuration.**
    Both are blank in the production block until somebody fills them in, and blank means unset: the
    extract reports itself unconfigured and refuses rather than the Worker failing to boot.
 
+   **Local dev has a third spreadsheet, layered on top of the test one via `.dev.vars`.** The
+   top-level `GOOGLE_SHEETS_SPREADSHEET_ID` in `wrangler.jsonc` is what the deployed test system
+   (`foodbank-server.workers.dev`) uses; `wrangler dev` reads the same file, so without an override
+   a local run would write into the deployed test system's rows. `.dev.vars` wins over `vars` for
+   local `wrangler dev` only (confirmed 2026-09-14), so `GOOGLE_SHEETS_SPREADSHEET_ID` set there
+   gives local dev its own spreadsheet without touching the deployed test value. See
+   `.dev.vars.example`.
+
    Two things to be deliberate about before turning it on, both the charity's to weigh and neither
    enforceable from here: **residency** — a Workspace with EU data regions keeps the residency the
    D1 jurisdiction was chosen for, a personal Gmail account does not — and the fact that **the

@@ -20,3 +20,11 @@ AUTH_JWT_SECRET=replace-me-with-at-least-32-random-characters
 # Unset means personal data is never purged. Set only once the charity has
 # agreed a retention period.
 # PII_RETENTION_DAYS=730
+
+# Overrides wrangler.jsonc's top-level GOOGLE_SHEETS_SPREADSHEET_ID for local
+# `wrangler dev` only (.dev.vars wins over `vars` there). Without this, local
+# dev shares a spreadsheet with the deployed test system
+# (foodbank-server.workers.dev) — same reasoning as test vs. production
+# having different values: a dev run must not write into rows the deployed
+# test system, or someone testing against it, is relying on.
+# GOOGLE_SHEETS_SPREADSHEET_ID=
