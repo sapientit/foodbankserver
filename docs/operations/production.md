@@ -189,7 +189,7 @@ headroom:
 | Limit                          | Free      | Paid          | Bites                                                                                                                                                                      |
 | ------------------------------ | --------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Subrequests per invocation** | **50**    | 10,000        | **Yes.** SMS sending issues one outbound `fetch` per household, so a session of more than ~48 households cannot be texted in a single invocation.                          |
-| **CPU per invocation**         | **10 ms** | 30 s          | **Possibly.** Applies to cron invocations too. D1 wait does not count, so most routes are safe; pick-list generation is the one to watch. Unproven — see below.            |
+| **CPU per invocation**         | **10 ms** | 30 s          | **Reliably exceeded by the nightly job, but confirmed harmless.** Applies to cron invocations too. D1 wait does not count, so most routes are safe. See below.             |
 | D1 queries per invocation      | 50        | 1,000         | Already designed around — see the query-budget note in `materialise-sessions.ts`. The PII purge is the known violator and stays inert while `PII_RETENTION_DAYS` is unset. |
 | Requests per day               | 100,000   | —             | No.                                                                                                                                                                        |
 | Cron triggers per account      | 5         | —             | No — one trigger, as the config comment says.                                                                                                                              |
@@ -212,10 +212,21 @@ through before the counter propagates. 12 rapid posts against the same 5/60s lim
 `429` at all. Treat it as protection against sustained abuse, not as an exact gate — and never write
 a test that asserts the Nth request is refused.
 
-**The 10 ms CPU ceiling is not yet proven.** The scheduled job has only been run against an empty
-database, where it considered zero templates. It needs re-running once the test system has real
-recurring sessions and referrals in it, and the first unattended 02:17 run should be checked in
-Workers Logs.
+**The 10 ms CPU ceiling is reliably exceeded by the nightly job, and that is expected, not a bug.**
+Confirmed 2026-09-13 by profiling the real job — against a database with real recurring
+templates, not an empty one — both via the admin trigger route and via repeated calls to the local
+scheduled-handler test endpoint: the _first_ call to this job's code in a given isolate costs 8–10×
+more than every call after it, because `materialiseSessions`, the purges and the timezone
+conversion inside them are only ever called by this one job. Nothing else in the app exercises that
+code, so it never gets promoted out of V8's slow interpreter tier before the isolate is likely
+evicted again. It is not about being cron specifically — an HTTP-triggered run of the identical code
+showed the same elevated cost — and it is not about data volume; the job's actual work (a handful of
+D1 reads/writes and two subrequests) is close to free once warm. There is no Cloudflare feature to
+keep a specific isolate or function warm, and a second warming cron would only relocate the same
+cold-first-call cost onto a different invocation, so this is not actionable and not worth chasing.
+It does not matter operationally either way: processing time is reference-only and does not feed the
+alert (`INITIAL_SPEC1.txt`, `#Platform usage monitoring`), and every invocation observed so far —
+cold or warm — has returned `outcome: "ok"`.
 
 ## Scheduled work
 

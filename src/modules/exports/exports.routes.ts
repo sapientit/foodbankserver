@@ -9,6 +9,9 @@ import { createPickListsRepository } from '../pick-lists/pick-lists.repository.t
 import { createReferrersRepository } from '../referrers/referrers.repository.ts';
 import { createReferrersService } from '../referrers/referrers.service.ts';
 import { createSessionsRepository } from '../sessions/sessions.repository.ts';
+import { createCratesRepository } from '../stock/crates.repository.ts';
+import { createStockRepository } from '../stock/stock.repository.ts';
+import { createStockService } from '../stock/stock.service.ts';
 import { createVoucherConfigRepository } from '../voucher-config/voucher-config.repository.ts';
 import {
   createExportsService,
@@ -111,6 +114,13 @@ function serviceFor(c: Context<AppEnv>) {
       voucherConfig: createVoucherConfigRepository(db),
     }),
     referrersService,
+    stockService: createStockService({
+      db,
+      repository: createStockRepository(db),
+      cratesRepository: createCratesRepository(db),
+      clock,
+      logger: c.get('logger'),
+    }),
     clock,
     logger: c.get('logger'),
     google: extractConfig(c.get('config')),

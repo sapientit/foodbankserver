@@ -6,7 +6,13 @@ import type { Logger } from '../../core/log.ts';
 import type { ReferralsService } from '../referrals/referrals.service.ts';
 import type { ReferrersService } from '../referrers/referrers.service.ts';
 import type { SessionsRepository } from '../sessions/sessions.repository.ts';
-import { toExtractRow, type ExtractRow } from './exports.mapper.ts';
+import type { StockService } from '../stock/stock.service.ts';
+import {
+  toExtractRow,
+  toStockItemUsage,
+  type ExtractRow,
+  type StockItemUsage,
+} from './exports.mapper.ts';
 
 /**
  * Extracting confirmed sessions to the charity's Google spreadsheet.
@@ -47,6 +53,7 @@ export interface ExportServiceDeps {
   readonly sessions: SessionsRepository;
   readonly referralsService: ReferralsService;
   readonly referrersService: ReferrersService;
+  readonly stockService: StockService;
   readonly clock: Clock;
   readonly logger: Logger;
   readonly google: ExtractConfig | undefined;
@@ -83,6 +90,13 @@ export interface ExtractClaim {
   /** The session's location, which is what the spreadsheet's session column holds. */
   readonly sessionLocation: string;
   readonly rows: readonly ExtractRow[];
+  /**
+   * One entry per stock item this session actually issued, summed across
+   * every parcel on it. Extracted and marked extracted with the rest of
+   * the session — there is no separate queue and no separate reservation
+   * for this. `[]`, not omitted, when the session issued nothing.
+   */
+  readonly stockItemUsage: readonly StockItemUsage[];
 }
 
 export interface ClaimResponse extends ExtractProgress {
@@ -115,7 +129,8 @@ export function extractConfig(config: {
 }
 
 export function createExportsService(deps: ExportServiceDeps) {
-  const { sessions, referralsService, referrersService, clock, logger, google } = deps;
+  const { sessions, referralsService, referrersService, stockService, clock, logger, google } =
+    deps;
 
   /**
    * What the browser needs before it can start: which spreadsheet, and which
@@ -187,6 +202,10 @@ export function createExportsService(deps: ExportServiceDeps) {
       toExtractRow(referral, labelOf.get(referral.reasonId) ?? null),
     );
 
+    const stockItemUsage = (await stockService.sumIssuedByItemForSession(session.id)).map(
+      toStockItemUsage,
+    );
+
     // Counts and identifiers only. `LogContext` cannot carry a name or an
     // address by construction, which is what makes this safe rather than
     // remembered.
@@ -208,6 +227,7 @@ export function createExportsService(deps: ExportServiceDeps) {
         sessionDate: session.sessionDate,
         sessionLocation: session.location,
         rows,
+        stockItemUsage,
       },
       ...(await sessions.extractProgress()),
     };

@@ -15,6 +15,12 @@ export interface StockLevel {
   readonly quantityOnHand: number;
 }
 
+export interface IssuedStockUsage {
+  readonly stockItemId: string;
+  readonly stockItemName: string;
+  readonly quantity: number;
+}
+
 /**
  * By category, or by shelf.
  *
@@ -107,6 +113,49 @@ export function createStockRepository(db: Database) {
         .from(stockLedger)
         .where(eq(stockLedger.stockItemId, stockItemId));
       return Number(rows[0]?.total ?? 0);
+    },
+
+    /**
+     * What a session's parcels actually took off the shelf, one row per
+     * item — for the spreadsheet extract's stock-usage summary
+     * (`exports.service.ts`). Only `parcel_issued` movements count, and
+     * only this session's: an `opening_balance` or `correction` never
+     * carries a `sessionId` so the join already excludes them, but the
+     * explicit `movementType` guard is what protects this from a future
+     * movement type that does.
+     *
+     * `quantity_delta` is negative on an issue (see the doc comment on
+     * `stockLedger`), so the summed total comes back negative and is
+     * negated here into the positive whole number the extract wants. An
+     * item is retired by `isActive`, not deleted, so a retired item this
+     * session issued still joins and is still named — retirement is not
+     * consulted here at all.
+     */
+    async sumIssuedByItemForSession(sessionId: string): Promise<IssuedStockUsage[]> {
+      const rows = await db
+        .select({
+          stockItemId: stockLedger.stockItemId,
+          stockItemName: stockItems.name,
+          total: sum(stockLedger.quantityDelta),
+        })
+        .from(stockLedger)
+        .innerJoin(stockItems, eq(stockItems.id, stockLedger.stockItemId))
+        .where(
+          and(eq(stockLedger.sessionId, sessionId), eq(stockLedger.movementType, 'parcel_issued')),
+        )
+        .groupBy(stockLedger.stockItemId, stockItems.name);
+
+      // Defensive rather than expected: every parcel_issued row is a
+      // negative delta by construction, so the negated sum is always
+      // positive whenever there is a row at all. Filtering anyway is what
+      // "omit zero-quantity items" means if that ever stops being true.
+      return rows
+        .map((row) => ({
+          stockItemId: row.stockItemId,
+          stockItemName: row.stockItemName,
+          quantity: -Number(row.total ?? 0),
+        }))
+        .filter((row) => row.quantity > 0);
     },
 
     /**

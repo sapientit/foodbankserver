@@ -1,5 +1,6 @@
 import { parseAnswers } from '../../core/answers.ts';
 import type { Referral } from '../../db/schema/referrals.ts';
+import type { IssuedStockUsage } from '../stock/stock.repository.ts';
 
 /**
  * What the browser writes to the spreadsheet, and the only thing that decides
@@ -93,5 +94,33 @@ export function toExtractRow(referral: Referral, reasonLabel: string | null): Ex
     reason: reasonLabel,
     reviewComment: referral.reviewComment,
     answers: parseAnswers(referral.answersJson),
+  };
+}
+
+/**
+ * One stock item this session issued, for the extract's stock-usage
+ * summary.
+ *
+ * `INITIAL_SPEC1.txt`, `#Sending referrals to the spreadsheet` — settled
+ * alongside the referral rows: one entry per item the session actually
+ * issued, already summed across every parcel on the session and reduced to
+ * the positive whole number issued. A retired item is still named here if
+ * it was issued for this session, the same as a retired reason still
+ * labels a referral that cited it. No stock movement's id, or any other
+ * per-movement detail, is part of what leaves the server this way — only
+ * the total.
+ */
+export interface StockItemUsage {
+  readonly stockItemId: string;
+  readonly stockItemName: string;
+  readonly quantity: number;
+}
+
+/** Field by field, same allowlist discipline as `toExtractRow` above. */
+export function toStockItemUsage(row: IssuedStockUsage): StockItemUsage {
+  return {
+    stockItemId: row.stockItemId,
+    stockItemName: row.stockItemName,
+    quantity: row.quantity,
   };
 }

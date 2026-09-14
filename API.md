@@ -2635,6 +2635,28 @@ a spreadsheet column** — it is there to complete the claim and to reconcile a
 duplicate, and a UUID in a spreadsheet helps nobody, which is the same reason
 `reason` is the label rather than the id.
 
+### Stock usage
+
+Alongside `claim.rows`, every claim also carries `claim.stockItemUsage`: one
+entry per stock item the session actually issued, giving `stockItemId`,
+`stockItemName` and the whole-number `quantity` issued for that item across
+every parcel on the session. It is aggregated on the server from the stock
+ledger's `parcel_issued` movements for the session — never a per-household
+figure, and never anything that would let one movement be told apart from
+another: no movement id and no per-movement extracted state reaches this far.
+
+A retired stock item still appears here if it was issued for this session,
+the same as a retired referral reason still labels a referral that cited it.
+An item the session never issued, or whose issued quantity nets to zero, is
+simply absent from the array — including when that leaves it empty: a
+session that issued nothing still returns `stockItemUsage: []`, not a
+missing field.
+
+`stockItemUsage` is reserved and marked extracted with the rest of the
+session, through the same claim and the same `complete` call. There is no
+separate queue, no separate reservation, and no way to extract a session's
+stock usage without its referral rows or the other way round.
+
 `answers` is an **object, not a JSON string**. The spreadsheet's hidden metadata
 sheet owns the `answerKey → column` mapping: read it before your first write,
 put each key's answer in that key's column, and write the metadata sheet back

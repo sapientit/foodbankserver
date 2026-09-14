@@ -375,6 +375,8 @@ export function createStockService({
     listLevels: (activeOnly: boolean, order: StockOrder): Promise<StockLevel[]> =>
       repository.listLevels(activeOnly, order),
     searchItems: (term: string) => repository.searchItems(term),
+    sumIssuedByItemForSession: (sessionId: string) =>
+      repository.sumIssuedByItemForSession(sessionId),
     createItem,
     updateItem,
     recordStockTake,

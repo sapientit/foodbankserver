@@ -7,6 +7,12 @@ import { createDatabase } from '../src/db/client.ts';
 import { auditEvents, referrals } from '../src/db/schema/referrals.ts';
 import { authorisedReferrers, referralReasons } from '../src/db/schema/referrers.ts';
 import { recurringSessions, sessions, type NewSession } from '../src/db/schema/sessions.ts';
+import {
+  stockItems,
+  stockLedger,
+  type NewStockItem,
+  type NewStockLedgerEntry,
+} from '../src/db/schema/stock.ts';
 import { refreshTokens, users } from '../src/db/schema/users.ts';
 import { authHeaders, buildTestApp, devLogin, type TestApp } from './helpers/app.ts';
 import {
@@ -112,6 +118,52 @@ async function seedSession(overrides: Partial<NewSession> = {}): Promise<string>
   return id;
 }
 
+/**
+ * A stock item, seeded directly rather than through the maintenance screen —
+ * these tests only care that the item exists and can be joined by
+ * `sumIssuedByItemForSession`, not how it was created. `name` is the caller's
+ * to choose since `nameNormalised` is unique: two calls with the same default
+ * name in one test would collide.
+ */
+async function seedStockItem(name: string, overrides: Partial<NewStockItem> = {}): Promise<string> {
+  const id = overrides.id ?? crypto.randomUUID();
+  const defaults: NewStockItem = {
+    id,
+    name,
+    nameNormalised: name.toLowerCase(),
+    shelfNumber: 'A1',
+    createdAt: NOW,
+    updatedAt: NOW,
+  };
+  await db.insert(stockItems).values({ ...defaults, ...overrides, id });
+  return id;
+}
+
+/**
+ * A single stock-ledger row, seeded directly. Defaults to a `parcel_issued`
+ * movement with a fresh parcel id — the ordinary case every stock-usage test
+ * but the "wrong movement type" ones wants. `stockItemId` and `sessionId` are
+ * always the caller's to supply.
+ */
+async function insertLedgerRow(
+  overrides: Partial<NewStockLedgerEntry> & { stockItemId: string; sessionId: string | null },
+): Promise<string> {
+  const id = overrides.id ?? crypto.randomUUID();
+  const defaults: NewStockLedgerEntry = {
+    id,
+    stockItemId: overrides.stockItemId,
+    quantityDelta: -1,
+    movementType: 'parcel_issued',
+    parcelId: crypto.randomUUID(),
+    sessionId: overrides.sessionId,
+    actorUserId: null,
+    occurredAt: NOW,
+    createdAt: NOW,
+  };
+  await db.insert(stockLedger).values({ ...defaults, ...overrides, id });
+  return id;
+}
+
 interface ExtractProgressBody {
   readonly remaining: number;
   readonly extracted: number;
@@ -140,6 +192,12 @@ interface ExtractRowBody {
   readonly answers: Record<string, unknown>;
 }
 
+interface StockItemUsageBody {
+  readonly stockItemId: string;
+  readonly stockItemName: string;
+  readonly quantity: number;
+}
+
 interface ExtractClaimBody {
   readonly claimId: string;
   readonly expiresAt: string;
@@ -147,6 +205,7 @@ interface ExtractClaimBody {
   readonly sessionDate: string;
   readonly sessionLocation: string;
   readonly rows: ExtractRowBody[];
+  readonly stockItemUsage: StockItemUsageBody[];
 }
 
 interface ClaimResponseBody extends ExtractProgressBody {
@@ -210,10 +269,14 @@ async function sessionRow(sessionId: string) {
 }
 
 beforeEach(async () => {
+  // `stockLedger` references both `stockItems` and `sessions`, so it must be
+  // cleared before either — see the same ordering in `attendance.test.ts`.
+  await db.delete(stockLedger);
   await db.delete(auditEvents);
   await db.delete(referrals);
   await db.delete(referralReasons);
   await db.delete(authorisedReferrers);
+  await db.delete(stockItems);
   await db.delete(sessions);
   await db.delete(recurringSessions);
   await db.delete(refreshTokens);
@@ -355,11 +418,31 @@ describe('the spreadsheet extract', () => {
       expect(body.claim?.sessionId).toBe(earliest);
       expect(body.claim?.sessionDate).toBe('2026-08-01');
       expect(Object.keys(body.claim ?? {}).sort()).toEqual(
-        ['claimId', 'expiresAt', 'sessionId', 'sessionDate', 'sessionLocation', 'rows'].sort(),
+        [
+          'claimId',
+          'expiresAt',
+          'sessionId',
+          'sessionDate',
+          'sessionLocation',
+          'rows',
+          'stockItemUsage',
+        ].sort(),
       );
       expect(typeof body.claim?.claimId).toBe('string');
       expect(body.claim?.claimId.length).toBeGreaterThan(0);
       expect(body.claim?.rows).toEqual([]);
+    });
+
+    it('carries stockItemUsage: [] — present, not omitted — for a confirmed session that issued no stock at all', async () => {
+      const testApp = configuredApp();
+      const { accessToken: token } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+      await seedSession({ sessionDate: '2026-08-01' });
+
+      const { status, body } = await claimNext(testApp, token);
+
+      expect(status).toBe(200);
+      expect(Object.prototype.hasOwnProperty.call(body.claim ?? {}, 'stockItemUsage')).toBe(true);
+      expect(body.claim?.stockItemUsage).toEqual([]);
     });
 
     it('carries the session location, not its id, so the spreadsheet gets a place rather than a UUID', async () => {
@@ -856,6 +939,209 @@ describe('the spreadsheet extract', () => {
       ]) {
         expect(rowText).not.toContain(absent);
       }
+    });
+  });
+
+  describe('stock item usage', () => {
+    it('sums parcel_issued quantity across every parcel on the session for one item, reported as a positive whole number', async () => {
+      const testApp = configuredApp();
+      const { accessToken: token } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+      const sessionId = await seedSession({ sessionDate: '2026-08-01' });
+      const beansId = await seedStockItem('Baked Beans');
+
+      // Two parcels, each issuing beans, each its own ledger row.
+      await insertLedgerRow({ stockItemId: beansId, sessionId, quantityDelta: -3 });
+      await insertLedgerRow({ stockItemId: beansId, sessionId, quantityDelta: -2 });
+
+      const { status, body } = await claimNext(testApp, token);
+
+      expect(status).toBe(200);
+      expect(body.claim?.stockItemUsage).toEqual([
+        { stockItemId: beansId, stockItemName: 'Baked Beans', quantity: 5 },
+      ]);
+    });
+
+    it('never counts an opening_balance or correction movement, even one that carries this session id', async () => {
+      const testApp = configuredApp();
+      const { accessToken: token } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+      const sessionId = await seedSession({ sessionDate: '2026-08-01' });
+      const beansId = await seedStockItem('Baked Beans');
+
+      // Real code never stamps a session id on these movement types, but the
+      // query must filter on `movementType` itself rather than incidentally
+      // relying on that — so these deliberately carry the test session's id.
+      await insertLedgerRow({
+        stockItemId: beansId,
+        sessionId,
+        movementType: 'opening_balance',
+        quantityDelta: 50,
+        parcelId: null,
+      });
+      await insertLedgerRow({
+        stockItemId: beansId,
+        sessionId,
+        movementType: 'correction',
+        quantityDelta: -10,
+        parcelId: null,
+      });
+      await insertLedgerRow({ stockItemId: beansId, sessionId, quantityDelta: -4 });
+
+      const { body } = await claimNext(testApp, token);
+
+      expect(body.claim?.stockItemUsage).toEqual([
+        { stockItemId: beansId, stockItemName: 'Baked Beans', quantity: 4 },
+      ]);
+    });
+
+    it("never lets a parcel_issued movement for a different session leak into this session's usage", async () => {
+      const testApp = configuredApp();
+      const { accessToken: token } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+      const sessionId = await seedSession({ sessionDate: '2026-08-01' });
+      const otherSessionId = await seedSession({ sessionDate: '2026-08-02' });
+      const beansId = await seedStockItem('Baked Beans');
+
+      await insertLedgerRow({ stockItemId: beansId, sessionId: otherSessionId, quantityDelta: -5 });
+
+      const { body } = await claimNext(testApp, token);
+
+      expect(body.claim?.sessionId).toBe(sessionId);
+      expect(body.claim?.stockItemUsage).toEqual([]);
+    });
+
+    it('omits an item entirely when it was never issued for the session, rather than listing it at quantity zero', async () => {
+      const testApp = configuredApp();
+      const { accessToken: token } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+      const sessionId = await seedSession({ sessionDate: '2026-08-01' });
+      const issued = await seedStockItem('Baked Beans');
+      const neverIssued = await seedStockItem('Tinned Soup');
+
+      await insertLedgerRow({ stockItemId: issued, sessionId, quantityDelta: -1 });
+
+      const { body } = await claimNext(testApp, token);
+
+      const ids = (body.claim?.stockItemUsage ?? []).map((usage) => usage.stockItemId);
+      expect(ids).toContain(issued);
+      expect(ids).not.toContain(neverIssued);
+    });
+
+    it('omits an item whose net summed quantity is zero or negative — provable only by directly inserting conflicting ledger rows', async () => {
+      const testApp = configuredApp();
+      const { accessToken: token } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+      const sessionId = await seedSession({ sessionDate: '2026-08-01' });
+      const netZero = await seedStockItem('Net Zero Item');
+      const netNegative = await seedStockItem('Net Negative Item');
+      const genuinelyIssued = await seedStockItem('Baked Beans');
+
+      // Real code never writes a positive `parcel_issued` delta; these
+      // conflicting rows exist only to prove the response-side filter, not to
+      // model anything the ledger would actually contain.
+      await insertLedgerRow({ stockItemId: netZero, sessionId, quantityDelta: -3 });
+      await insertLedgerRow({ stockItemId: netZero, sessionId, quantityDelta: 3 });
+
+      await insertLedgerRow({ stockItemId: netNegative, sessionId, quantityDelta: -2 });
+      await insertLedgerRow({ stockItemId: netNegative, sessionId, quantityDelta: 5 });
+
+      await insertLedgerRow({ stockItemId: genuinelyIssued, sessionId, quantityDelta: -1 });
+
+      const { body } = await claimNext(testApp, token);
+
+      const ids = (body.claim?.stockItemUsage ?? []).map((usage) => usage.stockItemId);
+      expect(ids).not.toContain(netZero);
+      expect(ids).not.toContain(netNegative);
+      expect(ids).toContain(genuinelyIssued);
+    });
+
+    it('still lists a retired stock item, with its name, if it was issued for the session', async () => {
+      const testApp = configuredApp();
+      const { accessToken: token } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+      const sessionId = await seedSession({ sessionDate: '2026-08-01' });
+      const retiredId = await seedStockItem('Discontinued Soup', { isActive: 0 });
+
+      await insertLedgerRow({ stockItemId: retiredId, sessionId, quantityDelta: -6 });
+
+      const { body } = await claimNext(testApp, token);
+
+      expect(body.claim?.stockItemUsage).toEqual([
+        { stockItemId: retiredId, stockItemName: 'Discontinued Soup', quantity: 6 },
+      ]);
+    });
+
+    it('exposes only stockItemId, stockItemName and quantity — no ledger row id, parcel id, movement type or actor leak through', async () => {
+      const testApp = configuredApp();
+      const { accessToken: token } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+      const sessionId = await seedSession({ sessionDate: '2026-08-01' });
+      const beansId = await seedStockItem('Baked Beans');
+      const actorId = crypto.randomUUID();
+      await db.insert(users).values({
+        id: actorId,
+        email: 'volunteer@foodbank.org',
+        displayName: 'A Volunteer',
+        role: 'team_lead',
+        createdAt: NOW,
+        updatedAt: NOW,
+      });
+      const parcelId = crypto.randomUUID();
+      const ledgerRowId = crypto.randomUUID();
+      await insertLedgerRow({
+        id: ledgerRowId,
+        stockItemId: beansId,
+        sessionId,
+        quantityDelta: -1,
+        parcelId,
+        actorUserId: actorId,
+      });
+
+      const { body } = await claimNext(testApp, token);
+
+      const usage = body.claim?.stockItemUsage ?? [];
+      expect(usage).toHaveLength(1);
+      expect(Object.keys(usage[0] ?? {}).sort()).toEqual(
+        ['stockItemId', 'stockItemName', 'quantity'].sort(),
+      );
+
+      const usageText = JSON.stringify(usage);
+      for (const absent of [ledgerRowId, parcelId, actorId, 'parcel_issued', 'movementType']) {
+        expect(usageText).not.toContain(absent);
+      }
+    });
+  });
+
+  describe('completing a claim never touches the stock ledger or stock items — it stamps the session only', () => {
+    it('leaves every stock_ledger row for the session byte-identical, and stock_items untouched, after completion', async () => {
+      const testApp = configuredApp();
+      const { accessToken: token } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+      const sessionId = await seedSession({ sessionDate: '2026-08-01' });
+      const beansId = await seedStockItem('Baked Beans');
+      await insertLedgerRow({ stockItemId: beansId, sessionId, quantityDelta: -4 });
+
+      const claimed = await claimNext(testApp, token);
+      const claimId = claimed.body.claim?.claimId;
+      if (claimId === undefined) throw new Error('expected a claim');
+      expect(claimed.body.claim?.stockItemUsage).toEqual([
+        { stockItemId: beansId, stockItemName: 'Baked Beans', quantity: 4 },
+      ]);
+
+      const ledgerBefore = await db
+        .select()
+        .from(stockLedger)
+        .where(eq(stockLedger.sessionId, sessionId));
+      const itemsBefore = await db.select().from(stockItems).where(eq(stockItems.id, beansId));
+
+      const { status, body } = await completeClaim(testApp, token, claimId);
+      expect(status).toBe(200);
+      expect(body.sessionId).toBe(sessionId);
+
+      const row = await sessionRow(sessionId);
+      expect(row?.extractedAt).not.toBeNull();
+
+      const ledgerAfter = await db
+        .select()
+        .from(stockLedger)
+        .where(eq(stockLedger.sessionId, sessionId));
+      const itemsAfter = await db.select().from(stockItems).where(eq(stockItems.id, beansId));
+
+      expect(ledgerAfter).toEqual(ledgerBefore);
+      expect(itemsAfter).toEqual(itemsBefore);
     });
   });
 
