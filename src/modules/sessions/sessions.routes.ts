@@ -114,6 +114,13 @@ export function sessionRoutes(): Hono<AppEnv> {
     return c.json(toRecurringSessionResponse(updated));
   });
 
+  routes.delete('/recurring-sessions/:id', ...admins, async (c) => {
+    await serviceFor(c).deleteRecurring(c.req.param('id'));
+
+    c.get('logger').info('deleted recurring session', { recurringSessionId: c.req.param('id') });
+    return c.body(null, 204);
+  });
+
   /**
    * Runs the materialisation job on demand.
    *

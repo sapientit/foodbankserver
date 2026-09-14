@@ -111,6 +111,10 @@ export function createSessionsRepository(db: Database) {
       return expectAtMostOne(rows);
     },
 
+    async deleteRecurring(id: string): Promise<void> {
+      await db.delete(recurringSessions).where(eq(recurringSessions.id, id));
+    },
+
     async findById(id: string): Promise<Session | undefined> {
       const rows = await db.select().from(sessions).where(eq(sessions.id, id)).limit(1);
       return expectAtMostOne(rows);

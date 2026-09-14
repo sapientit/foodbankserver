@@ -1573,6 +1573,209 @@ describe('delivery window validation', () => {
   });
 });
 
+/**
+ * `DELETE /recurring-sessions/{id}` removes the template only. The FK from
+ * `sessions.recurringSessionId` to `recurringSessions.id` is `onDelete: 'set
+ * null'` (see `src/db/schema/sessions.ts`) precisely so that materialised
+ * sessions survive their template being deleted — a household's already
+ * scheduled session must not vanish because an admin stopped a recurring
+ * pattern.
+ */
+describe('deleting a recurring session template', () => {
+  beforeEach(async () => {
+    await db.delete(sessions);
+    await db.delete(recurringSessions);
+    await db.delete(systemJobs);
+    await db.delete(refreshTokens);
+    await db.delete(users);
+  });
+
+  it('returns 204 with no body on deleting an existing template', async () => {
+    const { testApp, token } = await adminApp();
+    const templateId = await createTuesdayTemplate(testApp, token);
+
+    const response = await testApp.request(`/api/v1/recurring-sessions/${templateId}`, {
+      method: 'DELETE',
+      headers: authHeaders(token),
+    });
+
+    expect(response.status).toBe(204);
+    expect(await response.text()).toBe('');
+  });
+
+  it('removes the template from the recurring-sessions list', async () => {
+    const { testApp, token } = await adminApp();
+    const templateId = await createTuesdayTemplate(testApp, token);
+
+    await testApp.request(`/api/v1/recurring-sessions/${templateId}`, {
+      method: 'DELETE',
+      headers: authHeaders(token),
+    });
+
+    const response = await testApp.request('/api/v1/recurring-sessions', {
+      headers: authHeaders(token),
+    });
+    const body: { recurringSessions: { id: string }[] } = await response.json();
+    expect(body.recurringSessions.map((r) => r.id)).not.toContain(templateId);
+  });
+
+  it('is idempotent — deleting an already-deleted template is still 204', async () => {
+    const { testApp, token } = await adminApp();
+    const templateId = await createTuesdayTemplate(testApp, token);
+
+    const first = await testApp.request(`/api/v1/recurring-sessions/${templateId}`, {
+      method: 'DELETE',
+      headers: authHeaders(token),
+    });
+    expect(first.status).toBe(204);
+
+    const second = await testApp.request(`/api/v1/recurring-sessions/${templateId}`, {
+      method: 'DELETE',
+      headers: authHeaders(token),
+    });
+    expect(second.status).toBe(204);
+  });
+
+  it('is idempotent — deleting an id that never existed is still 204, not 404', async () => {
+    const { testApp, token } = await adminApp();
+
+    const response = await testApp.request(`/api/v1/recurring-sessions/${crypto.randomUUID()}`, {
+      method: 'DELETE',
+      headers: authHeaders(token),
+    });
+
+    expect(response.status).toBe(204);
+  });
+
+  it('refuses a team lead', async () => {
+    const { testApp, token: adminToken } = await adminApp();
+    const templateId = await createTuesdayTemplate(testApp, adminToken);
+    const { accessToken } = await devLogin(testApp, {
+      email: 'lead@foodbank.org',
+      role: 'team_lead',
+    });
+
+    const response = await testApp.request(`/api/v1/recurring-sessions/${templateId}`, {
+      method: 'DELETE',
+      headers: authHeaders(accessToken),
+    });
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ error: { code: 'FORBIDDEN' } });
+
+    // Refused, not silently accepted: the template is still there.
+    const list = await testApp.request('/api/v1/recurring-sessions', {
+      headers: authHeaders(adminToken),
+    });
+    const body: { recurringSessions: { id: string }[] } = await list.json();
+    expect(body.recurringSessions.map((r) => r.id)).toContain(templateId);
+  });
+
+  it('rejects an unauthenticated request', async () => {
+    const testApp = buildTestApp({ clock: fixedClock(NOW) });
+
+    const response = await testApp.request(`/api/v1/recurring-sessions/${crypto.randomUUID()}`, {
+      method: 'DELETE',
+    });
+
+    expect(response.status).toBe(401);
+  });
+
+  it('detaches, rather than deletes, sessions already materialised from the template', async () => {
+    const { testApp, token } = await adminApp();
+    const templateId = await createTuesdayTemplate(testApp, token);
+    await runMaterialisation(testApp, token);
+
+    const materialised = await db.select().from(sessions).orderBy(sessions.startsAtUtc);
+    expect(materialised).toHaveLength(6);
+    expect(materialised.every((s) => s.recurringSessionId === templateId)).toBe(true);
+
+    const deleted = await testApp.request(`/api/v1/recurring-sessions/${templateId}`, {
+      method: 'DELETE',
+      headers: authHeaders(token),
+    });
+    expect(deleted.status).toBe(204);
+
+    // Every session row survives, with the FK set null rather than the row
+    // gone — proven against the database, not just the API surface.
+    const afterDelete = await db.select().from(sessions).orderBy(sessions.startsAtUtc);
+    expect(afterDelete).toHaveLength(6);
+    expect(afterDelete.every((s) => s.recurringSessionId === null)).toBe(true);
+
+    // A representative session's other fields — the ones a household or a
+    // team lead actually relies on — are untouched.
+    const first = materialised[0];
+    const survivor = afterDelete.find((s) => s.id === first?.id);
+    expect(survivor).toMatchObject({
+      sessionDate: first?.sessionDate,
+      startTime: first?.startTime,
+      startsAtUtc: first?.startsAtUtc,
+      durationMinutes: first?.durationMinutes,
+      location: first?.location,
+      capacity: first?.capacity,
+      status: first?.status,
+    });
+  });
+
+  it('still serves a detached session at GET /sessions/:id, with recurringSessionId now null', async () => {
+    const { testApp, token } = await adminApp();
+    const templateId = await createTuesdayTemplate(testApp, token);
+    await runMaterialisation(testApp, token);
+    const [materialised] = await db.select().from(sessions).orderBy(sessions.startsAtUtc);
+    const sessionId = materialised?.id ?? '';
+
+    const before = await testApp.request(`/api/v1/sessions/${sessionId}`, {
+      headers: authHeaders(token),
+    });
+    const beforeBody: { recurringSessionId: string | null } = await before.json();
+    expect(beforeBody.recurringSessionId).toBe(templateId);
+
+    const deleted = await testApp.request(`/api/v1/recurring-sessions/${templateId}`, {
+      method: 'DELETE',
+      headers: authHeaders(token),
+    });
+    expect(deleted.status).toBe(204);
+
+    const after = await testApp.request(`/api/v1/sessions/${sessionId}`, {
+      headers: authHeaders(token),
+    });
+    expect(after.status).toBe(200);
+    const body: {
+      id: string;
+      recurringSessionId: string | null;
+      sessionDate: string;
+      startTime: string;
+      location: string;
+    } = await after.json();
+    // `toSessionResponse` always includes `recurringSessionId`, typed
+    // `string | null` (see `sessions.mapper.ts`) — it is not omitted, it
+    // reads as null once the FK has been cleared.
+    expect(body.recurringSessionId).toBeNull();
+    expect(body.id).toBe(sessionId);
+    expect(body.sessionDate).toBe(materialised?.sessionDate);
+    expect(body.startTime).toBe(materialised?.startTime);
+    expect(body.location).toBe(materialised?.location);
+  });
+
+  it('keeps a detached session in the staff list', async () => {
+    const { testApp, token } = await adminApp();
+    const templateId = await createTuesdayTemplate(testApp, token);
+    await runMaterialisation(testApp, token);
+    const [materialised] = await db.select().from(sessions).orderBy(sessions.startsAtUtc);
+
+    await testApp.request(`/api/v1/recurring-sessions/${templateId}`, {
+      method: 'DELETE',
+      headers: authHeaders(token),
+    });
+
+    const response = await testApp.request('/api/v1/sessions', {
+      headers: authHeaders(token),
+    });
+    const body: { sessions: { id: string }[] } = await response.json();
+    expect(body.sessions.map((s) => s.id)).toContain(materialised?.id);
+  });
+});
+
 describe('session route authorisation', () => {
   beforeEach(async () => {
     await db.delete(sessions);

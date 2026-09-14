@@ -80,6 +80,19 @@ export function createSessionsService({ repository, clock }: SessionsServiceDeps
     return updated;
   }
 
+  /**
+   * Deletes the template itself, not the sessions it has already generated.
+   *
+   * `sessions.recurringSessionId` has an `onDelete: 'set null'` foreign key
+   * (see `src/db/schema/sessions.ts`), so D1 detaches those sessions rather
+   * than removing them — they keep their own date, time, capacity and
+   * referrals, just with no template to point at any more. Idempotent —
+   * deleting twice is not an error.
+   */
+  async function deleteRecurring(id: string): Promise<void> {
+    await repository.deleteRecurring(id);
+  }
+
   /** An ad hoc session belongs to no template, so the cron never touches it. */
   async function createAdHoc(input: AdHocSessionInput): Promise<Session> {
     const now = clock.nowIso();
@@ -230,6 +243,7 @@ export function createSessionsService({ repository, clock }: SessionsServiceDeps
     listRecurring: () => repository.listRecurring(),
     createRecurring,
     updateRecurring,
+    deleteRecurring,
     // A session that has just been created can have no referrals yet, so this
     // is the one path where both counts are known without asking.
     createAdHoc: async (input: AdHocSessionInput): Promise<SessionWithBooked> => ({
