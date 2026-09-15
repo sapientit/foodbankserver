@@ -5980,10 +5980,11 @@ components:
       type: object
       description: >-
         One household's contact details for the session being run. Every field
-        below is nullable except `referrerOrganisation`, because the referee
-        columns are nulled by the retention purge — a purged household is still
-        on the session and still has to appear, with nothing left to reach it
-        by.
+        below except `referrerOrganisation` and `pickNumber` is nullable
+        because the referee columns are nulled by the retention purge — a
+        purged household is still on the session and still has to appear, with
+        nothing left to reach it by. `pickNumber` is nullable for a different
+        reason — see its own description.
       required:
         [
           referralId,
@@ -5995,6 +5996,7 @@ components:
           referrerName,
           referrerOrganisation,
           referrerPhone,
+          pickNumber,
         ]
       properties:
         referralId: { type: string, format: uuid }
@@ -6021,6 +6023,15 @@ components:
             three spellings of the same council. **Never null**, here or after a
             purge: it is the one non-nullable field on this object.
         referrerPhone: { type: [string, 'null'] }
+        pickNumber:
+          type: [integer, 'null']
+          description: >-
+            The number on the household's parcel — the same `pickNumber` as on
+            the picking sheets, short enough to read out over the phone. Null
+            when the household has no parcel yet: no pick list has been
+            generated for the session, or it was referred after one was.
+            Unlike the listener sheet, this list is never refused over a
+            missing pick number — it is open before picking happens at all.
 
     ReferralSearchRequest:
       type: object

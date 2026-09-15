@@ -1973,23 +1973,24 @@ GET /api/v1/sessions/{sessionId}/referral-details
           referrals: [ { referralId, refereeFirstName, refereeSurname,
                          refereeAddress, refereePostcode, refereePhone,
                          referrerName, referrerOrganisation,
-                         referrerPhone } ] }
+                         referrerPhone, pickNumber } ] }
 ```
 
 Admin **and team lead**, for the _Run a session_ screen. **You own the print
 view**; this is the data behind it.
 
 **This is a contact list, not a listener sheet**, and the two must not be
-merged. It carries the household's address, postcode and phone number, and the
-referrer's name, organisation and phone number, so whoever is running the
-session can find a door, ring a household that has not arrived, or ring the
-professional who sent them and know where they are ringing.
+merged. It carries the household's address, postcode and phone number, the
+referrer's name, organisation and phone number, and the household's pick
+number, so whoever is running the session can find a door, ring a household
+that has not arrived, ring the professional who sent them and know where they
+are ringing, or give a picker the household's number over the same call.
 
-**What it does not carry**, and must not be padded with from other endpoints:
-date of birth, the reason for referral, the form answers, the review comment,
-the parcel contents, and the referrer's email address. The reason stays where it
-was — a team leader gets it on the listener sheet and nowhere else, and putting
-it on a second sheet quietly undoes that.
+**What it does not otherwise carry**, and must not be padded with from other
+endpoints: date of birth, the reason for referral, the form answers, the
+review comment, the parcel contents, and the referrer's email address. The
+reason stays where it was — a team leader gets it on the listener sheet and
+nowhere else, and putting it on a second sheet quietly undoes that.
 
 **Deliveries are included here**, unlike the listener sheet. That drops them
 because nobody walks in for a delivery; this is the list you ring people from,
@@ -2000,6 +2001,13 @@ name. Every field is nullable **except `referrerOrganisation`**: a purged
 household is still on the session and still appears, with nothing left to
 contact them by — but who referred them is not what the purge is forgetting, so
 the organisation is always a string.
+
+**`pickNumber` is nullable for a different reason than the rest**: it is
+`null` when the household has no parcel yet, whether because no pick list has
+been generated for the session or because the household was referred after
+one was. Unlike the listener sheet, this endpoint is never refused over a
+missing pick number — it is a contact list open before picking happens at
+all, not a sheet that has to line up against the picking sheets.
 
 ---
 

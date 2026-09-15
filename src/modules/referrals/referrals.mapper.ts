@@ -630,9 +630,11 @@ export function toReferralSearchResponse(result: {
 /**
  * One household on `GET /sessions/{sessionId}/referral-details` —
  * `INITIAL_SPEC1.txt`, `#Reviewing a referral`, the team-leader paragraph:
- * "the client name, address, postcode and phone number, and the referrer's
- * name, organisation and phone number. It does not carry the reason for
- * referral, date of birth, answers, review comment or parcel contents."
+ * "the client name, address, postcode and phone number, the referrer's name,
+ * organisation and phone number, and the household's pick number. ... It does
+ * not otherwise carry the reason for referral, date of birth, answers, review
+ * comment, the referrer's email address, the administrators' note or parcel
+ * contents."
  *
  * This is a wider read than the listener sheet — it hands a team leader a
  * household's address and phone number, which the listener sheet deliberately
@@ -657,9 +659,19 @@ export interface ReferralDetailsHousehold {
    */
   readonly referrerOrganisation: string;
   readonly referrerPhone: string | null;
+  /**
+   * `null` when the household has no parcel yet — no pick list has been
+   * generated for the session, or it was referred after one was. Unlike the
+   * listener sheet, this does not refuse the list; it is a contact list open
+   * before picking happens at all.
+   */
+  readonly pickNumber: number | null;
 }
 
-export function toReferralDetailsHousehold(referral: Referral): ReferralDetailsHousehold {
+export function toReferralDetailsHousehold(
+  referral: Referral,
+  pickNumber: number | null,
+): ReferralDetailsHousehold {
   return {
     referralId: referral.id,
     refereeFirstName: referral.refereeFirstName,
@@ -670,6 +682,7 @@ export function toReferralDetailsHousehold(referral: Referral): ReferralDetailsH
     referrerName: referral.referrerName,
     referrerOrganisation: referral.referrerOrganisation,
     referrerPhone: referral.referrerPhone,
+    pickNumber,
   };
 }
 
@@ -690,12 +703,15 @@ export function toReferralDetailsResponse(
     readonly location: string;
   },
   referrals: readonly Referral[],
+  pickNumberByReferral: ReadonlyMap<string, number>,
 ): ReferralDetailsResponse {
   return {
     sessionId: session.id,
     sessionDate: session.sessionDate,
     startTime: session.startTime,
     location: session.location,
-    referrals: referrals.map(toReferralDetailsHousehold),
+    referrals: referrals.map((referral) =>
+      toReferralDetailsHousehold(referral, pickNumberByReferral.get(referral.id) ?? null),
+    ),
   };
 }

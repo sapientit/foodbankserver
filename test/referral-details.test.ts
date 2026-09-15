@@ -63,6 +63,7 @@ interface ReferralDetailsHouseholdBody {
   readonly referrerName: string | null;
   readonly referrerOrganisation: string;
   readonly referrerPhone: string | null;
+  readonly pickNumber: number | null;
 }
 
 interface ReferralDetailsResponseBody {
@@ -98,11 +99,11 @@ async function readListenerSheet(
   testApp: TestApp,
   token: string,
   sessionId: string,
-): Promise<{ status: number; households: { referralId: string }[] }> {
+): Promise<{ status: number; households: { referralId: string; pickNumber: number }[] }> {
   const response = await testApp.request(`/api/v1/sessions/${sessionId}/listener-sheet`, {
     headers: authHeaders(token),
   });
-  const body: { households?: { referralId: string }[] } = await response.json();
+  const body: { households?: { referralId: string; pickNumber: number }[] } = await response.json();
   return { status: response.status, households: body.households ?? [] };
 }
 
@@ -309,6 +310,84 @@ describe('who is included', () => {
   });
 });
 
+describe('pickNumber', () => {
+  it('matches the number shown on the listener sheet once a pick list has been generated', async () => {
+    const testApp = buildTestApp({ clock: fixedClock(NOW) });
+    const { accessToken: token } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world: PickingWorld = await setUpPickingWorld(testApp, token);
+    const first = await submitReferral(
+      testApp,
+      world,
+      { refereeSurname: 'Ashworth' },
+      { clientIp: nextClientIp() },
+    );
+    const second = await submitReferral(
+      testApp,
+      world,
+      { refereeSurname: 'Robinson' },
+      { clientIp: nextClientIp() },
+    );
+    await generatePickList(testApp, token, world.sessionId);
+
+    const details = await readDetails(testApp, token, world.sessionId);
+    const sheet = await readListenerSheet(testApp, token, world.sessionId);
+
+    const pickNumberOnSheet = new Map(
+      sheet.households.map((household) => [household.referralId, household.pickNumber]),
+    );
+    expect(pickNumberOnSheet.size).toBe(2);
+    for (const referral of details.body.referrals ?? []) {
+      expect(referral.pickNumber).toBe(pickNumberOnSheet.get(referral.referralId));
+    }
+    // Not a vacuous cross-check: both households genuinely have a number.
+    expect(
+      details.body.referrals?.find((referral) => referral.referralId === first.id)?.pickNumber,
+    ).toEqual(expect.any(Number));
+    expect(
+      details.body.referrals?.find((referral) => referral.referralId === second.id)?.pickNumber,
+    ).toEqual(expect.any(Number));
+  });
+
+  it('is null when no pick list has been generated for the session yet', async () => {
+    const { testApp, token, world } = await adminWorld();
+    const { id } = await submitReferral(testApp, world, {}, { clientIp: nextClientIp() });
+
+    const details = await readDetails(testApp, token, world.sessionId);
+
+    expect(details.status).toBe(200);
+    expect(
+      details.body.referrals?.find((referral) => referral.referralId === id)?.pickNumber,
+    ).toBeNull();
+  });
+
+  it('shows null for a household referred after the pick list was already generated', async () => {
+    const testApp = buildTestApp({ clock: fixedClock(NOW) });
+    const { accessToken: token } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world: PickingWorld = await setUpPickingWorld(testApp, token);
+    const early = await submitReferral(
+      testApp,
+      world,
+      { refereeSurname: 'Ashworth' },
+      { clientIp: nextClientIp() },
+    );
+    await generatePickList(testApp, token, world.sessionId);
+
+    const late = await submitReferral(
+      testApp,
+      world,
+      { refereeSurname: 'Robinson' },
+      { clientIp: nextClientIp() },
+    );
+
+    const details = await readDetails(testApp, token, world.sessionId);
+    const byId = new Map(
+      (details.body.referrals ?? []).map((referral) => [referral.referralId, referral.pickNumber]),
+    );
+    expect(byId.get(early.id)).toEqual(expect.any(Number));
+    expect(byId.get(late.id)).toBeNull();
+  });
+});
+
 describe('a purged household', () => {
   it('still appears, with nulls rather than being dropped, and keeps the referrer organisation', async () => {
     const { testApp, token, world } = await adminWorld();
@@ -394,6 +473,7 @@ describe('the response allowlist', () => {
     expect(text).toContain('referrerName');
     expect(text).toContain('referrerOrganisation');
     expect(text).toContain('referrerPhone');
+    expect(text).toContain('pickNumber');
     expect(text).toContain('12 Bramble Cottages'); // the fixture's refereeAddress
     expect(text).toContain('GU1 4AA'); // the fixture's refereePostcode
     expect(text).toContain('07700 900123'); // the fixture's refereePhone

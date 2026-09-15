@@ -410,16 +410,27 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
    * contact list for the session, and a delivery household is one the team
    * needs to be able to ring. Do not "fix" this to match the listener
    * sheet's filter — the two lists exist for different jobs.
+   *
+   * **Also unlike the listener sheet, a missing pick number does not refuse
+   * the list.** This is a contact list, open before picking has happened at
+   * all; a household not yet picked for just carries `pickNumber: null`
+   * rather than blocking the whole screen — see `INITIAL_SPEC1.txt`,
+   * `#Reviewing a referral`.
    */
-  async function referralDetails(
-    sessionId: string,
-  ): Promise<{ session: Session; referrals: Referral[] }> {
+  async function referralDetails(sessionId: string): Promise<{
+    session: Session;
+    referrals: Referral[];
+    pickNumberByReferral: Map<string, number>;
+  }> {
     const session = await sessions.findById(sessionId);
     if (session === undefined) {
       throw new NotFoundError('Session not found');
     }
 
-    const households = await repository.list({ sessionId });
+    const [households, pickList] = await Promise.all([
+      repository.list({ sessionId }),
+      pickLists.findBySession(sessionId),
+    ]);
 
     const holdingAPlace = households
       .filter((referral) =>
@@ -427,7 +438,12 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
       )
       .sort(bySurnameThenFirstName);
 
-    return { session, referrals: holdingAPlace };
+    const parcels = pickList === undefined ? [] : await pickLists.listParcels(pickList.id);
+    const pickNumberByReferral = new Map(
+      parcels.map((parcel) => [parcel.referralId, parcel.pickNumber]),
+    );
+
+    return { session, referrals: holdingAPlace, pickNumberByReferral };
   }
 
   /**

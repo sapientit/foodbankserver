@@ -97,9 +97,13 @@ export function referralRoutes(): Hono<AppEnv> {
    * leaves them off.
    */
   routes.get('/sessions/:sessionId/referral-details', ...readers, async (c) => {
-    const { session, referrals } = await serviceFor(c).referralDetails(c.req.param('sessionId'));
+    const { session, referrals, pickNumberByReferral } = await serviceFor(c).referralDetails(
+      c.req.param('sessionId'),
+    );
 
-    return c.json<ReferralDetailsResponse>(toReferralDetailsResponse(session, referrals));
+    return c.json<ReferralDetailsResponse>(
+      toReferralDetailsResponse(session, referrals, pickNumberByReferral),
+    );
   });
 
   routes.get('/referrals/:id', ...readers, async (c) => {

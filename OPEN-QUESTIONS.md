@@ -40,6 +40,7 @@ The fresh-food shopping list aggregates the requirements of pick lists whose ses
 **Question:** How does the food bank decide, for each fresh-food item and for the relevant period, whether to use the stock already on hand or buy fresh? Is this a stock-item setting, a selected shopping-period/list policy (including Christmas), an explicit per-run choice, or something else? What is the required default and who may change it?
 
 **A:**
+All stock in hand is used - where food has gone off they will manually change the quantity in stock
 
 ---
 
@@ -56,7 +57,10 @@ When a referral's collection method is `referrer_collect`, every parcel-related 
 
 ```
 grep -n -A3 'x-assumed' openapi.yaml
+
 ```
+
+**A:**
 
 ---
 
@@ -81,6 +85,8 @@ Until Pete decides, the build assumes a flat 80% of each remaining Cloudflare ca
 grep -n -A3 'x-assumed' openapi.yaml
 ```
 
+**A:**
+The current settings are a good starting point. Close this question
 ---
 
 ## Q0 — Are stocktaking and shopping admin or team leader jobs? — CLOSED
