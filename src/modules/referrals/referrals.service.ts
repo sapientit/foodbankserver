@@ -1393,10 +1393,12 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
    * precisely so the day's record cannot be rewritten.
    *
    * **Offered only where the original can no longer come to anything**:
-   * cancelled, rejected, or marked as not having turned up. A referral still
-   * on its way to being fed is *moved*, and the two must never be alternatives
-   * for the same referral. A household who has already collected is refused
-   * too — they were fed, and feeding them again is an ordinary new referral.
+   * cancelled, rejected, marked as not having turned up, or already collected
+   * (or delivered). A referral still on its way to being fed is *moved*, and
+   * the two must never be alternatives for the same referral. A household who
+   * has already collected can be copied too — the charity has decided that
+   * household needs feeding again, and this is that second referral made the
+   * quick way, rather than through the whole form.
    *
    * **The copy is `reviewed` with no comment.** The administrator making it has
    * just decided this household should come, so there is nothing left to accept
@@ -1422,10 +1424,9 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
    * `reviewed` because an administrator said so.
    *
    * The eligibility read and the insert are not atomic, and deliberately so.
-   * An outcome landing in that gap would mean a copy made for a household
-   * marked attended a moment later; that is a second referral for a fed
-   * household, which an administrator can cancel, and not a rule this system
-   * has to defend at the cost of a conditional insert.
+   * Every outcome is copy-eligible except a referral still in progress, so a
+   * race landing in that gap is harmless — there is no longer an outcome an
+   * eligibility check needs to catch before the insert does.
    *
    * **Nor is this idempotent**: a double-clicked button makes two referrals on
    * one session, two places held and two parcels picked. That is a guess rather
@@ -1446,23 +1447,11 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
 
     const outcome = await outcomeFor(referral.id);
 
-    // **Checked before the status, and not folded into it.** A household who
-    // collected is never copied — `INITIAL_SPEC1.txt`, `#Copying a referral`:
-    // they were fed, and feeding them again is an ordinary new referral. That
-    // is not implied by the status test below, because `status: 'cancelled'`
-    // with an `attended` parcel is a real row: cancelling after an outcome was
-    // allowed until the charity stopped it on 2026-08-15, and it deliberately
-    // kept the recorded outcome. New rows cannot reach that state — `cancel`
-    // now refuses — but the ones already in the database are exactly the
-    // households this must not hand a second parcel to.
-    if (outcome === 'attended') {
-      throw new ConflictError(
-        'That household has already collected, so their referral is not copied',
-      );
-    }
-
     const finishedWith =
-      referral.status === 'cancelled' || referral.status === 'rejected' || outcome === 'no_show';
+      referral.status === 'cancelled' ||
+      referral.status === 'rejected' ||
+      outcome === 'no_show' ||
+      outcome === 'attended';
     if (!finishedWith) {
       throw new ConflictError(
         'That referral can still be completed, so it is moved rather than copied',

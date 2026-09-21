@@ -228,7 +228,7 @@ describe('eligibility — offered only where the original can no longer come to 
     expect(status).toBe(409);
   });
 
-  it('refuses a referral whose household already collected', async () => {
+  it('succeeds for a referral whose household already collected', async () => {
     const { testApp, token, world: w } = await world();
     const { id } = await submitReferral(testApp, w);
     const { id: pickListId } = await generatePickList(testApp, token, w.sessionId);
@@ -237,17 +237,19 @@ describe('eligibility — offered only where the original can no longer come to 
 
     const target = await createSession(testApp, token);
     const { status } = await copyReferral(testApp, token, id, { sessionId: target });
-    expect(status).toBe(409);
+    expect(status).toBe(201);
   });
 
-  it('refuses a cancelled referral whose household had already collected', async () => {
-    // **The legacy row, and the reason the `attended` check comes before the
-    // status check.** Cancelling a household who had already collected was
-    // allowed until the charity stopped it on 2026-08-15, and it deliberately
-    // kept the recorded outcome — so `status: 'cancelled'` beside an
-    // `attended` parcel is a shape that exists in the database today. On the
-    // status test alone it would read as copy-eligible, and the food bank
-    // would hand a second parcel to a household that had already been fed.
+  it('succeeds for a cancelled referral whose household had already collected', async () => {
+    // **The legacy row.** Cancelling a household who had already collected
+    // was allowed until the charity stopped it on 2026-08-15, and it
+    // deliberately kept the recorded outcome — so `status: 'cancelled'`
+    // beside an `attended` parcel is a shape that exists in the database
+    // today. It used to need a dedicated check ahead of the status test,
+    // because that state was refused on the `attended` outcome alone; now
+    // `attended` is copy-eligible in general, so this row is unremarkable —
+    // copy-eligible for the ordinary reason (`status === 'cancelled'`), and
+    // would be even if it only fell under the `attended` rule.
     //
     // The cancellation is written straight to the row because the API now
     // refuses it, which is the whole point: this state can no longer be
@@ -265,11 +267,11 @@ describe('eligibility — offered only where the original can no longer come to 
 
     const target = await createSession(testApp, token);
     const { status } = await copyReferral(testApp, token, id, { sessionId: target });
-    expect(status).toBe(409);
+    expect(status).toBe(201);
 
-    // Nothing was created on the target session.
+    // A referral was created on the target session.
     const created = await db.select().from(referrals).where(eq(referrals.sessionId, target));
-    expect(created).toHaveLength(0);
+    expect(created).toHaveLength(1);
   });
 
   it('refuses a team lead outright', async () => {

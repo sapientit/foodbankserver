@@ -67,11 +67,12 @@ so a rejection cannot be relabelled as a cancellation.
 
 **A terminal referral is exactly what can be _copied_**, and copying is the only forward path out of
 one. `POST /referrals/{id}/copy` is offered where the original can no longer come to anything —
-`cancelled`, `rejected`, or a household marked `no_show` — and produces a **new** referral,
+`cancelled`, `rejected`, or an `outcome` of `no_show` or `attended` — and produces a **new** referral,
 `reviewed`, on a session the administrator chooses. The original is not touched: a no-show stays a
-no-show on the day it happened, which is the same reasoning that refuses a move once an outcome
-exists. A referral still on its way to being fed is moved, not copied, and the two must never be
-alternatives for the same referral. `INITIAL_SPEC1.txt`, `#Copying a referral`.
+no-show and an attended household stays attended, on the day it happened, which is the same
+reasoning that refuses a move once an outcome exists. A referral still on its way to being fed is
+moved, not copied, and the two must never be alternatives for the same referral. `INITIAL_SPEC1.txt`,
+`#Copying a referral`.
 
 **A purged referral is terminal in a stronger sense**: amend, move, cancel, accept, reject,
 mark-reviewed and copy are all refused once `piiPurgedAt` is set. `assertNotPurged` is the shared

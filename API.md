@@ -904,11 +904,13 @@ attendance. A no-show stays a no-show on the day it happened. Do not follow this
 with a cancel of the original; that would be refused anyway.
 
 **When to offer the button.** Only where the original can no longer come to
-anything: `status` is `cancelled` or `rejected`, **or** `outcome` is `no_show`.
-Anything else is a `409` — a referral still on its way to being fed is _moved_,
-not copied, and the two are never alternatives for the same referral. Gate on
-`status` and `outcome` together and the screen and the server agree. A household
-who has already collected is a `409` too.
+anything: `status` is `cancelled` or `rejected`, **or** `outcome` is `no_show`
+or `attended`. Anything else is a `409` — a referral still on its way to being
+fed is _moved_, not copied, and the two are never alternatives for the same
+referral. Gate on `status` and `outcome` together and the screen and the server
+agree. A household who has already collected **can** now be copied — a
+deliberate second referral, made the quick way rather than through the whole
+form again.
 
 **What the copy carries:** the referee's name, date of birth, address, postcode
 and phone; `adults`, `children`, `householdSize`, `collectionMethod` (and the
