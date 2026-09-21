@@ -70,6 +70,7 @@ describe('production refuses to start unsafely', () => {
       AUTH_JWT_SECRET: SECRET,
       ENVIRONMENT: 'production',
       AUTH_MODE: 'google',
+      GOOGLE_AUTH_CLIENT_ID: 'client-id.apps.googleusercontent.com',
       TURNSTILE_SECRET_KEY: 'turnstile-secret',
       SMS_WEBHOOK_SECRET: 'sms-webhook-secret-long-enough',
       ALLOWED_ORIGINS: 'https://foodbank.example.org',

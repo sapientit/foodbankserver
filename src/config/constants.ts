@@ -57,6 +57,28 @@ export const VOLUNTEER_CODE_RENEWAL_WARNING_SECONDS = 5 * 24 * 60 * 60;
 export const JWT_ISSUER = 'foodbank-api';
 export const JWT_AUDIENCE = 'foodbank-web';
 
+/**
+ * The charity's Google Workspace domain. Signing on is by Google identity, and
+ * `INITIAL_SPEC1.txt` (`#Login`) requires refusing an identity from outside it
+ * even when the email matches an account the food bank has created — so this
+ * is checked against the ID token's `hd` claim, not trusted from the email
+ * address alone. Policy, not configuration: it is the same in every
+ * environment, unlike `GOOGLE_AUTH_CLIENT_ID`, which is a different Google
+ * Cloud OAuth client per environment.
+ */
+export const GOOGLE_WORKSPACE_DOMAIN = 'guildfordfoodbank.org';
+
+/**
+ * Google issues ID tokens with either issuer string interchangeably — both
+ * are documented and real tokens use both — so both are accepted.
+ */
+export const GOOGLE_ID_TOKEN_ISSUERS: readonly [string, string] = [
+  'https://accounts.google.com',
+  'accounts.google.com',
+];
+
+export const GOOGLE_JWKS_URL = 'https://www.googleapis.com/oauth2/v3/certs';
+
 /** Path the refresh cookie is scoped to, so it is never sent to domain routes. */
 export const REFRESH_COOKIE_NAME = 'foodbank_refresh';
 export const REFRESH_COOKIE_PATH = '/api/v1/auth';

@@ -39,9 +39,9 @@ export const users = sqliteTable(
     displayName: text('display_name').notNull(),
     role: text('role').$type<UserRole>().notNull(),
     /**
-     * The Google OIDC `sub`. Present from day one even though Google is not
-     * wired up yet: that is what makes swapping the identity provider a config
-     * change rather than a migration under time pressure.
+     * The Google OIDC `sub`. Present from day one, before Google was wired
+     * up (2026-09-21) — that is what let swapping the identity provider be a
+     * config change rather than a migration under time pressure.
      */
     googleSubject: text('google_subject').unique(),
     isActive: integer('is_active').notNull().default(1),

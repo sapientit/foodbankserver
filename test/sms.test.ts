@@ -14,7 +14,7 @@ import { smsMessages } from '../src/db/schema/sms.ts';
 import { stockItems, stockLedger } from '../src/db/schema/stock.ts';
 import { refreshTokens, users } from '../src/db/schema/users.ts';
 import { purgeSmsMessages } from '../src/modules/jobs/purge-sms.ts';
-import { composeReminder, REFERRER_COLLECT_PLACEHOLDER } from '../src/modules/sms/messages.ts';
+import { composeReferrerReminder, composeReminder } from '../src/modules/sms/messages.ts';
 import { authHeaders, buildTestApp, devLogin, type TestApp } from './helpers/app.ts';
 import { generatePickList, setUpPickingWorld } from './helpers/picking-fixtures.ts';
 import {
@@ -1659,7 +1659,7 @@ interface ReferrerInboxMessage extends InboxMessage {
 }
 
 describe('referrer_collect: parcel SMS routes to the referrer, not the referee', () => {
-  it('sends a referrer_collect reminder to the referrer phone, with the placeholder wording, recipientRole referrer', async () => {
+  it('sends a referrer_collect reminder to the referrer phone, with the referrer wording, recipientRole referrer', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(providerSuccess('prov-referrer-1'));
 
     const testApp = buildSmsTestApp();
@@ -1677,11 +1677,15 @@ describe('referrer_collect: parcel SMS routes to the referrer, not the referee',
     );
     expect(await response.json()).toMatchObject({ reminded: 1, failed: 0 });
 
+    const [session] = await db.select().from(sessions).where(eq(sessions.id, world.sessionId));
+    if (session === undefined) throw new Error('session not found in test setup');
+    const expectedReferrerBody = composeReferrerReminder(session, 'Jane Fieldsworth');
+
     const [row] = await db.select().from(smsMessages).where(eq(smsMessages.referralId, referralId));
     expect(row).toMatchObject({
       kind: 'reminder',
       phone: '+447700900555', // the referrer's number, never the referee's
-      body: REFERRER_COLLECT_PLACEHOLDER,
+      body: expectedReferrerBody,
       recipientRole: 'referrer',
     });
 
@@ -1695,7 +1699,7 @@ describe('referrer_collect: parcel SMS routes to the referrer, not the referee',
     } = await threadResponse.json();
     expect(thread.messages[0]).toMatchObject({
       phone: '+447700900555',
-      body: REFERRER_COLLECT_PLACEHOLDER,
+      body: expectedReferrerBody,
       recipientRole: 'referrer',
     });
   });
@@ -1718,7 +1722,8 @@ describe('referrer_collect: parcel SMS routes to the referrer, not the referee',
 
     const [session] = await db.select().from(sessions).where(eq(sessions.id, world.sessionId));
     if (session === undefined) throw new Error('session not found in test setup');
-    const expectedBody = composeReminder(session, false);
+    const expectedBody = composeReminder(session, false, 'Alice');
+    const referrerShapedBody = composeReferrerReminder(session, 'Jane Fieldsworth');
 
     const [row] = await db.select().from(smsMessages).where(eq(smsMessages.referralId, referralId));
     expect(row).toMatchObject({
@@ -1727,7 +1732,8 @@ describe('referrer_collect: parcel SMS routes to the referrer, not the referee',
       body: expectedBody,
       recipientRole: 'referee',
     });
-    expect(row?.body).not.toBe(REFERRER_COLLECT_PLACEHOLDER);
+    // An ordinary collection referral's reminder is never referrer_collect-shaped.
+    expect(row?.body).not.toBe(referrerShapedBody);
   });
 
   it('sends a staff reply on a referrer_collect thread to the referrer, the staff text verbatim, not the placeholder', async () => {

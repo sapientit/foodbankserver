@@ -82,8 +82,21 @@ export function createAuthRepository(db: Database) {
         .where(eq(refreshTokens.id, id));
     },
 
-    buildTouchLastLogin(userId: string, at: string) {
-      return db.update(users).set({ lastLoginAt: at, updatedAt: at }).where(eq(users.id, userId));
+    /**
+     * `linkGoogleSubject` backfills account linking on a Google sign-in
+     * resolved by email rather than by an already-linked subject, folded into
+     * this same statement rather than a separate write — see
+     * `auth.service.ts#login`.
+     */
+    buildTouchLastLogin(userId: string, at: string, linkGoogleSubject?: string) {
+      return db
+        .update(users)
+        .set({
+          lastLoginAt: at,
+          updatedAt: at,
+          ...(linkGoogleSubject === undefined ? {} : { googleSubject: linkGoogleSubject }),
+        })
+        .where(eq(users.id, userId));
     },
   };
 }

@@ -17,11 +17,12 @@
 //
 // **It stops rather than diverge quietly.** Before it writes anything, it looks
 // the other way round — at what the system holds and the CSV does not name —
-// and an active stock item or a model parcel found that way halts the load. The
-// check is cheap, because both lists have to be fetched regardless, and it is
-// there for one specific accident: a name corrected in the spreadsheet reads as
-// an item the system has never heard of, so loading it would quietly create a
-// duplicate. Stopping turns that into a question.
+// and an active stock item, a model parcel or a stock-take grouping found that
+// way halts the load. The check is cheap, because all three lists have to be
+// fetched regardless, and it is there for one specific accident: a name
+// corrected in the spreadsheet reads as an item the system has never heard of,
+// so loading it would quietly create a duplicate. Stopping turns that into a
+// question.
 //
 // **`--force` is a normal answer, not an escape hatch.** Because the
 // maintenance screen owns the list, a system legitimately holding items this
@@ -36,16 +37,17 @@
 // **It never deletes anything**, forced or not. Retiring an item stays a job
 // for the maintenance screen, where a human can see what a pick list is about
 // to lose. What the loader does replace, on a row it recognises, is the shelf,
-// the category, the description and the parcel quantities — those are the
-// columns the spreadsheet is authoritative for.
+// the category, the description, the pack size, the stock-take grouping and
+// the parcel quantities — those are the columns the spreadsheet is
+// authoritative for.
 //
-// **A name is an identity, not a label.** Items and parcels are matched by
-// name, the same way the API's own uniqueness works. So correcting a spelling
-// in the CSV cannot rename anything: it would add a second item under the new
-// name and leave the old one behind as a duplicate. That is what the check
-// above is really guarding — the orphaned old name is the evidence a rename
-// happened, and it is worth far more before the duplicate exists than after,
-// because afterwards both names look equally deliberate.
+// **A name is an identity, not a label.** Items, parcels and groupings are
+// matched by name, the same way the API's own uniqueness works. So correcting
+// a spelling in the CSV cannot rename anything: it would add a second item
+// under the new name and leave the old one behind as a duplicate. That is
+// what the check above is really guarding — the orphaned old name is the
+// evidence a rename happened, and it is worth far more before the duplicate
+// exists than after, because afterwards both names look equally deliberate.
 //
 // **A model parcel's contents are replaced whole.** Clearing a cell in the
 // spreadsheet takes that item out of that parcel on the next run. Only the
@@ -58,6 +60,8 @@
 // loader writing straight to the database would be the one path that skips
 // them.
 import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { basename, isAbsolute, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const HELP = `
@@ -67,23 +71,75 @@ Load stock items and model parcels from a CSV.
 
   --email <address>   Admin to sign in as. Required. Must already exist as a
                       user; dev login never creates one.
-  --file <path>       CSV to read. Default: stockitems.csv
+  --file <path>       CSV to read. Default: stockitems.csv, read from the
+                      current directory. A given filename with no directory of
+                      its own is read from this user's Downloads folder
+                      instead — that is where the spreadsheet export lands, so
+                      naming just the file is enough. An absolute path is used
+                      as given.
   --base-url <url>    Server to load into. Default: http://127.0.0.1:8787
   --dry-run           Report what would change and write nothing.
-  --force             Load even though the system holds active stock items or
-                      model parcels this CSV does not name. Without it, that
-                      stops the load before anything is written.
+  --force             Load even though the system holds active stock items,
+                      model parcels or stock-take groupings this CSV does not
+                      name. Without it, that stops the load before anything is
+                      written.
   --help
 
-The CSV's first five columns are the stock item: name, shelf, low-stock
-threshold, category, description. Leave a threshold blank to leave that item
-unwatched. Every column after the blank spacer is a model parcel, named by its
-header, holding a quantity per stock item row.
+The stock item's eight columns — name, shelf, category, low-stock threshold,
+description, pack description, pack count, stock-take grouping — are found by
+their header text, not by position, so it does not matter what order the
+spreadsheet has them in or what else sits between them. Leave a threshold
+blank to leave that item unwatched. Leave pack description and pack count
+blank for an item with no pack size recorded; pack count must be a whole
+number from 1 to 100000, and a pack description is only kept when a pack count
+is also given. Leave the stock-take grouping blank for an item that is a crate
+member rather than directly grouped; otherwise it is created if the system
+does not already have a grouping by that name. Every column after the last of
+the eight, other than a blank spacer, is a model parcel, named by its header,
+holding a quantity per stock item row.
 `;
 
-const COLUMN = { name: 0, shelf: 1, lowStockThreshold: 2, category: 3, description: 4 };
-/** Columns 0-4 are the item and column 5 is the spacer the spreadsheet uses. */
-const FIRST_PARCEL_COLUMN = 6;
+/**
+ * The header text each stock-item column is found by, not the position it
+ * happens to be at. Matched case-insensitively, trimmed. The spreadsheet has
+ * reordered category and low-stock threshold between exports more than once
+ * already — reading the header rather than assuming a position is what stops
+ * that from being a silent misread instead of a clean "column not found".
+ */
+const COLUMN_HEADER = {
+  name: 'Stock Item',
+  shelf: 'Shelf',
+  category: 'Category',
+  lowStockThreshold: 'Low Stock',
+  description: 'Description',
+  packUnitLabel: 'Pack description',
+  unitsPerPack: 'Pack count',
+  groupingName: 'Stock Take',
+};
+
+function findColumns(header, path) {
+  const columns = {};
+  for (const [key, label] of Object.entries(COLUMN_HEADER)) {
+    const index = header.findIndex(
+      (cell) => (cell ?? '').trim().toLowerCase() === label.toLowerCase(),
+    );
+    if (index === -1) fail(`${path}: no "${label}" column in the header row.`);
+    columns[key] = index;
+  }
+  return columns;
+}
+
+/**
+ * A bare filename — no directory of its own — is read from this user's
+ * Downloads folder, because that is where the spreadsheet export lands and
+ * naming just the file is the point of typing `--file` at all. An absolute
+ * path, or a relative one that already names a directory, is left exactly as
+ * given.
+ */
+export function resolveDownload(file) {
+  if (isAbsolute(file) || basename(file) !== file) return file;
+  return join(homedir(), 'Downloads', file);
+}
 
 function parseArgs(argv) {
   const args = {
@@ -99,7 +155,7 @@ function parseArgs(argv) {
     else if (arg === '--dry-run') args.dryRun = true;
     else if (arg === '--force') args.force = true;
     else if (arg === '--email') args.email = argv[(i += 1)];
-    else if (arg === '--file') args.file = argv[(i += 1)];
+    else if (arg === '--file') args.file = resolveDownload(argv[(i += 1)]);
     else if (arg === '--base-url') args.baseUrl = argv[(i += 1)].replace(/\/$/, '');
     else fail(`Unrecognised argument: ${arg}`);
   }
@@ -174,8 +230,11 @@ export function readCsvText(text, path = 'CSV') {
   const header = rows[0];
   if (header === undefined) fail(`${path} is empty.`);
 
+  const COLUMN = findColumns(header, path);
+  const firstParcelColumn = Math.max(...Object.values(COLUMN)) + 1;
+
   const parcelColumns = [];
-  for (let column = FIRST_PARCEL_COLUMN; column < header.length; column += 1) {
+  for (let column = firstParcelColumn; column < header.length; column += 1) {
     const name = (header[column] ?? '').trim();
     if (name !== '') parcelColumns.push({ column, name });
   }
@@ -225,6 +284,27 @@ export function readCsvText(text, path = 'CSV') {
       continue;
     }
 
+    const rawUnitsPerPack = (cells[COLUMN.unitsPerPack] ?? '').trim();
+    const unitsPerPack = rawUnitsPerPack === '' ? null : Number(rawUnitsPerPack);
+    if (
+      unitsPerPack !== null &&
+      (!Number.isInteger(unitsPerPack) || unitsPerPack < 1 || unitsPerPack > 100000)
+    ) {
+      warnings.push(
+        `line ${line}: "${name}" has pack count "${rawUnitsPerPack}", not a whole number from 1 to 100000 — row skipped`,
+      );
+      continue;
+    }
+
+    // A pack description only means something alongside a pack count — the API
+    // forces it to null itself when the count is absent, so it is dropped here
+    // too rather than sent and silently discarded.
+    const packUnitLabel = unitsPerPack === null ? null : blankToNull(cells[COLUMN.packUnitLabel]);
+
+    // Blank is not an error here: an item with no stock-take grouping is a
+    // crate member, not one this loader failed to read.
+    const groupingName = blankToNull(cells[COLUMN.groupingName]);
+
     const quantities = new Map();
     for (const { column, name: parcelName } of parcelColumns) {
       const raw = (cells[column] ?? '').trim();
@@ -245,6 +325,9 @@ export function readCsvText(text, path = 'CSV') {
       category,
       description: blankToNull(cells[COLUMN.description]),
       lowStockThreshold,
+      unitsPerPack,
+      packUnitLabel,
+      groupingName,
       quantities,
     });
   }
@@ -319,16 +402,20 @@ async function signIn(baseUrl, email) {
  * What the system holds that this CSV never mentions.
  *
  * Inactive stock items are skipped: an item retired on the maintenance screen
- * and left off the spreadsheet is agreement, not divergence. Model parcels have
- * no such flag, so every one that exists counts.
+ * and left off the spreadsheet is agreement, not divergence. Model parcels and
+ * stock-take groupings have no such flag, so every one that exists counts.
  */
-function findOrphans({ existingItems, existingParcels, items, parcelColumns }) {
+function findOrphans({ existingItems, existingParcels, existingGroupings, items, parcelColumns }) {
   const namedItems = new Set(items.map((item) => key(item.name)));
   const namedParcels = new Set(parcelColumns.map((parcel) => key(parcel.name)));
+  const namedGroupings = new Set(
+    items.filter((item) => item.groupingName !== null).map((item) => key(item.groupingName)),
+  );
 
   return {
     items: existingItems.filter((item) => item.isActive && !namedItems.has(key(item.name))),
     parcels: existingParcels.filter((parcel) => !namedParcels.has(key(parcel.name))),
+    groupings: existingGroupings.filter((grouping) => !namedGroupings.has(key(grouping.name))),
   };
 }
 
@@ -340,7 +427,13 @@ function findOrphans({ existingItems, existingParcels, items, parcelColumns }) {
  * everything at once before touching anything.
  */
 function checkOrphans(orphans, { force, dryRun }) {
-  if (orphans.items.length === 0 && orphans.parcels.length === 0) return;
+  if (
+    orphans.items.length === 0 &&
+    orphans.parcels.length === 0 &&
+    orphans.groupings.length === 0
+  ) {
+    return;
+  }
 
   console.log('In the system, not in the CSV:');
   for (const item of orphans.items) {
@@ -348,6 +441,9 @@ function checkOrphans(orphans, { force, dryRun }) {
   }
   for (const parcel of orphans.parcels) {
     console.log(`  ? ${parcel.name}  (model parcel, ${parcel.contents.length} items)`);
+  }
+  for (const grouping of orphans.groupings) {
+    console.log(`  ? ${grouping.name}  (stock-take grouping)`);
   }
   console.log('');
 
@@ -376,13 +472,55 @@ function checkOrphans(orphans, { force, dryRun }) {
 
 // ------------------------------------------------------------- the loading --
 
-export async function loadStockItems(call, items, existing, dryRun) {
+/**
+ * Stock-take groupings are matched by name, same as stock items and model
+ * parcels, and created when the CSV names one the system does not have —
+ * there are normally only a handful of these, so unlike the stock list itself
+ * there is no maintenance-screen-only concern about the loader creating one.
+ * Must run before `loadStockItems`, which needs every name resolved to an id
+ * to write `groupingId`.
+ */
+export async function loadGroupings(call, items, existing, dryRun) {
+  const byName = new Map(existing.map((grouping) => [key(grouping.name), grouping]));
+  const idsByName = new Map();
+  const tally = { created: 0 };
+
+  const named = new Map();
+  for (const item of items) {
+    if (item.groupingName !== null) named.set(key(item.groupingName), item.groupingName);
+  }
+
+  for (const [nameKey, name] of named) {
+    const found = byName.get(nameKey);
+    if (found !== undefined) {
+      idsByName.set(nameKey, found.id);
+      continue;
+    }
+
+    if (dryRun) {
+      // A stand-in id, so stock items below can still report the change a
+      // real run would make instead of reading as an unresolved reference.
+      idsByName.set(nameKey, `would-create:${nameKey}`);
+    } else {
+      const created = await call('POST', '/stock/groupings', { name });
+      idsByName.set(nameKey, created.id);
+    }
+    tally.created += 1;
+    console.log(`  + ${name}  (stock-take grouping)`);
+  }
+
+  return { tally, idsByName };
+}
+
+export async function loadStockItems(call, items, existing, groupingIdsByName, dryRun) {
   const byName = new Map(existing.map((item) => [key(item.name), item]));
   const tally = { created: 0, updated: 0, unchanged: 0 };
   const idsByName = new Map();
 
   for (const item of items) {
     const found = byName.get(key(item.name));
+    const groupingId =
+      item.groupingName === null ? null : groupingIdsByName.get(key(item.groupingName));
 
     if (found === undefined) {
       if (dryRun) {
@@ -397,6 +535,9 @@ export async function loadStockItems(call, items, existing, dryRun) {
           category: item.category,
           shelfNumber: item.shelfNumber,
           lowStockThreshold: item.lowStockThreshold,
+          unitsPerPack: item.unitsPerPack,
+          packUnitLabel: item.packUnitLabel,
+          groupingId,
           ...(item.description === null ? {} : { description: item.description }),
         });
         idsByName.set(key(item.name), created.id);
@@ -418,6 +559,11 @@ export async function loadStockItems(call, items, existing, dryRun) {
     if (found.lowStockThreshold !== item.lowStockThreshold) {
       changes.lowStockThreshold = item.lowStockThreshold;
     }
+    if (found.unitsPerPack !== item.unitsPerPack) changes.unitsPerPack = item.unitsPerPack;
+    if ((found.packUnitLabel ?? null) !== item.packUnitLabel) {
+      changes.packUnitLabel = item.packUnitLabel;
+    }
+    if ((found.groupingId ?? null) !== groupingId) changes.groupingId = groupingId;
 
     if (Object.keys(changes).length === 0) {
       tally.unchanged += 1;
@@ -512,24 +658,35 @@ export async function main(argv = process.argv.slice(2)) {
   const token = await signIn(args.baseUrl, args.email);
   const call = createClient(args.baseUrl, token);
 
-  // Both lists are read before anything is written, so that the check below can
-  // refuse a load whole rather than half-way through one.
+  // All three lists are read before anything is written, so that the check
+  // below can refuse a load whole rather than half-way through one.
   const { items: existingItems } = await call(
     'GET',
     '/stock/items?includeInactive=true&order=shelf',
   );
   const { modelParcels: existingParcels } = await call('GET', '/model-parcels');
+  const { items: existingGroupings } = await call('GET', '/stock/groupings');
 
-  checkOrphans(findOrphans({ existingItems, existingParcels, items, parcelColumns }), {
-    force: args.force,
-    dryRun: args.dryRun,
-  });
+  checkOrphans(
+    findOrphans({ existingItems, existingParcels, existingGroupings, items, parcelColumns }),
+    { force: args.force, dryRun: args.dryRun },
+  );
+
+  console.log('Stock-take groupings');
+  const { tally: groupingTally, idsByName: groupingIdsByName } = await loadGroupings(
+    call,
+    items,
+    existingGroupings,
+    args.dryRun,
+  );
+  console.log(`  ${groupingTally.created} created\n`);
 
   console.log('Stock items');
   const { tally: itemTally, idsByName } = await loadStockItems(
     call,
     items,
     existingItems,
+    groupingIdsByName,
     args.dryRun,
   );
   console.log(

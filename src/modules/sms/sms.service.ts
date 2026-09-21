@@ -9,7 +9,7 @@ import type { SmsMessage, SmsRecipientRole } from '../../db/schema/sms.ts';
 import { isUniqueViolation } from '../../db/unique-violation.ts';
 import type { SessionsRepository } from '../sessions/sessions.repository.ts';
 import { normalisePhone, phonesMatch } from '../../core/phone.ts';
-import { composeReminder, REFERRER_COLLECT_PLACEHOLDER } from './messages.ts';
+import { composeReferrerReminder, composeReminder } from './messages.ts';
 import { sendSms, type SmsProviderConfig } from './provider.ts';
 import { smsRetentionCutoffIso } from './retention.ts';
 import type { WebhookInboundMessage } from './sms.schema.ts';
@@ -229,11 +229,11 @@ export function createSmsService(deps: SmsServiceDeps) {
     }
 
     // A referrer_collect message never reuses the household's own wording —
-    // see `REFERRER_COLLECT_PLACEHOLDER` and `OPEN-QUESTIONS.md`, Q1.
+    // it is composed for the referrer, on the referrer's own name.
     const content =
       recipient.role === 'referrer'
-        ? REFERRER_COLLECT_PLACEHOLDER
-        : composeReminder(session, referral.isDelivery === 1);
+        ? composeReferrerReminder(session, referral.referrerName)
+        : composeReminder(session, referral.isDelivery === 1, referral.refereeFirstName);
 
     if (provider !== undefined && isLive(normalised)) {
       const result = await sendSms(provider, normalised, content, logger);

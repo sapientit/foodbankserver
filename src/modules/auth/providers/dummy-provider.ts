@@ -1,3 +1,4 @@
+import { parseOrThrow } from '../../../http/validate.ts';
 import { devLoginSchema } from '../auth.schema.ts';
 import type { IdentityClaim, IdentityProvider } from '../identity-provider.ts';
 
@@ -5,7 +6,7 @@ import type { IdentityClaim, IdentityProvider } from '../identity-provider.ts';
  * Development-only identity provider.
  *
  * Per the spec, there is no validation: submit any email address and you are
- * that person. This is a stub to be replaced by Google OIDC.
+ * that person. See `providers/google-provider.ts` for the real one.
  *
  * It is not, however, a way in: the address must already have a `users` row,
  * created by an admin. Logging in as somebody who does not work here fails.
@@ -27,7 +28,7 @@ export function createDummyProvider(): IdentityProvider {
     name: 'dummy',
 
     authenticate(input: unknown): Promise<IdentityClaim> {
-      const parsed = devLoginSchema.parse(input);
+      const parsed = parseOrThrow(devLoginSchema, input);
       const email = parsed.email.trim().toLowerCase();
 
       return Promise.resolve({

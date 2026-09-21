@@ -17,6 +17,18 @@ export const devLoginSchema = z.object({
 
 export type DevLoginInput = z.infer<typeof devLoginSchema>;
 
+/**
+ * The Google sign-in body: the ID token Google Identity Services handed the
+ * browser, and nothing else. Verifying it — signature, issuer, audience,
+ * expiry, and the charity's Workspace domain — is `google-provider.ts`'s job;
+ * this only ensures we were handed a non-empty string to verify.
+ */
+export const googleLoginSchema = z.object({
+  idToken: z.string().min(1),
+});
+
+export type GoogleLoginInput = z.infer<typeof googleLoginSchema>;
+
 export interface TokenResponse {
   readonly accessToken: string;
   readonly expiresAt: number;

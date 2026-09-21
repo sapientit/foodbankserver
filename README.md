@@ -48,7 +48,7 @@ npm run cf-typegen
 npm run db:migrate:test
 ```
 
-The test system is live at `https://foodbank-server.losttemple.workers.dev`. It runs with dummy
+The test system is live at `https://api-test.guildfordfoodbank.workers.dev`. It runs with dummy
 authentication and **must never hold real personal data**. See
 [`docs/operations/production.md`](./docs/operations/production.md) for the deployment table, the
 free-plan limits and the go-live sequence.

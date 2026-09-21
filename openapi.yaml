@@ -21,13 +21,13 @@ info:
 servers:
   - url: http://127.0.0.1:8787
     description: Local wrangler dev
-  - url: https://foodbank-server.losttemple.workers.dev
+  - url: https://api-test.guildfordfoodbank.workers.dev
     description: >-
       Test system. Dummy authentication, so anyone knowing a seeded address is an
       admin — never put real personal data in it. The browser does not call this
       host directly: the client Worker forwards to it over a service binding, so
       the refresh cookie stays same-origin. See API.md.
-  - url: https://foodbank-server-production.losttemple.workers.dev
+  - url: https://api.guildfordfoodbank.workers.dev
     description: >-
       Production — NOT YET DEPLOYED. Expected to move to a custom domain before
       go-live; the spreadsheet extract needs one Google can verify.
@@ -156,6 +156,50 @@ paths:
         '401': { description: No user record for that address }
         '403': { description: That account has been deactivated }
         '404': { description: Not registered, because AUTH_MODE is not dummy }
+
+  /api/v1/auth/google-login:
+    post:
+      tags: [Auth]
+      summary: Sign in with a Google identity
+      description: |
+        Not registered unless `AUTH_MODE=google` — returns `404` otherwise,
+        the same as `dev-login` returns `404` when it isn't `dummy`.
+
+        Send the ID token Google Identity Services handed the browser after
+        sign-in, nothing else. The server verifies it — signature, issuer,
+        audience, expiry — and refuses an identity from outside the charity's
+        own Google Workspace domain even when the email matches an account on
+        file. As with `dev-login`, the address must already have a user
+        record; an unknown address is refused and the display name and role
+        come from that record, never from the token.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [idToken]
+              properties:
+                idToken: { type: string, minLength: 1 }
+      responses:
+        '200':
+          description: Signed in
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenResponse' }
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+              description: >
+                `foodbank_refresh`, HttpOnly, Secure, SameSite=Strict, scoped to
+                `/api/v1/auth`. Not readable by JavaScript, by design. It
+                expires when the eight-hour sign-in does, and a rotation does
+                not extend it.
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { description: Token failed verification, or no user record for that address }
+        '403': { description: That account has been deactivated }
+        '404': { description: Not registered, because AUTH_MODE is not google }
 
   /api/v1/auth/refresh:
     post:
@@ -2012,21 +2056,22 @@ paths:
         on every press; that is the food bank being told the number is no good.
 
         Three wordings, and the client chooses none of them: a collection
-        reminder carries the date, the time and the place, a delivery
-        reminder carries the date and the session's **delivery window** and
+        reminder greets the household by first name and carries the date,
+        the time and the place; a delivery reminder greets them the same way
+        and carries the date and the session's **delivery window** and
         **no address**. A session that sets no window of its own states its
-        own hours, so every delivery reminder names a window.
+        own hours, so every delivery reminder names a window. Neither
+        wording ever carries a surname.
 
         A `referrer_collect` referral is reminded on `referrerPhone` instead
-        of `refereePhone`, with a **placeholder** third wording —
-        `x-assumed`, see below — until the charity gives the real one.
+        of `refereePhone`, with its own third wording that greets the
+        referrer by their own first name rather than the household's and
+        never reuses the collection or delivery text.
       x-assumed: >-
-        The `referrer_collect` reminder text is a fixed placeholder,
-        `"SMS wording for referrer collection is to be agreed."`, not a third
-        real wording — the charity has not yet supplied one, including how a
-        referrer collecting for more than one household is told which one a
-        message is about. Tracked as Q42 in `OPEN-QUESTIONS.md`; only Pete
-        closes it.
+        The `referrer_collect` wording does not yet distinguish between
+        households when the same referrer is currently collecting for more
+        than one at once — the charity has not said whether it needs to.
+        Tracked as Q45 in `OPEN-QUESTIONS.md`; only Pete closes it.
       responses:
         '200':
           description: What happened

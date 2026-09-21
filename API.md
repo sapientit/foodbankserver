@@ -12,7 +12,7 @@ rendering and no PDF — printing and layout are the client's.
 |            | URL                                              |
 | ---------- | ------------------------------------------------ |
 | Local      | `http://127.0.0.1:8787`                          |
-| Test       | `https://foodbank-server.losttemple.workers.dev` |
+| Test       | `https://api-test.guildfordfoodbank.workers.dev` |
 | Production | not yet deployed                                 |
 
 `/health` and `/ready` sit at the **root**, not under `/api/v1`. Everything else
@@ -1469,10 +1469,10 @@ failure every time, which is the point: it is the food bank being told.
 
 Show `failed` prominently. Those are households who do not know when to come.
 
-**You do not compose the message.** Collections get date, time and place;
-deliveries get date and the session's delivery window and no address. Both are
-server-side, because the wording is a data-protection constraint — the provider
-is given a phone number and nothing that identifies whose it is.
+**You do not compose the message.** Both greet the household by first name and
+say who is texting. Collections get date, time and place; deliveries get date
+and the session's delivery window and no address. Both are server-side, and
+the wording is fixed — it never carries a surname or an address.
 
 ### Simulated sends
 
@@ -1615,11 +1615,14 @@ field, `recipientRole`: `'referrer'` or `'referee'`, telling you which number
 a given message actually reached without you having to cross-reference the
 referral's current `collectionMethod` (which can itself be corrected later).
 
-**The reminder text for a `referrer_collect` message is a placeholder**,
-`"SMS wording for referrer collection is to be agreed."`, until the charity
-settles the real wording — see `OPEN-QUESTIONS.md` in the server repo. It is
-never a variant of the ordinary collection/delivery text. A staff reply is
-unaffected — staff still type their own words, only the recipient changes.
+**The reminder text for a `referrer_collect` message greets the referrer by
+their own first name**, never the household's, and gives the date, time and
+place, worded for a referrer collecting a client's parcel rather than their
+own — it is never a variant of the ordinary collection/delivery text. It does
+not yet distinguish between households when the same referrer is currently
+collecting for more than one at once — see `OPEN-QUESTIONS.md` in the server
+repo, Q45. A staff reply is unaffected — staff still type their own words,
+only the recipient changes.
 
 **Inbound texts from a referrer are a new, distinct kind: `referrer_reply`.**
 When an inbound number matches a referrer currently collecting one or more

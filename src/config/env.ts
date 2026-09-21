@@ -141,6 +141,17 @@ const configSchema = z
     GOOGLE_OAUTH_CLIENT_ID: blankIsUnset,
 
     /**
+     * The OAuth client id Google sign-in checks an ID token's `aud` claim
+     * against. A **separate Google Cloud OAuth client from
+     * `GOOGLE_OAUTH_CLIENT_ID`** — that one requests the Sheets scope for the
+     * spreadsheet extract; this one only ever proves identity, never reaches a
+     * Google API, and needs no client secret. Not a credential itself (an
+     * audience value, not a key), but still optional so development and CI
+     * boot without it — required only when `AUTH_MODE=google`, checked below.
+     */
+    GOOGLE_AUTH_CLIENT_ID: blankIsUnset,
+
+    /**
      * The daily platform-usage job's four settings, for calling Cloudflare's
      * own GraphQL Analytics API and D1 REST API about this deployment's own
      * Worker and database — see `INITIAL_SPEC1.txt`,
@@ -183,6 +194,18 @@ const configSchema = z
         code: 'custom',
         path: ['TURNSTILE_SECRET_KEY'],
         message: 'TURNSTILE_SECRET_KEY is required in production.',
+      });
+    }
+
+    // Google sign-in verifies an ID token's `aud` claim against this. Without
+    // it configured, every Google sign-in attempt would fail closed rather
+    // than open — safe, but a mode nobody could actually use, so refuse to
+    // boot rather than let that ship unnoticed.
+    if (value.AUTH_MODE === 'google' && value.GOOGLE_AUTH_CLIENT_ID === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['GOOGLE_AUTH_CLIENT_ID'],
+        message: 'GOOGLE_AUTH_CLIENT_ID is required when AUTH_MODE=google.',
       });
     }
 
@@ -246,6 +269,7 @@ export interface AppConfig {
   readonly smsLiveNumber: string | undefined;
   readonly googleSpreadsheetId: string | undefined;
   readonly googleOauthClientId: string | undefined;
+  readonly googleAuthClientId: string | undefined;
   readonly cfAccountId: string | undefined;
   readonly cfD1DatabaseId: string | undefined;
   readonly cfWorkerScriptName: string | undefined;
@@ -290,6 +314,7 @@ export function loadConfig(bindings: object): AppConfig {
     smsLiveNumber: result.data.SMS_LIVE_NUMBER,
     googleSpreadsheetId: result.data.GOOGLE_SHEETS_SPREADSHEET_ID,
     googleOauthClientId: result.data.GOOGLE_OAUTH_CLIENT_ID,
+    googleAuthClientId: result.data.GOOGLE_AUTH_CLIENT_ID,
     cfAccountId: result.data.CF_ACCOUNT_ID,
     cfD1DatabaseId: result.data.CF_D1_DATABASE_ID,
     cfWorkerScriptName: result.data.CF_WORKER_SCRIPT_NAME,

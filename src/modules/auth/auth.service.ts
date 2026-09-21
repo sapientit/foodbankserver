@@ -70,7 +70,7 @@ export function createAuthService(deps: AuthServiceDeps) {
    * refresh token of a family carries the moment the sign-in ends, and every
    * rotation after it copies that value rather than recomputing one.
    */
-  async function issueTokens(user: User): Promise<IssuedTokens> {
+  async function issueTokens(user: User, linkGoogleSubject?: string): Promise<IssuedTokens> {
     const issuedAt = clock.nowEpochSeconds();
     const signInExpiresAt = issuedAt + SIGN_IN_TTL_SECONDS;
     const refreshToken = mintSecret();
@@ -91,7 +91,7 @@ export function createAuthService(deps: AuthServiceDeps) {
         issuedAt,
         expiresAt: signInExpiresAt,
       }),
-      repository.buildTouchLastLogin(user.id, clock.nowIso()),
+      repository.buildTouchLastLogin(user.id, clock.nowIso(), linkGoogleSubject),
     ]);
 
     return { accessToken, accessTokenExpiresAt: expiresAt, refreshToken, signInExpiresAt, user };
@@ -178,7 +178,17 @@ export function createAuthService(deps: AuthServiceDeps) {
   async function login(input: unknown, provider: IdentityProvider): Promise<IssuedTokens> {
     const claim = await provider.authenticate(input);
     const user = await resolveUser(claim);
-    return issueTokens(user);
+
+    // Account linking: a user resolved by email on a Google claim rather than
+    // by an already-linked subject gets one backfilled, so the next sign-in
+    // takes the fast path. Only on a genuine change — an already-matching
+    // subject needs no write.
+    const linkGoogleSubject =
+      claim.provider === 'google' && user.googleSubject !== claim.subject
+        ? claim.subject
+        : undefined;
+
+    return issueTokens(user, linkGoogleSubject);
   }
 
   return { login, issueTokens, rotate, logout, resolveUser };

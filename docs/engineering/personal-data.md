@@ -75,12 +75,15 @@ nothing else.
 
 ### The one exception, and how narrow it is
 
-**SMS reminders send a phone number to TheSMSWorks and nothing else.** The charity settled that on
-2026-08-06: the provider receives the number to text and no data identifying whose number it is —
-no name, no address, no date of birth, no reason for referral, and nothing in the message body that
-would name the household. That is what makes the exception acceptable rather than a hole in the
-rule, and it is a constraint on the **message text** as much as on the request: a reminder that
-opened "Dear Mrs Wintergreen" would breach it.
+**SMS reminders send a phone number to TheSMSWorks, plus a first name in the message text and
+nothing else.** The charity settled the original, narrower version of this on 2026-08-06 — no name
+at all — and revised it on 2026-09-21 to allow a first name in the greeting, so that a reminder now
+reads "Hi Alice this is Guildford Food Bank" rather than staying anonymous. Everything else the
+2026-08-06 decision ruled out still holds: no surname, no address, no date of birth, no reason for
+referral, and nothing in the message body beyond that first name that would identify the household.
+That narrower set is what makes the exception acceptable rather than a hole in the rule, and it is a
+constraint on the **message text** as much as on the request: a reminder that named a surname, or
+gave an address, would still breach it.
 
 Replies come back the same way and are stored in D1 like any other personal data — a household's
 own words are theirs, and everything in this document applies to them once they land.

@@ -1,6 +1,6 @@
 import { env } from 'cloudflare:workers';
 import { eq } from 'drizzle-orm';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fixedClock } from '../src/core/clock.ts';
 import { createDatabase } from '../src/db/client.ts';
 import { refreshTokens, users } from '../src/db/schema/users.ts';
@@ -10,8 +10,18 @@ import {
   cookieHeader,
   devLogin,
   extractRefreshCookie,
+  googleLogin,
   seedUser,
 } from './helpers/app.ts';
+import {
+  GOOGLE_TEST_CLIENT_ID,
+  defaultGoogleClaims,
+  generateGoogleTestKeyPair,
+  googleJwksBody,
+  jsonResponse,
+  signGoogleIdToken,
+  type GoogleTestKeyPair,
+} from './helpers/google-token.ts';
 
 const db = createDatabase(env.DB);
 
@@ -96,6 +106,22 @@ describe('auth flow', () => {
     expect(await response.json()).toMatchObject({ user: { role: 'team_lead' } });
   });
 
+  it('refuses a missing email with 400, not 500', async () => {
+    // Regression: the dummy provider used to call `devLoginSchema.parse`
+    // directly, throwing a raw ZodError that fell through error-handler.ts's
+    // `isAppError` check to an opaque 500 — the same bug caught in
+    // google-provider.ts below. `parseOrThrow` is what maps it to 400.
+    const testApp = buildTestApp();
+
+    const response = await testApp.request('/api/v1/auth/dev-login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+
+    expect(response.status).toBe(400);
+  });
+
   it('does not register the dev-login route when AUTH_MODE is google', async () => {
     const testApp = buildTestApp({ bindings: { AUTH_MODE: 'google' } });
 
@@ -103,6 +129,19 @@ describe('auth flow', () => {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ email: 'pete@example.org' }),
+    });
+
+    expect(response.status).toBe(404);
+    expect(await db.select().from(users)).toHaveLength(0);
+  });
+
+  it('does not register the google-login route when AUTH_MODE is dummy', async () => {
+    const testApp = buildTestApp(); // AUTH_MODE defaults to dummy
+
+    const response = await testApp.request('/api/v1/auth/google-login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ idToken: 'whatever' }),
     });
 
     expect(response.status).toBe(404);
@@ -312,6 +351,142 @@ describe('auth flow', () => {
 
     const [user] = await db.select().from(users).where(eq(users.id, userId));
     expect(user?.lastLoginAt).toEqual(expect.any(String));
+  });
+});
+
+describe('Google sign-in', () => {
+  const GOOGLE_SIGNED_IN_AT = '2026-08-04T09:00:00.000Z';
+  const googleClock = fixedClock(GOOGLE_SIGNED_IN_AT);
+
+  /** An app with a working Google sign-in configured, on a fixed clock so token `exp` is stable. */
+  function googleApp() {
+    return buildTestApp({
+      clock: googleClock,
+      bindings: { AUTH_MODE: 'google', GOOGLE_AUTH_CLIENT_ID: GOOGLE_TEST_CLIENT_ID },
+    });
+  }
+
+  let keyPair: GoogleTestKeyPair;
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeAll(async () => {
+    keyPair = await generateGoogleTestKeyPair();
+  });
+
+  beforeEach(async () => {
+    await db.delete(refreshTokens);
+    await db.delete(users);
+
+    // A fresh `Response` per call, not `mockResolvedValue` with one shared
+    // instance: a `Response` body can only be read once, and this mock is
+    // called twice within a single test that signs in the same person twice.
+    fetchMock = vi.fn(() => Promise.resolve(jsonResponse(googleJwksBody(keyPair))));
+    vi.stubGlobal('fetch', fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('signs in an existing user resolved by email and backfills their Google subject', async () => {
+    const testApp = googleApp();
+    const userId = await seedUser({ email: 'pete@guildfordfoodbank.org', role: 'team_lead' });
+    const token = await signGoogleIdToken(
+      keyPair.privateKey,
+      defaultGoogleClaims(googleClock.nowEpochSeconds()),
+    );
+
+    const before = await db.select().from(users).where(eq(users.id, userId));
+    expect(before[0]?.googleSubject).toBeNull();
+
+    const { accessToken, refreshCookie } = await googleLogin(testApp, token);
+
+    expect(refreshCookie).toEqual(expect.any(String));
+    const me = await testApp.request('/api/v1/auth/me', { headers: authHeaders(accessToken) });
+    expect(await me.json()).toEqual({
+      id: userId,
+      email: 'pete@guildfordfoodbank.org',
+      role: 'team_lead',
+    });
+
+    const [after] = await db.select().from(users).where(eq(users.id, userId));
+    expect(after?.googleSubject).toBe('google-subject-1');
+  });
+
+  it('resolves a second Google login by the linked subject rather than by email again', async () => {
+    const testApp = googleApp();
+    const userId = await seedUser({ email: 'pete@guildfordfoodbank.org', role: 'team_lead' });
+    const token = await signGoogleIdToken(
+      keyPair.privateKey,
+      defaultGoogleClaims(googleClock.nowEpochSeconds()),
+    );
+
+    const first = await googleLogin(testApp, token);
+    expect(first.userId).toBe(userId);
+
+    // Second sign-in: the subject is now linked, so this resolves through
+    // `findUserByGoogleSubject` rather than falling back to the email lookup.
+    const second = await googleLogin(testApp, token);
+    expect(second.userId).toBe(userId);
+
+    expect(await db.select().from(users)).toHaveLength(1);
+  });
+
+  it('refuses a Google login for an email address with no user record', async () => {
+    const testApp = googleApp();
+    const token = await signGoogleIdToken(keyPair.privateKey, {
+      ...defaultGoogleClaims(googleClock.nowEpochSeconds()),
+      email: 'stranger@guildfordfoodbank.org',
+    });
+
+    const response = await testApp.request('/api/v1/auth/google-login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ idToken: token }),
+    });
+
+    expect(response.status).toBe(401);
+    // Same answer as any other failed login: whether an address is registered
+    // here is not something an unauthenticated caller should learn.
+    expect(await response.json()).toMatchObject({ error: { code: 'UNAUTHORIZED' } });
+    expect(await db.select().from(users)).toHaveLength(0);
+  });
+
+  it('refuses a Google login for a deactivated user', async () => {
+    const testApp = googleApp();
+    await seedUser({ email: 'gone@guildfordfoodbank.org', isActive: 0 });
+    const token = await signGoogleIdToken(keyPair.privateKey, {
+      ...defaultGoogleClaims(googleClock.nowEpochSeconds()),
+      email: 'gone@guildfordfoodbank.org',
+    });
+
+    const response = await testApp.request('/api/v1/auth/google-login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ idToken: token }),
+    });
+
+    expect(response.status).toBe(403);
+    expect(await db.select().from(refreshTokens)).toHaveLength(0);
+  });
+
+  it('refuses a missing idToken with 400, not 500', async () => {
+    // Regression: google-provider.ts used to call `googleLoginSchema.parse`
+    // directly, throwing a raw ZodError that fell through error-handler.ts's
+    // `isAppError` check to an opaque 500 instead of the 400 openapi.yaml
+    // documents. Found by hand against the deployed test system, not by a
+    // test — nothing here exercised a body missing the field entirely.
+    // `parseOrThrow` is what maps it to 400; fetch must never be reached.
+    const testApp = googleApp();
+
+    const response = await testApp.request('/api/v1/auth/google-login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+
+    expect(response.status).toBe(400);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 

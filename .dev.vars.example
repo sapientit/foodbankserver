@@ -24,7 +24,13 @@ AUTH_JWT_SECRET=replace-me-with-at-least-32-random-characters
 # Overrides wrangler.jsonc's top-level GOOGLE_SHEETS_SPREADSHEET_ID for local
 # `wrangler dev` only (.dev.vars wins over `vars` there). Without this, local
 # dev shares a spreadsheet with the deployed test system
-# (foodbank-server.workers.dev) — same reasoning as test vs. production
-# having different values: a dev run must not write into rows the deployed
-# test system, or someone testing against it, is relying on.
+# (api-test.guildfordfoodbank.workers.dev) — same reasoning as test vs.
+# production having different values: a dev run must not write into rows the
+# deployed test system, or someone testing against it, is relying on.
 # GOOGLE_SHEETS_SPREADSHEET_ID=
+
+# Overrides wrangler.jsonc's top-level AUTH_MODE for local `wrangler dev` only.
+# The deployed test system signs on with real Google identities; local dev has
+# no browser flow to produce a real Google ID token, so it stays on the dummy
+# provider regardless. Uncomment if your wrangler.jsonc's default ever changes.
+# AUTH_MODE=dummy

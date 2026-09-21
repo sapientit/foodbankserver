@@ -4,37 +4,155 @@
 
 |                      | Test                                             | Production                      |
 | -------------------- | ------------------------------------------------ | ------------------------------- |
-| Worker               | `foodbank-server`                                | `foodbank-server-production`    |
+| Worker               | `api-test`                                       | `api`                           |
 | Wrangler environment | top-level (no `--env`)                           | `--env production`              |
 | Deploy with          | `npm run deploy:test`                            | `npm run deploy`                |
 | Migrate with         | `npm run db:migrate:test`                        | `npm run db:migrate:production` |
 | D1 database          | `foodbank-test` (EU)                             | `foodbank` (EU)                 |
-| URL                  | `https://foodbank-server.losttemple.workers.dev` | no application deployed         |
+| URL                  | `https://api-test.guildfordfoodbank.workers.dev` | no application deployed         |
 
-`foodbank-server-production` **does exist on the account**, but only as the empty shell that
-`wrangler secret put --env production` created on 2026-07-29 — no application code, no route, and
-it answers `404`. Its `foodbank` database is still at migration 0006. Treat production as unbuilt,
-not as something already running.
+These names — `api-test`/`api`, on the charity's own Cloudflare account
+(`deb0c45ee0e89fad81d6b1227d7c439a`) — are the result of the account migration in "Migrating to the
+charity's own Cloudflare account" below, done on 2026-09-21. Before that, both lived on a personal
+account as `foodbank-server`/`foodbank-server-production`; that old deployment still exists pending
+a decommission decision, but is no longer where new work should go.
+
+`api` **does exist on the account**, but only as the empty shell that `wrangler secret put
+--env production` created on 2026-09-21 — no application code, no route, and it answers `404`. Its
+`foodbank` database exists (EU jurisdiction) but is unmigrated. Treat production as unbuilt, not as
+something already running.
 
 `~/bin/foodbank-deploy-server` drives both: test by default, `--production` behind a typed
-confirmation that also reports the `AUTH_MODE` tripwire and any uncommitted work.
+confirmation that also reports the `AUTH_MODE` tripwire and any uncommitted work. (This script
+predates the account migration — confirm it still points at the new account before relying on it.)
 
 **The two databases are separate on purpose**, for exactly the reason the two Google vars are: a
 test deployment must not be able to write into the charity's real data. Both are EU-jurisdiction,
 which is permanent. Never point one environment's `database_id` at the other's database.
 
-The test system went up on 2026-08-08 on the **Cloudflare free plan**. It runs `ENVIRONMENT=development`
-with `AUTH_MODE=dummy`, so the production tripwires below do not fire and anyone who knows a seeded
+The test system runs on the **Cloudflare free plan**, `ENVIRONMENT=development` with
+`AUTH_MODE=dummy`, so the production tripwires below do not fire and anyone who knows a seeded
 account's address can obtain an admin token. **It must never hold real personal data.** The seeded
 `pete@x.com` from `migrations/0007_bootstrap-admin.sql` is committed in this repo and readable by
-anyone, so the row's address was changed on the test database after migrating; do the same on any
-future test database rather than leaving the published one live.
+anyone, so the row's login email was changed on the deployed test database after migrating (local
+`wrangler dev` keeps the public default, since it's not reachable over the network); do the same on
+any future test database rather than leaving the published one live.
+
+## Migrating to the charity's own Cloudflare account
+
+Everything today — **both** the deployed test system and the (unbuilt) production shell — runs on
+one personal Cloudflare account (`ea7ad751ffa489bc577330c6eedd7500`), shared with an unrelated
+Worker, `losttemple-api` (see the free-plan cost table below for why that coupling matters: one bot
+on the referral form can `1027` both Workers). This checklist moves the whole system — test
+deployment included, not just the production go-live — to an account the charity actually owns.
+
+Each step is tagged **[Pete]** (needs a browser, a dashboard, an external account, or a judgement
+call only you can make) or **[Claude]** (I can run it from here, in this session, once whatever it
+depends on is done). Do everything tagged **[Claude]** by asking me, in order — I'll do as much of
+this as I'm able to rather than hand it back to you piecemeal.
+
+### 1. Access
+
+- [x] **[Pete]** Create, or get admin access to, the charity's own Cloudflare account. Done —
+      `pete@guildfordfoodbank.org`'s account, id `deb0c45ee0e89fad81d6b1227d7c439a`.
+- [x] **[Pete]** Create an API token (**My Profile → API Tokens → Create Token**) scoped to Workers
+      Scripts, D1 and Rate Limiting, plus D1 Edit added after the first attempt came up short. Done.
+- [x] **[Claude]** Confirmed the token works and noted the new `CF_ACCOUNT_ID` above.
+
+### 2. Account-scoped resources that can't be copied
+
+D1 databases, Turnstile widgets and API tokens all belong to the account they were created under —
+none of them move by copying a value, each has to be recreated against the new account.
+
+- [x] **[Claude]** Created both D1 databases fresh, EU jurisdiction — `foodbank-test`
+      (`7060fbc4-1b30-4d9d-b6ee-6c932c11a098`) and `foodbank` (`cd9d1e7a-170d-4e89-854f-f1ab02a549c0`)
+      — and updated `wrangler.jsonc` with the returned ids.
+- [x] **[Claude]** Updated `CF_ACCOUNT_ID` and `CF_D1_DATABASE_ID` in `wrangler.jsonc`'s `vars` for
+      both environments and regenerated binding types (`npm run cf-typegen`).
+- [ ] **[Pete]** Still deferred until a domain exists (same dependency as the spreadsheet extract's
+      OAuth verification below) — a Turnstile widget is bound to the domain(s) it's created for, and
+      the frontend doesn't have one yet. Once it does: create the widget (dashboard, or ask me to do
+      it via the Cloudflare API with the account token, since `wrangler` doesn't expose this) and
+      give me the secret key.
+- [ ] **[Claude]** Set `TURNSTILE_SECRET_KEY` from what you give me, once the step above is unblocked.
+- [ ] **[Pete]** (Optional — only if you want the platform-usage job running) create a second API
+      token scoped to Analytics + D1 read, and give it to me. Dashboard path: **My Profile → API
+      Tokens → Create Token → Custom token**, with **Account → D1 → Read** and **Account →
+      Account Analytics → Read**, scoped to this account.
+- [ ] **[Claude]** Set `CF_ANALYTICS_API_TOKEN` from what you give me, if you did the step above.
+
+### 3. Secrets
+
+- [x] **[Claude]** Generated `AUTH_JWT_SECRET` fresh (not reused from the old account) and set it via
+      `wrangler secret put` for both environments, piped straight in — never typed or pasted anywhere.
+      This also created the two empty Worker shells on the new account, same as `wrangler secret put`
+      did on the old one — first as `foodbank-server`/`foodbank-server-production`, then recreated as
+      `api-test`/`api` once the rename below was decided (the old-named shells were deleted).
+- [x] **[Claude]** Generated and set `SMS_WEBHOOK_SECRET` the same way, both environments.
+- [x] **[Claude]** Renamed the Workers from `foodbank-server`/`foodbank-server-production` to
+      `api-test`/`api` (Pete's call, 2026-09-21) — the old names left no clean pattern for production
+      once test got the `-test` suffix. Re-set both secrets above under the new names, deleted the
+      old-named shells, and updated every reference across this repo (`wrangler.jsonc`, `openapi.yaml`,
+      `README.md`, `API.md`, `STATUS.md`, this file).
+- [ ] **[Pete]** Update TheSMSWorks' webhook configuration to the value I just set for
+      `SMS_WEBHOOK_SECRET` — it's a shared secret with them, so their side has to match. Ask me for
+      the value if you need it; I won't put it in chat unprompted.
+- [ ] **[Pete]** Decided: `SMS_API_KEY` carries over unchanged (same TheSMSWorks account). Still
+      need the actual value from you, though — I have no access to TheSMSWorks and it isn't stored
+      anywhere I can read (not in `.dev.vars`, and Cloudflare never lets a secret's value be read
+      back once set). Give it to me, or run
+      `wrangler secret put SMS_API_KEY --env production` (and the top-level one for test) yourself
+      so it never passes through this conversation.
+- [ ] **[Claude]** Set it once you've supplied it or confirmed you've set it yourself.
+
+### 4. Bring the data across
+
+- [x] **[Claude]** Ran migrations against the new test database (`foodbank-test`) — all 40 applied
+      cleanly, `referrals`/`stock_ledger`/`users` verified present.
+- [ ] **[Claude]** Production migration (`foodbank`) is still blocked — it needs a genuine, separate
+      approval each time (the auto-mode safety classifier treats it as a production action and a
+      chat "go ahead" doesn't clear it). **[Pete]** run `npm run db:migrate:production` yourself, or
+      change your Bash permission settings if you want me able to run it. Low-stakes either way: the
+      new `foodbank` database is still empty, so there's nothing to lose even if it went wrong.
+- [x] **[Pete]** Decided: copy the old test system's data across rather than starting clean.
+- [x] **[Claude]** Exported the old test database (`wrangler d1 export`, data only), reordered it by
+      foreign-key dependency (the export isn't topologically sorted, which fails on D1's remote
+      storage — it doesn't support SQL `BEGIN`/deferred-constraint transactions, only Durable
+      Objects' own atomic batching in file order), dropped the one row that duplicated a
+      migration-seeded default (`stock_take_groupings` "Non-perishable"), and imported the rest.
+      Row counts verified to match the export table-by-table.
+- [x] **[Claude]** Rebuilt local `wrangler dev` state the same way, then reset the seeded admin's
+      login back to `pete@x.com` for local convenience (the deployed test system keeps its own
+      private admin emails instead — see the note in "There are two deployments" above about why
+      that row's email must never be the public default on anything reachable over the network).
+- [ ] **[Pete]** Confirm there's genuinely nothing on the old _production_ D1 database worth
+      carrying over. The table above says it's an empty shell at migration `0006`, but I'd be
+      trusting that doc rather than verifying a decision that's yours to make.
+
+### 5. Deploy and verify
+
+- [ ] **[Claude]** Deploy both (`npm run deploy:test`, `npm run deploy`) and check `GET /health` on
+      each reports the expected `GIT_SHA` and environment.
+- [ ] **[Claude]** Sanity-check rate limiting and Turnstile against the new deployment with a
+      handful of manual requests (not a load test).
+
+### 6. Cutover
+
+- [ ] **[Pete]** Repoint anything outside this repo that references the old URLs
+      (`*.losttemple.workers.dev`, the client Worker's service binding).
+- [ ] **[Pete]** Decide when, and whether, to tear down the old account's Worker and databases. I
+      won't do this — or suggest a time to do it — on my own; it's destructive and it's your call.
+
+Not part of this migration at all: the domain (needed later for the same-site cookie and Google
+OAuth verification, see below) and the Google OAuth client for the spreadsheet extract — neither is
+a Cloudflare account resource, so neither needs touching just because the Cloudflare account
+changed.
 
 ## The refresh cookie requires the frontend to be same-site
 
 `auth.routes.ts` sets the refresh cookie `SameSite=Strict`. Browsers decide "same site" from the
 **Public Suffix List**, and both `workers.dev` and `pages.dev` are on it — so `app.pages.dev` and
-`foodbank-server.workers.dev` are as unrelated to a browser as two different companies. The cookie
+`api-test.guildfordfoodbank.workers.dev` are as unrelated to a browser as two different companies. The cookie
 is never sent, the fifteen-minute access token cannot be refreshed, and the session dies looking
 exactly like an auth bug.
 
@@ -83,9 +201,9 @@ configuration.**
 
 1. `wrangler secret put AUTH_JWT_SECRET --env production` — minimum 32 characters. It has no
    default on purpose: a missing signing key must stop the Worker, not silently produce forgeable
-   tokens. **Already set** (2026-07-29), which is also what brought the empty
-   `foodbank-server-production` Worker into existence — `wrangler secret put` creates the Worker if
-   it is absent. Rotate it rather than assume it needs creating.
+   tokens. **Already set** (2026-09-21, on the charity's own account), which is also what brought the
+   empty `api` Worker into existence — `wrangler secret put` creates the Worker if it is absent.
+   Rotate it rather than assume it needs creating.
 2. Create a Turnstile widget, then `wrangler secret put TURNSTILE_SECRET_KEY --env production`.
 3. Set `ALLOWED_ORIGINS` if the frontend is on a different origin. **Never a wildcard** — this API
    sends a refresh cookie, and `*` cannot carry credentials, so the "fix" would be reflecting
@@ -107,7 +225,7 @@ configuration.**
 
    **Local dev has a third spreadsheet, layered on top of the test one via `.dev.vars`.** The
    top-level `GOOGLE_SHEETS_SPREADSHEET_ID` in `wrangler.jsonc` is what the deployed test system
-   (`foodbank-server.workers.dev`) uses; `wrangler dev` reads the same file, so without an override
+   (`api-test.guildfordfoodbank.workers.dev`) uses; `wrangler dev` reads the same file, so without an override
    a local run would write into the deployed test system's rows. `.dev.vars` wins over `vars` for
    local `wrangler dev` only (confirmed 2026-09-14), so `GOOGLE_SHEETS_SPREADSHEET_ID` set there
    gives local dev its own spreadsheet without touching the deployed test value. See
@@ -203,12 +321,14 @@ headroom:
 | Cron triggers per account      | 5         | —             | No — one trigger, as the config comment says.                                                                                                                              |
 | D1 databases / storage         | 10 / 5 GB | 50,000 / 1 TB | No.                                                                                                                                                                        |
 
-**These limits are per _account_, not per Worker**, and this account also runs an unrelated Worker,
-`losttemple-api`. The two share the 100,000 daily requests, the D1 storage and row budgets, and the
-five cron triggers. The coupling that matters: **exceeding the daily request cap returns error 1027
-for every Worker on the account**, so a bot hammering the public referral form could take the other
-Worker down with it. That is an argument for moving to the paid plan, or a separate account, before
-the referral form is advertised to anybody.
+**These limits are per _account_, not per Worker.** On the old personal account this mattered because
+it also ran an unrelated Worker, `losttemple-api`, sharing the same 100,000 daily requests, D1
+budgets and five cron triggers — **exceeding the daily request cap returns error 1027 for every
+Worker on the account**, so a bot hammering the public referral form could have taken the other
+Worker down with it. That coupling is exactly why the account migration below moved to a dedicated
+account: the charity's account runs nothing else, so this account-wide sharing risk no longer
+applies here. The limits themselves are unchanged, though — still worth the paid plan before the
+referral form is advertised widely.
 
 Do **not** rename the `workers.dev` subdomain to something food-bank-ish. It is account-wide and
 would change the other Worker's URL too. Get a domain instead.

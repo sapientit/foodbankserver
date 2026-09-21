@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "foodbank-server",
+  "name": "api-test",
   "main": "src/worker.ts",
   "compatibility_date": "2026-07-01",
 
@@ -16,9 +16,14 @@
   "vars": {
     "ENVIRONMENT": "development",
     "LOG_LEVEL": "debug",
-    // Dummy auth accepts any email. config/env.ts refuses to boot if this is
-    // set while ENVIRONMENT is production.
-    "AUTH_MODE": "dummy",
+    // The deployed test system signs on with real Google identities, same as
+    // production will — settled 2026-09-21. `.dev.vars` overrides this back to
+    // `dummy` for local `wrangler dev`, same technique already used for
+    // GOOGLE_SHEETS_SPREADSHEET_ID: a deployed-system change must not sweep up
+    // local development, which has no browser flow to produce a real Google ID
+    // token anyway. config/env.ts refuses to boot with `dummy` while
+    // ENVIRONMENT is production.
+    "AUTH_MODE": "google",
     // The commit deployed. Blank here — the deploy scripts (`deploy` and
     // `deploy:test` in package.json) stamp the real value with `wrangler
     // deploy --var GIT_SHA:$(git rev-parse HEAD)`, so it is never committed
@@ -32,6 +37,12 @@
     // deployment can never write into the charity's real spreadsheet.
     "GOOGLE_SHEETS_SPREADSHEET_ID": "1gQK_ore1UOeHY_CwONpua307GUbh5J0_4zt90hlmcs8",
     "GOOGLE_OAUTH_CLIENT_ID": "643990075975-48flcohql0sc2cekh3940uscrqflrbnn.apps.googleusercontent.com",
+    // The sign-in client — a SEPARATE Google Cloud OAuth client from the one
+    // above, created 2026-09-21 for this test deployment specifically (its
+    // Authorised JavaScript origin is referrals-test.guildfordfoodbank.workers.dev,
+    // not any other host). Not a secret: an audience value an ID token's `aud`
+    // is checked against, not a key. Production needs its own, once it exists.
+    "GOOGLE_AUTH_CLIENT_ID": "746866667590-us7ee47uheispedj0qtonpum27rpa2i4.apps.googleusercontent.com",
     // Every SMS send in this environment is a fake success rather than a
     // `failure` row, since this environment has no TheSMSWorks account
     // configured either. config/env.ts refuses to boot with this set while
@@ -46,9 +57,9 @@
     // the databases below, not guessed). CF_ANALYTICS_API_TOKEN is the one
     // genuine credential here and is set with `wrangler secret put`, never
     // here.
-    "CF_ACCOUNT_ID": "ea7ad751ffa489bc577330c6eedd7500",
-    "CF_D1_DATABASE_ID": "7804f3df-2d3f-40dd-85c1-ecab0d19e760",
-    "CF_WORKER_SCRIPT_NAME": "foodbank-server",
+    "CF_ACCOUNT_ID": "deb0c45ee0e89fad81d6b1227d7c439a",
+    "CF_D1_DATABASE_ID": "7060fbc4-1b30-4d9d-b6ee-6c932c11a098",
+    "CF_WORKER_SCRIPT_NAME": "api-test",
   },
 
   "d1_databases": [
@@ -59,7 +70,7 @@
       // write into the charity's real data. Both are EU-jurisdiction, which is
       // permanent and cannot be changed afterwards.
       "database_name": "foodbank-test",
-      "database_id": "7804f3df-2d3f-40dd-85c1-ecab0d19e760",
+      "database_id": "7060fbc4-1b30-4d9d-b6ee-6c932c11a098",
       "migrations_dir": "migrations",
     },
   ],
@@ -108,15 +119,18 @@
     // Wrangler environments do NOT inherit top-level keys — every binding,
     // var and trigger must be repeated in full.
     "production": {
-      "name": "foodbank-server-production",
+      "name": "api",
       "observability": { "enabled": true },
       "vars": {
         "ENVIRONMENT": "production",
         "LOG_LEVEL": "info",
         // Intentional tripwire: config/env.ts refuses to boot on this
         // combination, so a production deploy fails loudly on every request
-        // until real authentication exists. Change to "google" only when the
-        // Google provider is actually implemented — never to make it start.
+        // until real sign-in is ready. The Google provider itself is built
+        // now (2026-09-21, proven on the test deployment), but production
+        // still needs its own GOOGLE_AUTH_CLIENT_ID below — a separate Google
+        // Cloud OAuth client scoped to the production origin, which does not
+        // exist yet. Change to "google" once that exists, never before.
         "AUTH_MODE": "dummy",
         // Blank for the same reason as the top-level block: `npm run deploy`
         // stamps the real commit at deploy time via `--var`, so nothing here
@@ -127,6 +141,11 @@
         // unconfigured rather than failing at Google.
         "GOOGLE_SHEETS_SPREADSHEET_ID": "",
         "GOOGLE_OAUTH_CLIENT_ID": "",
+        // The sign-in client — see the top-level block's comment. A separate
+        // Google Cloud OAuth client from the one above, scoped to production's
+        // own origin once it has one. Blank means AUTH_MODE cannot be "google"
+        // here; config/env.ts refuses to boot on that combination.
+        "GOOGLE_AUTH_CLIENT_ID": "",
         // Must stay "" — config/env.ts refuses to boot otherwise. Declared
         // here (rather than omitted) only so `wrangler types --strict-vars`
         // keeps the key honest across every environment.
@@ -135,16 +154,16 @@
         // shares one Cloudflare account, confirmed rather than guessed, see
         // the comment there. Database id and script name copied from this
         // file's own `d1_databases`/`name` below; token set as a secret.
-        "CF_ACCOUNT_ID": "ea7ad751ffa489bc577330c6eedd7500",
-        "CF_D1_DATABASE_ID": "975ce6e4-3d3c-4811-bd60-feb0cbfad966",
-        "CF_WORKER_SCRIPT_NAME": "foodbank-server-production",
+        "CF_ACCOUNT_ID": "deb0c45ee0e89fad81d6b1227d7c439a",
+        "CF_D1_DATABASE_ID": "cd9d1e7a-170d-4e89-854f-f1ab02a549c0",
+        "CF_WORKER_SCRIPT_NAME": "api",
       },
       "d1_databases": [
         {
           "binding": "DB",
           // The charity's real data. Never the test database above.
           "database_name": "foodbank",
-          "database_id": "975ce6e4-3d3c-4811-bd60-feb0cbfad966",
+          "database_id": "cd9d1e7a-170d-4e89-854f-f1ab02a549c0",
           "migrations_dir": "migrations",
         },
       ],

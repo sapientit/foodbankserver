@@ -1,18 +1,21 @@
 /**
  * Composes the reminder text. Pure, no I/O.
  *
- * **The message must never contain the household's name or address** — see
- * `INITIAL_SPEC1.txt`, "SMS reminders and replies", and
- * `docs/engineering/personal-data.md`. It only ever takes a `Session` and a
- * `Referral`'s `isDelivery` flag, never the referee's own columns, so there is
- * nothing here that could leak a name even by accident.
+ * The reminder now greets the recipient by **first name only** — see
+ * `INITIAL_SPEC1.txt`, "SMS reminders and replies". Never a surname, never an
+ * address: a delivery reminder still never carries the household's address,
+ * which stays the one thing this message must not carry.
  *
- * Two wordings, because a collecting household needs to know where to go and
- * a delivered one must not be told anything about where they live — the
- * address is the one thing this message must not carry. A delivered
- * household is told the **window** it can expect the van in, never a single
- * moment: a van round cannot promise a doorstep at a precise time, only that
- * it will be there between two times.
+ * Three wordings:
+ *
+ * - **Collection**, for a household collecting its own parcel: date, start
+ *   time, location.
+ * - **Delivery**: date and the session's effective delivery window — no
+ *   location at all, because a delivered household must not be told anything
+ *   about where they live.
+ * - **Referrer collection**, for a `referrer_collect` referral: the
+ *   referrer's own wording, greeting the referrer (not the household) by
+ *   their first name, naming the parcel as "your client's".
  */
 
 import { parsePlainDate } from '../../core/time/plain-date.ts';
@@ -40,15 +43,32 @@ function formatSessionDate(date: string): string {
 }
 
 /**
- * The reminder text for a `referrer_collect` parcel, until the charity
- * settles the real wording — `OPEN-QUESTIONS.md`, Q1. Deliberately **not** a
- * variant of `composeReminder`'s own wording: the charity's brief is explicit
- * that the two must not share text, because a referrer collecting for
- * several households needs to be told which one a message is about and a
- * household's own collection/delivery wording says nothing that could answer
- * that.
+ * The greeting clause every reminder opens with — `Hi {firstName} this is
+ * Guildford Food Bank.` when a first name is available, or the plain `This is
+ * Guildford Food Bank.` when it is not. `firstName` being `null` should not
+ * happen in practice — both `refereeFirstName` and `referrerName` are
+ * required at referral submission, and only go `null` after the
+ * not-yet-enabled PII purge — but the column is nullable, so this must not
+ * throw on it.
  */
-export const REFERRER_COLLECT_PLACEHOLDER = 'SMS wording for referrer collection is to be agreed.';
+function greeting(firstName: string | null): string {
+  return firstName === null
+    ? 'This is Guildford Food Bank.'
+    : `Hi ${firstName} this is Guildford Food Bank.`;
+}
+
+/**
+ * The first word of a full name, for a greeting — everything before the
+ * first run of whitespace, once trimmed. `referrals.referrerName` is a single
+ * free-text field with no separate first-name column, so this is how
+ * `composeReferrerReminder` derives one. `null` in, `null` out.
+ */
+function firstNameOf(fullName: string | null): string | null {
+  if (fullName === null) return null;
+  const trimmed = fullName.trim();
+  const firstWord = trimmed.split(/\s+/)[0];
+  return firstWord === undefined || firstWord === '' ? null : firstWord;
+}
 
 /**
  * Composes the reminder for one household on one session.
@@ -58,17 +78,39 @@ export const REFERRER_COLLECT_PLACEHOLDER = 'SMS wording for referrer collection
  *   stored pair, falling back to the session's own hours when it has not set
  *   one — see `delivery-window.ts`) — no location at all.
  */
-export function composeReminder(session: Session, isDelivery: boolean): string {
+export function composeReminder(
+  session: Session,
+  isDelivery: boolean,
+  firstName: string | null,
+): string {
   const date = formatSessionDate(session.sessionDate);
+  const greetingClause = greeting(firstName);
 
   if (isDelivery) {
     const window = effectiveDeliveryWindow(session);
-    return `Reminder: your food bank delivery is ${date}, between ${window.start} and ${window.end}. Reply to this message if anything has changed.`;
+    return `${greetingClause} Your parcel will be delivered on ${date}, between ${window.start} and ${window.end}. Someone must be home to receive it. Any problems let us know.`;
   }
 
   return fitToLimit(
     (location) =>
-      `Reminder: your food bank collection is ${date} at ${session.startTime}, ${location}. Reply to this message if anything has changed.`,
+      `${greetingClause} Please collect your parcel on ${date} at ${session.startTime} from ${location}. Any problems let us know.`,
+    session.location,
+  );
+}
+
+/**
+ * Composes the reminder for a `referrer_collect` referral, sent to the
+ * referrer rather than the household — `INITIAL_SPEC1.txt`, "SMS reminders
+ * and replies". `referrerName` is the referral's full-text `referrerName`
+ * column; the first name is derived here via `firstNameOf`.
+ */
+export function composeReferrerReminder(session: Session, referrerName: string | null): string {
+  const date = formatSessionDate(session.sessionDate);
+  const greetingClause = greeting(firstNameOf(referrerName));
+
+  return fitToLimit(
+    (location) =>
+      `${greetingClause} Please collect your client's parcel as arranged on ${date} at ${session.startTime} from ${location}. Any problems let us know.`,
     session.location,
   );
 }

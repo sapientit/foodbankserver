@@ -9,6 +9,7 @@ import { createAuthRepository } from './auth.repository.ts';
 import { createAuthService, type IssuedTokens } from './auth.service.ts';
 import type { TokenResponse } from './auth.schema.ts';
 import { createDummyProvider } from './providers/dummy-provider.ts';
+import { createGoogleProvider } from './providers/google-provider.ts';
 
 /**
  * Routes are built against a config so the dev-login route can be omitted
@@ -24,6 +25,17 @@ export function authRoutes(config: AppConfig): Hono<AppEnv> {
       const tokens = await service.login(await c.req.json(), createDummyProvider());
 
       c.get('logger').info('dev login', { userId: tokens.user.id, actorRole: tokens.user.role });
+      return respondWithTokens(c, tokens);
+    });
+  }
+
+  if (config.authMode === 'google') {
+    routes.post('/google-login', async (c) => {
+      const service = serviceFor(c);
+      const provider = createGoogleProvider(config, c.get('clock'));
+      const tokens = await service.login(await c.req.json(), provider);
+
+      c.get('logger').info('google login', { userId: tokens.user.id, actorRole: tokens.user.role });
       return respondWithTokens(c, tokens);
     });
   }

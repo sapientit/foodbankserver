@@ -44,20 +44,19 @@ All stock in hand is used - where food has gone off they will manually change th
 
 ---
 
-## Q42 — What exact SMS wording is sent when a referrer collects a parcel?
+## Q45 — How does a referrer collecting for more than one household at once tell which parcel a message is about?
 
 `Status: open`
-`Raised by: Codex`
+`Raised by: Claude`
 
-When a referral's collection method is `referrer_collect`, every parcel-related outbound SMS goes to the referrer's phone number rather than the client's. The text must be different from the client-facing message, because one referrer can collect parcels for several households and sessions. Until Pete supplies the agreed wording, the server response/template uses the visible placeholder: `SMS wording for referrer collection is to be agreed.`
+Q42 (closed) settled the ordinary wording for a `referrer_collect` reminder: it greets the referrer by their own first name and gives the date, time and place, the same as a household's own collection reminder but addressed to the referrer and naming the client's parcel rather than "your parcel". It does not distinguish between households - a referrer currently collecting for two open `referrer_collect` referrals gets the same wording for each. Pete's answer to Q42 said he suspects this never actually happens, and that he will check with the charity.
 
-**Question:** What is the exact approved text for each parcel-related SMS sent to a referrer collecting on someone else's behalf, including the identifying information needed where they have more than one open parcel?
+**Question:** When one referrer is currently collecting for more than one household at once, does the reminder (and any staff message on that thread) need to say which household's parcel it is about, and if so, how - the client's first name, a session reference, something else?
 
-`x-assumed` in `openapi.yaml` marks the operations and fields resting on an open entry:
+`x-assumed` in `openapi.yaml` marks the operation resting on this:
 
 ```
 grep -n -A3 'x-assumed' openapi.yaml
-
 ```
 
 **A:**

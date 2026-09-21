@@ -132,6 +132,38 @@ export async function devLogin(
   };
 }
 
+/**
+ * Posts a signed Google ID token to `/google-login` and returns the tokens
+ * plus the cookie, the same shape `devLogin` returns.
+ *
+ * Unlike `devLogin`, this does not seed a user — resolving to an existing
+ * account, or refusing an unknown one, is exactly what the caller is often
+ * testing, so seeding belongs to the test, not this helper.
+ */
+export async function googleLogin(
+  testApp: TestApp,
+  idToken: string,
+): Promise<{ accessToken: string; refreshCookie: string; userId: string }> {
+  const response = await testApp.request('/api/v1/auth/google-login', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ idToken }),
+  });
+
+  if (response.status !== 200) {
+    throw new Error(
+      `google-login failed with ${String(response.status)}: ${await response.text()}`,
+    );
+  }
+
+  const payload: { accessToken: string; user: { id: string } } = await response.json();
+  return {
+    accessToken: payload.accessToken,
+    refreshCookie: extractRefreshCookie(response),
+    userId: payload.user.id,
+  };
+}
+
 export function extractRefreshCookie(response: Response): string {
   const header = response.headers.get('set-cookie');
   if (header === null) {
