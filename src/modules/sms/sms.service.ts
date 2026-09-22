@@ -9,12 +9,14 @@ import type { SmsMessage, SmsRecipientRole } from '../../db/schema/sms.ts';
 import { isUniqueViolation } from '../../db/unique-violation.ts';
 import type { SessionsRepository } from '../sessions/sessions.repository.ts';
 import { normalisePhone, phonesMatch } from '../../core/phone.ts';
+import { instantToLondonWallClock } from '../../core/time/london.ts';
 import { composeReferrerReminder, composeReminder } from './messages.ts';
 import { sendSms, type SmsProviderConfig } from './provider.ts';
 import { smsRetentionCutoffIso } from './retention.ts';
 import type { WebhookInboundMessage } from './sms.schema.ts';
 import type { SmsRepository } from './sms.repository.ts';
 import {
+  isSessionClosed,
   toAttentionSummaryResponse,
   toInboxMessageResponse,
   type SmsCandidateParcel,
@@ -385,8 +387,11 @@ export function createSmsService(deps: SmsServiceDeps) {
   }
 
   /**
-   * A household's reply, matched by phone to the referral for the soonest
-   * session still to come. No match keeps the row as a loose reply.
+   * A household's reply, matched by phone, first, to the referral for the
+   * soonest session still to come, then — failing that — to the most recent
+   * session that phone was ever referred against, of any age. Only a phone
+   * genuinely never referred at all keeps the row as a loose reply. See
+   * `matchReferral`.
    *
    * **A referrer match is checked first and, when found, wins outright** —
    * the household matching below is the fallback for a sender **not**
@@ -485,6 +490,13 @@ export function createSmsService(deps: SmsServiceDeps) {
     }
   }
 
+  /**
+   * The referral for the soonest session still to come wins outright, same
+   * as always. Failing that, falls back to the single most recent session
+   * this phone was ever referred against, of any age or status — a reply
+   * to a session that has already happened still has somewhere to land, not
+   * only one still open. See `SmsRepository.latestSessionForPhone`.
+   */
   async function matchReferral(
     rawPhone: string,
     nowUtc: string,
@@ -495,7 +507,13 @@ export function createSmsService(deps: SmsServiceDeps) {
         return { referralId: referral.id, sessionId: session.id };
       }
     }
-    return null;
+
+    const normalised = normalisePhone(rawPhone);
+    if (normalised === null) return null;
+    const latest = await repository.latestSessionForPhone(normalised);
+    return latest === null
+      ? null
+      : { referralId: latest.referral.id, sessionId: latest.session.id };
   }
 
   /**
@@ -551,10 +569,12 @@ export function createSmsService(deps: SmsServiceDeps) {
     return repository.listUnmatched();
   }
 
-  /** The three counts the admin inbox screen makes prominent. */
+  /** The four counts the admin inbox screen makes prominent. */
   async function attentionSummary(): Promise<SmsAttentionSummaryResponse> {
-    const cutoff = smsRetentionCutoffIso(clock.nowIso());
-    const counts = await repository.countUnreadByLocation(cutoff);
+    const now = clock.nowIso();
+    const cutoff = smsRetentionCutoffIso(now);
+    const today = instantToLondonWallClock(now).date;
+    const counts = await repository.countUnreadByLocation(cutoff, today);
     return toAttentionSummaryResponse(counts);
   }
 
@@ -573,6 +593,7 @@ export function createSmsService(deps: SmsServiceDeps) {
   async function listInbox(): Promise<SmsInboxMessageResponse[]> {
     const now = clock.nowIso();
     const cutoff = smsRetentionCutoffIso(now);
+    const today = instantToLondonWallClock(now).date;
     const rows = await repository.listInbox(cutoff);
 
     const hasReferrerReply = rows.some(({ message }) => message.kind === 'referrer_reply');
@@ -589,18 +610,19 @@ export function createSmsService(deps: SmsServiceDeps) {
       );
     }
 
-    return rows.map((row) => toInboxMessageResponse(row, candidatesByPhone.get(row.message.phone)));
+    return rows.map((row) =>
+      toInboxMessageResponse(row, today, candidatesByPhone.get(row.message.phone)),
+    );
   }
 
   /**
    * Clears one inbox item — a loose reply or a reply on a session that has
    * since closed, not only an unmatched one as before. Deliberately refuses
-   * a reply still on a `planned`/`in_progress` session: that one remains the
+   * a reply still on a session that is not yet closed: that one remains the
    * team leader's to read until the session closes, the same rule
-   * `SmsMessageLocation` uses to keep it out of the attention count, and
-   * this endpoint must not give an administrator a side door round it.
-   * Scoped to the one row named either way — this never marks a second
-   * message.
+   * `isSessionClosed` uses to keep it out of the attention count, and this
+   * endpoint must not give an administrator a side door round it. Scoped to
+   * the one row named either way — this never marks a second message.
    */
   async function markMessageRead(id: string): Promise<SmsMessage> {
     const message = await repository.findById(id);
@@ -610,11 +632,11 @@ export function createSmsService(deps: SmsServiceDeps) {
 
     const session =
       message.sessionId === null ? undefined : await sessions.findById(message.sessionId);
-    if (
-      session !== undefined &&
-      (session.status === 'planned' || session.status === 'in_progress')
-    ) {
-      throw new NotFoundError('Message not found');
+    if (session !== undefined) {
+      const today = instantToLondonWallClock(clock.nowIso()).date;
+      if (!isSessionClosed(session, today)) {
+        throw new NotFoundError('Message not found');
+      }
     }
 
     const updated = await repository.markOneRead(id, clock.nowIso());

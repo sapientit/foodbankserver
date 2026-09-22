@@ -1535,10 +1535,11 @@ free text. Put it on the screen.
 
 ### Unmatched replies (admin)
 
-A reply is matched by phone number to the referral for the **soonest session
-still to come**. A session already past is not a candidate, so a text the morning
-after lands here instead. So does a wrong number, and so does somebody the food
-bank has never heard of.
+A reply is matched by phone number, first, to the referral for the **soonest
+session still to come**. Failing that, it falls back to the single most
+recent session — any age, any status — that number was ever referred
+against, landing as a closed-session reply instead of here. Only a wrong
+number, or somebody the food bank has genuinely never heard of, lands here.
 
 They are never dropped. `phone` is on every message, but here it is the only
 thing to act on — there is no referral behind a loose reply to look the
@@ -1575,11 +1576,17 @@ referrerUnread` is what to badge an admin nav item with — that is what an
 
 Each row in the list carries a `location`:
 
-| `location`       | Meaning                                                        | `attention-summary` field                                                                    |
-| ---------------- | -------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `unmatched`      | A loose reply, or any referrer message — no session behind it. | `unmatchedUnread` if a `household_reply`, `referrerUnread` if a `referrer_reply`, if unread. |
-| `active_session` | Its session is still `planned` or `in_progress`.               | `activeSessionUnread`, if unread.                                                            |
-| `closed_session` | Its session has since been `confirmed` or `cancelled`.         | `closedSessionUnread`, if unread.                                                            |
+| `location`       | Meaning                                                              | `attention-summary` field                                                                    |
+| ---------------- | -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `unmatched`      | A loose reply, or any referrer message — no session behind it.       | `unmatchedUnread` if a `household_reply`, `referrerUnread` if a `referrer_reply`, if unread. |
+| `active_session` | Its session is not yet closed.                                       | `activeSessionUnread`, if unread.                                                            |
+| `closed_session` | Its session has closed: `confirmed`/`cancelled`, or its date passed. | `closedSessionUnread`, if unread.                                                            |
+
+**A session is closed once it is `confirmed` or `cancelled`, or once its own
+date has simply passed, whichever comes first** — not only on status. A
+session nobody ever got round to formally confirming does not read as
+`active_session` forever just because its own paperwork is outstanding; once
+its date is history it counts as closed the same as a signed-off one.
 
 `unmatched` is the one `location` shared by two different `attention-summary`
 fields — a referrer message is never a household's own reply, loose or
@@ -1611,12 +1618,12 @@ picked up an inbox item; a message is still simply read or unread.
 
 `POST /sms-messages/{id}/read` now marks one unread household reply read on a
 loose reply or one from a closed session, not only an unmatched one as
-before. **It refuses (404) a reply still on an `active_session`** — that one
-remains the team leader's to read until the session closes, and this
-endpoint does not offer a way around that; open and mark it read through the
-referral's own thread instead. It is idempotent and touches only the message
-named: it never marks another message and never clears a session's own
-`sms-summary` count.
+before. **It refuses (404) a reply still on an `active_session`** — a
+session that is not yet closed by the rule above — that one remains the team
+leader's to read until the session closes, and this endpoint does not offer
+a way around that; open and mark it read through the referral's own thread
+instead. It is idempotent and touches only the message named: it never marks
+another message and never clears a session's own `sms-summary` count.
 
 ### Referrer collection and SMS
 

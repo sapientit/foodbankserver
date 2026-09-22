@@ -8,8 +8,10 @@ import {
   inArray,
   isNotNull,
   isNull,
+  lt,
   ne,
   notInArray,
+  or,
   sql,
 } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/sqlite-core';
@@ -115,13 +117,19 @@ export function createSmsRepository(db: Database) {
      * message is never a household's own reply and is never treated as one.
      * Of the rest (`household_reply` only), `unmatchedUnread` is a loose
      * reply with no session snapshot at all, `activeSessionUnread` is one
-     * still on a planned/in-progress session — the team leader's business,
-     * kept separate so an administrator can see it without it counting as
-     * their own job — and `closedSessionUnread` is one whose session has
-     * since closed (confirmed or cancelled), which is nobody else's job by
-     * then.
+     * still on a planned/in-progress session whose own date has not passed —
+     * the team leader's business, kept separate so an administrator can see
+     * it without it counting as their own job — and `closedSessionUnread` is
+     * one whose session has since closed, confirmed or cancelled **or simply
+     * dated in the past**, which is nobody else's job by then. `today` and
+     * `isClosedSession`/`isActiveSession` below apply the identical rule
+     * `sms.mapper.ts`'s `isSessionClosed` uses for the admin inbox's
+     * `location` field — kept in sync by hand, since a query can't call it.
      */
-    async countUnreadByLocation(cutoff: string): Promise<{
+    async countUnreadByLocation(
+      cutoff: string,
+      today: string,
+    ): Promise<{
       activeSessionUnread: number;
       closedSessionUnread: number;
       unmatchedUnread: number;
@@ -134,11 +142,12 @@ export function createSmsRepository(db: Database) {
       );
       const isClosedSession = and(
         isNotNull(smsMessages.sessionId),
-        inArray(sessions.status, [...CLOSED_SESSION_STATUSES]),
+        or(inArray(sessions.status, [...CLOSED_SESSION_STATUSES]), lt(sessions.sessionDate, today)),
       );
       const isActiveSession = and(
         isNotNull(smsMessages.sessionId),
         notInArray(sessions.status, [...CLOSED_SESSION_STATUSES]),
+        gte(sessions.sessionDate, today),
       );
       const rows = await db
         .select({
@@ -285,6 +294,37 @@ export function createSmsRepository(db: Database) {
           ),
         )
         .orderBy(asc(sessions.startsAtUtc));
+    },
+
+    /**
+     * The single most recent session — any status, any date, unbounded by
+     * "still open" — a phone number has ever been referred against, for the
+     * fallback an inbound reply takes when `referralsOnUpcomingSessions`
+     * finds nothing: a reply to a session that has already happened still
+     * has somewhere to land, not just one still to come. Filtered in SQL on
+     * `refereePhoneNormalised` (`idx_referrals_match_phone`) rather than in
+     * memory like the two "still open" queries above — this one is not
+     * date-bounded, so it cannot rely on a small candidate set the way they
+     * do, and the phone has already been normalised by the caller.
+     *
+     * Two households sharing a phone number across the fifteen months this
+     * data is held is accepted as negligible — see `INITIAL_SPEC1.txt`, "SMS
+     * reminders and replies" — so the most recent session is taken without
+     * checking whether an even-more-recent session exists for a *different*
+     * referral on the same number; there is only ever meant to be one
+     * household behind a given number at a time.
+     */
+    async latestSessionForPhone(
+      phoneNormalised: string,
+    ): Promise<{ referral: Referral; session: Session } | null> {
+      const rows = await db
+        .select({ referral: referrals, session: sessions })
+        .from(referrals)
+        .innerJoin(sessions, eq(referrals.sessionId, sessions.id))
+        .where(eq(referrals.refereePhoneNormalised, phoneNormalised))
+        .orderBy(desc(sessions.startsAtUtc))
+        .limit(1);
+      return rows[0] ?? null;
     },
 
     /**

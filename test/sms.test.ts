@@ -835,7 +835,7 @@ describe('the inbound webhook', () => {
     expect(row?.referralId).toBe(referralId);
   });
 
-  it('does not match a session that has already happened', async () => {
+  it('matches a session that has already happened, via the historical fallback, landing it as closed', async () => {
     const testApp = buildSmsTestApp({ SMS_WEBHOOK_SECRET: WEBHOOK_SECRET });
     const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
 
@@ -846,7 +846,7 @@ describe('the inbound webhook', () => {
     // `NOW`. Submitted instead through a second app instance, clocked while
     // the session was still in the future, sharing the same database.
     const submittingApp = buildTestApp({ clock: fixedClock('2026-07-15T09:00:00.000Z') });
-    await submitReferral(
+    const { id: referralId } = await submitReferral(
       submittingApp,
       { ...world, sessionId: pastSessionId },
       { refereePhone: '07700 900111' },
@@ -863,7 +863,16 @@ describe('the inbound webhook', () => {
       .select()
       .from(smsMessages)
       .where(eq(smsMessages.providerMessageId, 'past-1'));
-    expect(row?.referralId).toBeNull(); // a loose reply, not matched to the past session
+    // No open session for this phone at all, so the fallback attaches it to
+    // the most recent one it ever had — its own date has passed, so it
+    // lands as closed even though the session was never confirmed.
+    expect(row?.referralId).toBe(referralId);
+    expect(row?.sessionId).toBe(pastSessionId);
+
+    expect(await attentionSummary(testApp, accessToken)).toEqual({
+      ...ZERO_ATTENTION_SUMMARY,
+      closedSessionUnread: 1,
+    });
   });
 
   it('matches a reply that arrives after the session has started but on the day it runs', async () => {
@@ -900,7 +909,7 @@ describe('the inbound webhook', () => {
     expect(row?.referralId).toBe(referralId); // still open on the day it runs
   });
 
-  it('does not match a reply once the session has been confirmed, even before its start time', async () => {
+  it('matches a reply once the session has been confirmed, even before its start time, landing it as closed', async () => {
     const testApp = buildSmsTestApp({ SMS_WEBHOOK_SECRET: WEBHOOK_SECRET });
     const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
 
@@ -911,7 +920,7 @@ describe('the inbound webhook', () => {
     });
     const world = await setUpReferralWorld(testApp, accessToken);
     const submittingApp = buildTestApp({ clock: fixedClock('2026-08-01T09:00:00.000Z') });
-    await submitReferral(
+    const { id: referralId } = await submitReferral(
       submittingApp,
       { ...world, sessionId: laterSessionId },
       { refereePhone: '07700 900444' },
@@ -929,7 +938,122 @@ describe('the inbound webhook', () => {
       .select()
       .from(smsMessages)
       .where(eq(smsMessages.providerMessageId, 'confirmed-1'));
-    expect(row?.referralId).toBeNull(); // signed off — a loose reply now
+    // Signed off, so no longer a candidate for the soonest-still-to-come
+    // match — but the historical fallback still finds it, and its status
+    // alone already makes it closed.
+    expect(row?.referralId).toBe(referralId);
+    expect(row?.sessionId).toBe(laterSessionId);
+  });
+
+  it('prefers a still-open session over an older closed one for the same phone', async () => {
+    const testApp = buildSmsTestApp({ SMS_WEBHOOK_SECRET: WEBHOOK_SECRET });
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+
+    const pastSessionId = await createSession(testApp, accessToken, { sessionDate: '2026-07-20' });
+    const world = await setUpReferralWorld(testApp, accessToken);
+    const submittingApp = buildTestApp({ clock: fixedClock('2026-07-15T09:00:00.000Z') });
+    await submitReferral(
+      submittingApp,
+      { ...world, sessionId: pastSessionId },
+      { refereePhone: '07700 900222' },
+    );
+    // A later, still-open referral for the same household and number.
+    const { id: openReferralId } = await submitReferral(testApp, world, {
+      refereePhone: '07700 900222',
+    });
+
+    const response = await postWebhook(testApp, {
+      source: '07700900222',
+      content: 'Hello?',
+      messageid: 'prefers-open-1',
+    });
+    expect(response.status).toBe(200);
+
+    const [row] = await db
+      .select()
+      .from(smsMessages)
+      .where(eq(smsMessages.providerMessageId, 'prefers-open-1'));
+    // The historical fallback only ever runs once the soonest-still-to-come
+    // search comes up empty — an open candidate always wins outright.
+    expect(row?.referralId).toBe(openReferralId);
+    expect(row?.sessionId).toBe(world.sessionId);
+  });
+
+  it('falls back to the most recent of several past sessions for the same phone, not the oldest', async () => {
+    const testApp = buildSmsTestApp({ SMS_WEBHOOK_SECRET: WEBHOOK_SECRET });
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+
+    const olderSessionId = await createSession(testApp, accessToken, { sessionDate: '2026-06-01' });
+    const newerSessionId = await createSession(testApp, accessToken, { sessionDate: '2026-07-20' });
+    const world = await setUpReferralWorld(testApp, accessToken);
+    const submittingApp = buildTestApp({ clock: fixedClock('2026-05-25T09:00:00.000Z') });
+    await submitReferral(
+      submittingApp,
+      { ...world, sessionId: olderSessionId },
+      { refereePhone: '07700 900777' },
+    );
+    const laterSubmittingApp = buildTestApp({ clock: fixedClock('2026-07-15T09:00:00.000Z') });
+    const { id: newerReferralId } = await submitReferral(
+      laterSubmittingApp,
+      { ...world, sessionId: newerSessionId },
+      { refereePhone: '07700 900777' },
+    );
+
+    const response = await postWebhook(testApp, {
+      source: '07700900777',
+      content: 'Hello?',
+      messageid: 'latest-of-several-1',
+    });
+    expect(response.status).toBe(200);
+
+    const [row] = await db
+      .select()
+      .from(smsMessages)
+      .where(eq(smsMessages.providerMessageId, 'latest-of-several-1'));
+    expect(row?.referralId).toBe(newerReferralId);
+    expect(row?.sessionId).toBe(newerSessionId);
+  });
+
+  it('breaks a tie between two past sessions on the same date by start time, not by session id', async () => {
+    const testApp = buildSmsTestApp({ SMS_WEBHOOK_SECRET: WEBHOOK_SECRET });
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+
+    const earlierSessionId = await createSession(testApp, accessToken, {
+      sessionDate: '2026-07-20',
+      startTime: '09:00',
+    });
+    const laterSessionId = await createSession(testApp, accessToken, {
+      sessionDate: '2026-07-20',
+      startTime: '15:00',
+    });
+    const world = await setUpReferralWorld(testApp, accessToken);
+    const submittingApp = buildTestApp({ clock: fixedClock('2026-07-15T09:00:00.000Z') });
+    await submitReferral(
+      submittingApp,
+      { ...world, sessionId: earlierSessionId },
+      { refereePhone: '07700 900888' },
+    );
+    const { id: laterReferralId } = await submitReferral(
+      submittingApp,
+      { ...world, sessionId: laterSessionId },
+      { refereePhone: '07700 900888' },
+    );
+
+    const response = await postWebhook(testApp, {
+      source: '07700900888',
+      content: 'Hello?',
+      messageid: 'same-date-tiebreak-1',
+    });
+    expect(response.status).toBe(200);
+
+    const [row] = await db
+      .select()
+      .from(smsMessages)
+      .where(eq(smsMessages.providerMessageId, 'same-date-tiebreak-1'));
+    // Both sessions share a `sessionDate` — a session id (a random UUID) would
+    // pick one arbitrarily, so the tiebreak must be a genuine temporal field.
+    expect(row?.referralId).toBe(laterReferralId);
+    expect(row?.sessionId).toBe(laterSessionId);
   });
 
   it('keeps a reply from an unknown number as a loose reply', async () => {
@@ -1153,6 +1277,29 @@ describe('the administrator attention summary', () => {
     const { accessToken: adminToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
     const world = await setUpReferralWorld(testApp, adminToken);
     await submitReferral(testApp, world);
+    await postReply(testApp, '07700 900123');
+
+    expect(await attentionSummary(testApp, adminToken)).toEqual({
+      ...ZERO_ATTENTION_SUMMARY,
+      activeSessionUnread: 1,
+    });
+  });
+
+  it("still counts an unread reply as the team leader's on the day the session runs, not yet closed", async () => {
+    const testApp = buildSmsTestApp();
+    const { accessToken: adminToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    // Dated today (`NOW` is 2026-08-04T09:00Z) and never confirmed — the
+    // date-based half of "closed" must not fire a day early.
+    const todaySessionId = await createSession(testApp, adminToken, {
+      sessionDate: '2026-08-04',
+      startTime: '15:00',
+    });
+    const world = await setUpReferralWorld(testApp, adminToken);
+    // The public submission cutoff never offers a session on its own day —
+    // submitted through a second app instance, clocked the day before,
+    // sharing the same database.
+    const submittingApp = buildTestApp({ clock: fixedClock('2026-08-03T09:00:00.000Z') });
+    await submitReferral(submittingApp, { ...world, sessionId: todaySessionId });
     await postReply(testApp, '07700 900123');
 
     expect(await attentionSummary(testApp, adminToken)).toEqual({
@@ -1505,6 +1652,34 @@ describe('marking one inbox message read', () => {
     await submitReferral(testApp, world);
     await postReply(testApp, '07700 900123');
     await confirmSession(testApp, adminToken, world.sessionId);
+
+    const [reply] = await db
+      .select()
+      .from(smsMessages)
+      .where(eq(smsMessages.kind, 'household_reply'));
+    const response = await testApp.request(`${API_PREFIX}/sms-messages/${reply?.id ?? ''}/read`, {
+      method: 'POST',
+      headers: authHeaders(adminToken),
+    });
+
+    expect(response.status).toBe(200);
+    const body: { readAt: string | null } = await response.json();
+    expect(body.readAt).not.toBeNull();
+  });
+
+  it('marks an unread reply on a session read once its date has passed, even though it was never confirmed', async () => {
+    const testApp = buildSmsTestApp();
+    const { accessToken: adminToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const pastSessionId = await createSession(testApp, adminToken, { sessionDate: '2026-07-20' });
+    const world = await setUpReferralWorld(testApp, adminToken);
+    const submittingApp = buildTestApp({ clock: fixedClock('2026-07-15T09:00:00.000Z') });
+    await submitReferral(
+      submittingApp,
+      { ...world, sessionId: pastSessionId },
+      { refereePhone: '07700 900321' },
+    );
+
+    await postReply(testApp, '07700 900321');
 
     const [reply] = await db
       .select()

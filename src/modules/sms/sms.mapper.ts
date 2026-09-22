@@ -140,15 +140,35 @@ export function toAttentionSummaryResponse(counts: {
  * - `unmatched` — no session snapshot. The only location with a `phone`,
  *   because it is the only one with nothing else to act on it by.
  * - `active_session` — the session it was snapshotted against is still
- *   `planned` or `in_progress`. A team leader's business: excluded from
- *   `SmsAttentionSummary`, and `POST /sms-messages/:id/read` refuses to
- *   clear one — opened (and marked read) through the referral's own thread
- *   instead.
+ *   `planned` or `in_progress` **and its own calendar date has not passed**.
+ *   A team leader's business: excluded from `SmsAttentionSummary`, and
+ *   `POST /sms-messages/:id/read` refuses to clear one — opened (and marked
+ *   read) through the referral's own thread instead.
  * - `closed_session` — the session has since gone to `confirmed` or
- *   `cancelled`. Nobody is running that session's screen any more, so this is
- *   what makes it an administrator's job.
+ *   `cancelled`, **or its date has simply passed**, whichever comes first.
+ *   Nobody is running that session's screen any more once either is true —
+ *   a session nobody ever got round to formally confirming does not stay
+ *   the team leader's business forever just because its status never
+ *   moved — so this is what makes it an administrator's job.
  */
 export type SmsMessageLocation = 'unmatched' | 'active_session' | 'closed_session';
+
+/** The two statuses that close a session outright, regardless of its date. */
+const CLOSED_SESSION_STATUSES: readonly SessionStatus[] = ['confirmed', 'cancelled'];
+
+/**
+ * A session counts as closed once it is confirmed or cancelled, or once its
+ * own London calendar date has passed, whichever comes first — see
+ * `SmsMessageLocation`. `sms.repository.ts`'s `countUnreadByLocation` applies
+ * the identical rule in SQL, since a query can't call this function; keep
+ * the two in sync by hand if this one changes.
+ */
+export function isSessionClosed(
+  session: { readonly status: SessionStatus; readonly sessionDate: string },
+  today: string,
+): boolean {
+  return CLOSED_SESSION_STATUSES.includes(session.status) || session.sessionDate < today;
+}
 
 export interface SmsInboxSession {
   readonly id: string;
@@ -217,6 +237,7 @@ export function toInboxMessageResponse(
     message: SmsMessage;
     session: Session | null;
   },
+  today: string,
   candidateParcels?: readonly SmsCandidateParcel[],
 ): SmsInboxMessageResponse {
   const { message, session } = row;
@@ -243,10 +264,9 @@ export function toInboxMessageResponse(
     };
   }
 
-  const location: SmsMessageLocation =
-    session.status === 'planned' || session.status === 'in_progress'
-      ? 'active_session'
-      : 'closed_session';
+  const location: SmsMessageLocation = isSessionClosed(session, today)
+    ? 'closed_session'
+    : 'active_session';
 
   return {
     id: message.id,

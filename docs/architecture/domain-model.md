@@ -125,9 +125,14 @@ in the message body. That is the single exception to the residency rule in
 [`../engineering/personal-data.md`](../engineering/personal-data.md), and it constrains the wording
 as much as the request.
 
-**A reply is matched by phone to the referral for the soonest session still to come.** A past
-session is not a candidate, so a reply the morning after becomes a **loose reply** — a row with a
-null `referral_id`, visible only to administrators. A reply is never dropped.
+**A reply is matched by phone, first, to the referral for the soonest session still to come.** A
+past session is not a candidate for _this_ match. Failing that, `SmsRepository.latestSessionForPhone`
+falls back to the single most recent session — any age, any status — that phone was ever referred
+against, via the indexed `refereePhoneNormalised` column rather than the in-memory `phonesMatch` the
+first match uses; two households ever sharing a number within the fifteen months referral data is
+held is accepted as negligible, so this does not try to disambiguate, it just takes the latest. Only
+a phone genuinely never referred at all becomes a **loose reply** — a row with a null `referral_id`,
+visible only to administrators. A reply is never dropped.
 
 **The webhook is idempotent on `provider_message_id`.** The provider retries anything it did not
 get a 200 for; the unique index is what stops the same text appearing twice on a volunteer's screen.
@@ -149,16 +154,27 @@ that window — a number that was only ever reminded is not returned at all — 
 qualifies, its reminders come back alongside everything else, because a reply answers a reminder.
 `GET /sms-messages/attention-summary` tells an administrator less than even that list shows, and
 splits it four ways rather than one combined figure: `unmatchedUnread` (a loose `household_reply`
-with no session), `closedSessionUnread` (a `household_reply` whose snapshotted session has since
-moved to `confirmed` or `cancelled`) and `referrerUnread` (every unread `referrer_reply` — always
-sessionless, and kept apart from `unmatchedUnread` because a referrer message is never a household's
-own reply and is never treated as one) are what an administrator is actually told needs doing;
-`activeSessionUnread` (a `household_reply` still on a `planned` or `in_progress` session) stays the
-team leader's responsibility — an administrator may view it, but it is broken out separately so it
-never reads as their own job. Nothing here creates an ownership,
-handover, acknowledgement or preference record — a message is still simply read or unread, and
-`POST /sms-messages/{id}/read` (now usable on any unread household reply, not only a loose one)
-touches only the one row named.
+with no session), `closedSessionUnread` (a `household_reply` whose snapshotted session is closed)
+and `referrerUnread` (every unread `referrer_reply` — always sessionless, and kept apart from
+`unmatchedUnread` because a referrer message is never a household's own reply and is never treated
+as one) are what an administrator is actually told needs doing; `activeSessionUnread` (a
+`household_reply` on a session that is not closed) stays the team leader's responsibility — an
+administrator may view it, but it is broken out separately so it never reads as their own job.
+
+**A session is closed for this purpose — `SmsMessageLocation` and every count above — once it is
+`confirmed` or `cancelled`, or once its own calendar date has passed, whichever comes first.**
+`sms.mapper.ts`'s `isSessionClosed` is the single definition; `sms.repository.ts`'s
+`countUnreadByLocation` applies the identical rule in SQL since a query can't call a TS function.
+Date is in the rule alongside status because the historical fallback above can attach a reply to an
+old session nobody ever formally confirmed — without it, that session would read as the team
+leader's business indefinitely just because its own paperwork was never finished. This is a
+deliberate widening from the phone-matching candidacy rule above, which still only considers
+`confirmed`/`cancelled` and date together for a different purpose — whether a session is still open
+to a _first_ match at all, not whether an already-matched message counts as closed.
+
+Nothing here creates an ownership, handover, acknowledgement or preference record — a message is
+still simply read or unread, and `POST /sms-messages/{id}/read` (usable on any unread reply once its
+session is closed by the same rule, not only a loose one) touches only the one row named.
 
 ## Rules the code must enforce, not merely document
 
