@@ -98,7 +98,7 @@ const configSchema = z
      * fake success instead of a `failure` row — the dev/test simulator. Not
      * a credential: a plain `var`, declared `""` in production so `wrangler
      * types --strict-vars` stays honest that the key exists in every
-     * environment. See `SMS_LIVE_NUMBER` below and `sms.service.ts`, which
+     * environment. See `SMS_LIVE_NUMBERS` below and `sms.service.ts`, which
      * is where the two combine. Refused in production, same reasoning as
      * `AUTH_MODE=dummy`.
      */
@@ -109,14 +109,16 @@ const configSchema = z
       .transform((value) => value === 'true'),
 
     /**
-     * The one destination that is still actually sent through TheSMSWorks
-     * when set — every other destination falls back to `SMS_SIMULATE` (or a
+     * The destinations that are still actually sent through TheSMSWorks when
+     * set — every other destination falls back to `SMS_SIMULATE` (or a
      * `failure`, if that is also off). For testing a real account without
-     * texting real households from a copy of live referral data. A Worker
-     * secret like the three above: a phone number is not committed to
-     * source any more readily than a credential is. Refused in production.
+     * texting real households from a copy of live referral data, with more
+     * than one tester able to receive a genuine message. Comma-separated,
+     * same convention as `ALLOWED_ORIGINS`. A Worker secret like the three
+     * above: a phone number is not committed to source any more readily than
+     * a credential is. Refused in production.
      */
-    SMS_LIVE_NUMBER: z.string().min(1).optional(),
+    SMS_LIVE_NUMBERS: z.string().min(1).optional(),
 
     /**
      * The spreadsheet extract's two settings. **Neither is a secret and
@@ -229,27 +231,43 @@ const configSchema = z
       });
     }
 
-    // Same reasoning: restricting real sends to one number in production
-    // would mean the food bank silently not texting most of its households.
-    if (value.ENVIRONMENT === 'production' && value.SMS_LIVE_NUMBER !== undefined) {
+    // Same reasoning: restricting real sends to a handful of numbers in
+    // production would mean the food bank silently not texting most of its
+    // households.
+    if (value.ENVIRONMENT === 'production' && value.SMS_LIVE_NUMBERS !== undefined) {
       ctx.addIssue({
         code: 'custom',
-        path: ['SMS_LIVE_NUMBER'],
-        message: 'SMS_LIVE_NUMBER is refused in production.',
+        path: ['SMS_LIVE_NUMBERS'],
+        message: 'SMS_LIVE_NUMBERS is refused in production.',
       });
     }
 
     // Comparison at send time is by `phonesMatch`, which quietly returns
-    // false for anything unparseable — a typo here would otherwise mean the
-    // "live" number is never live, silently, rather than refusing to boot.
-    if (value.SMS_LIVE_NUMBER !== undefined && normalisePhone(value.SMS_LIVE_NUMBER) === null) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['SMS_LIVE_NUMBER'],
-        message: 'SMS_LIVE_NUMBER must be a recognisable UK number.',
-      });
+    // false for anything unparseable — a typo here would otherwise mean that
+    // one "live" number is never live, silently, rather than refusing to boot.
+    // A value that is set but splits to **no** entries (`","`, whitespace
+    // only) must refuse to boot for the same reason: `isLive()` treats an
+    // empty list as unrestricted, so silently accepting this would flip a
+    // deliberately restricted test environment to texting every household.
+    if (value.SMS_LIVE_NUMBERS !== undefined) {
+      const numbers = splitLiveNumbers(value.SMS_LIVE_NUMBERS);
+      if (numbers.length === 0 || numbers.some((number) => normalisePhone(number) === null)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['SMS_LIVE_NUMBERS'],
+          message: 'SMS_LIVE_NUMBERS must be a comma-separated list of recognisable UK numbers.',
+        });
+      }
     }
   });
+
+/** Shared by the validator and `loadConfig` so the split happens exactly one way. */
+function splitLiveNumbers(raw: string): string[] {
+  return raw
+    .split(',')
+    .map((number) => number.trim())
+    .filter((number) => number !== '');
+}
 
 type RawConfig = z.infer<typeof configSchema>;
 
@@ -266,7 +284,7 @@ export interface AppConfig {
   readonly smsSender: string | undefined;
   readonly smsWebhookSecret: string | undefined;
   readonly smsSimulate: boolean;
-  readonly smsLiveNumber: string | undefined;
+  readonly smsLiveNumbers: readonly string[];
   readonly googleSpreadsheetId: string | undefined;
   readonly googleOauthClientId: string | undefined;
   readonly googleAuthClientId: string | undefined;
@@ -311,7 +329,10 @@ export function loadConfig(bindings: object): AppConfig {
     smsSender: result.data.SMS_SENDER,
     smsWebhookSecret: result.data.SMS_WEBHOOK_SECRET,
     smsSimulate: result.data.SMS_SIMULATE,
-    smsLiveNumber: result.data.SMS_LIVE_NUMBER,
+    smsLiveNumbers:
+      result.data.SMS_LIVE_NUMBERS === undefined
+        ? []
+        : splitLiveNumbers(result.data.SMS_LIVE_NUMBERS),
     googleSpreadsheetId: result.data.GOOGLE_SHEETS_SPREADSHEET_ID,
     googleOauthClientId: result.data.GOOGLE_OAUTH_CLIENT_ID,
     googleAuthClientId: result.data.GOOGLE_AUTH_CLIENT_ID,

@@ -129,7 +129,7 @@ export const smsMessages = sqliteTable(
     /**
      * True when this row was never actually sent through TheSMSWorks —
      * `SMS_SIMULATE`'s dev/test simulator, or a destination outside
-     * `SMS_LIVE_NUMBER` in a restricted test environment. Only meaningful on
+     * `SMS_LIVE_NUMBERS` in a restricted test environment. Only meaningful on
      * `reminder` and `staff_reply`; a `household_reply` has no simulated
      * form, and a `failure` already says nothing was sent. Always false in
      * production, where both settings are refused at boot — see

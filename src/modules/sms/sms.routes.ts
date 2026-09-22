@@ -110,7 +110,7 @@ export function smsServiceDeps(c: Context<AppEnv>): SmsServiceDeps {
         ? undefined
         : { apiKey: config.smsApiKey, sender: config.smsSender },
     simulate: config.smsSimulate,
-    liveNumber: config.smsLiveNumber,
+    liveNumbers: config.smsLiveNumbers,
   };
 }
 

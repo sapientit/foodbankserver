@@ -14,7 +14,7 @@ describe('loadConfig', () => {
       allowedOrigins: [],
       piiRetentionDays: undefined,
       smsSimulate: false,
-      smsLiveNumber: undefined,
+      smsLiveNumbers: [],
       isProduction: false,
     });
   });
@@ -92,9 +92,9 @@ describe('loadConfig', () => {
     ).toThrow(/SMS_SIMULATE is refused in production/);
   });
 
-  it('refuses production with SMS_LIVE_NUMBER set at all', () => {
-    // Restricting real sends to one number in production would mean the food
-    // bank silently not texting most of its households.
+  it('refuses production with SMS_LIVE_NUMBERS set at all', () => {
+    // Restricting real sends to a handful of numbers in production would mean
+    // the food bank silently not texting most of its households.
     expect(() =>
       loadConfig({
         AUTH_JWT_SECRET: SECRET,
@@ -102,21 +102,43 @@ describe('loadConfig', () => {
         AUTH_MODE: 'google',
         TURNSTILE_SECRET_KEY: 'turnstile-secret',
         SMS_WEBHOOK_SECRET: 'sms-webhook-secret-long-enough',
-        SMS_LIVE_NUMBER: '07700 900123',
+        SMS_LIVE_NUMBERS: '07700 900123',
       }),
-    ).toThrow(/SMS_LIVE_NUMBER is refused in production/);
+    ).toThrow(/SMS_LIVE_NUMBERS is refused in production/);
   });
 
-  it('refuses an SMS_LIVE_NUMBER that does not normalise as a UK number, in any environment', () => {
+  it('refuses an SMS_LIVE_NUMBERS entry that does not normalise as a UK number, in any environment', () => {
     // Comparison at send time is by `phonesMatch`, which quietly returns false
     // for anything unparseable — a typo here must not boot into a "live"
     // number that can then never actually match.
     expect(() =>
       loadConfig({
         AUTH_JWT_SECRET: SECRET,
-        SMS_LIVE_NUMBER: 'not-a-phone-number',
+        SMS_LIVE_NUMBERS: '07700 900123,not-a-phone-number',
       }),
-    ).toThrow(/SMS_LIVE_NUMBER must be a recognisable UK number/);
+    ).toThrow(/SMS_LIVE_NUMBERS must be a comma-separated list of recognisable UK numbers/);
+  });
+
+  it('refuses SMS_LIVE_NUMBERS set to only separators, rather than silently becoming unrestricted', () => {
+    // `isLive()` treats an empty list as unrestricted — every destination
+    // genuinely sent. A value that is set but splits to no entries must
+    // refuse to boot, not fall through to that, or a deliberately restricted
+    // test environment would start texting every household.
+    expect(() =>
+      loadConfig({
+        AUTH_JWT_SECRET: SECRET,
+        SMS_LIVE_NUMBERS: ',, ,',
+      }),
+    ).toThrow(/SMS_LIVE_NUMBERS must be a comma-separated list of recognisable UK numbers/);
+  });
+
+  it('parses SMS_LIVE_NUMBERS into a list of normalised-checked entries', () => {
+    const config = loadConfig({
+      AUTH_JWT_SECRET: SECRET,
+      SMS_LIVE_NUMBERS: '07700 900111, 07700 900222,07700900333',
+    });
+
+    expect(config.smsLiveNumbers).toEqual(['07700 900111', '07700 900222', '07700900333']);
   });
 
   it('memoises per bindings object', () => {

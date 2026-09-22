@@ -46,9 +46,9 @@
     // Every SMS send in this environment is a fake success rather than a
     // `failure` row, since this environment has no TheSMSWorks account
     // configured either. config/env.ts refuses to boot with this set while
-    // ENVIRONMENT is production. See SMS_LIVE_NUMBER, set separately as a
+    // ENVIRONMENT is production. See SMS_LIVE_NUMBERS, set separately as a
     // secret when a deployment of this environment needs to test a real
-    // account against one real number instead.
+    // account against a handful of real numbers instead.
     "SMS_SIMULATE": "true",
     // The daily platform-usage job's settings — none of these three is a
     // secret, see config/env.ts. The database id and script name are copied

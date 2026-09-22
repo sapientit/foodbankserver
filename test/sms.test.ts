@@ -420,12 +420,12 @@ describe('the dev/test SMS simulator', () => {
     expect(messages[0]?.body.length).toBeGreaterThan(0);
   });
 
-  it('does not call the real provider for a destination outside SMS_LIVE_NUMBER, and records a simulated success', async () => {
+  it('does not call the real provider for a destination outside SMS_LIVE_NUMBERS, and records a simulated success', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
 
     const testApp = buildSmsTestApp({
-      // A number that is not the referral's own — see `submission()`'s default `07700 900123`.
-      SMS_LIVE_NUMBER: '07700 900999',
+      // Numbers that are not the referral's own — see `submission()`'s default `07700 900123`.
+      SMS_LIVE_NUMBERS: '07700 900999,07700 900888',
       SMS_SIMULATE: 'true',
     });
     const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
@@ -443,13 +443,36 @@ describe('the dev/test SMS simulator', () => {
     expect(messages[0]).toMatchObject({ kind: 'reminder', simulated: true });
   });
 
-  it('really calls the provider for a destination matching SMS_LIVE_NUMBER, even spelled differently', async () => {
+  it('really calls the provider for a destination matching any entry in SMS_LIVE_NUMBERS, even spelled differently', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(providerSuccess('prov-live'));
 
     const testApp = buildSmsTestApp({
-      // The referral's own `07700 900123`, spelled as E.164 — proves the match
-      // is `phonesMatch`, not a naive string compare.
-      SMS_LIVE_NUMBER: '+447700900123',
+      // The referral's own `07700 900123`, spelled as E.164 and listed
+      // alongside two other testers — proves the match is `phonesMatch`
+      // against each entry, not a naive string compare against one.
+      SMS_LIVE_NUMBERS: '07700 900555,+447700900123,07700 900777',
+      SMS_SIMULATE: 'true',
+    });
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world = await setUpReferralWorld(testApp, accessToken);
+    const { id: referralId } = await submitReferral(testApp, world);
+
+    const response = await testApp.request(
+      `${API_PREFIX}/sessions/${world.sessionId}/sms-reminders`,
+      { method: 'POST', headers: authHeaders(accessToken) },
+    );
+    expect(await response.json()).toMatchObject({ reminded: 1, failed: 0, simulated: 0 });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    const messages = await getThread(testApp, accessToken, referralId);
+    expect(messages[0]).toMatchObject({ kind: 'reminder', simulated: false });
+  });
+
+  it('really calls the provider for a destination matching SMS_LIVE_NUMBERS set to a single number, no comma', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(providerSuccess('prov-live'));
+
+    const testApp = buildSmsTestApp({
+      SMS_LIVE_NUMBERS: '+447700900123',
       SMS_SIMULATE: 'true',
     });
     const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
@@ -471,7 +494,7 @@ describe('the dev/test SMS simulator', () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
 
     const testApp = buildSmsTestApp({
-      SMS_LIVE_NUMBER: '07700 900999',
+      SMS_LIVE_NUMBERS: '07700 900999,07700 900888',
       SMS_SIMULATE: '',
     });
     const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
@@ -497,7 +520,7 @@ describe('the dev/test SMS simulator', () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
 
     const testApp = buildSmsTestApp({
-      SMS_LIVE_NUMBER: '07700 900999',
+      SMS_LIVE_NUMBERS: '07700 900999,07700 900888',
       SMS_SIMULATE: 'true',
     });
     const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });

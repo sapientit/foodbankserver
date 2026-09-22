@@ -53,13 +53,14 @@ export interface SmsServiceDeps {
    */
   readonly simulate: boolean;
   /**
-   * When set, only this one destination is ever actually handed to
+   * When non-empty, only these destinations are ever actually handed to
    * `sendSms`; every other destination falls through to `simulate` (or to a
    * `failure`, if that is also off). Lets a staging environment run against
    * a real TheSMSWorks account without texting real households from a copy
-   * of live referral data. `SMS_LIVE_NUMBER`, refused in production.
+   * of live referral data, with more than one tester able to receive a
+   * genuine message. `SMS_LIVE_NUMBERS`, refused in production.
    */
-  readonly liveNumber: string | undefined;
+  readonly liveNumbers: readonly string[];
 }
 
 /** Outbound fetches in flight at once, so a session of 25+ does not open 25+ concurrent requests. */
@@ -102,11 +103,14 @@ const NOT_CONFIGURED_REASON = 'SMS sending is not configured';
 const RESTRICTED_REASON = 'SMS sending is restricted to a test number in this environment';
 
 export function createSmsService(deps: SmsServiceDeps) {
-  const { db, repository, sessions, clock, logger, provider, simulate, liveNumber } = deps;
+  const { db, repository, sessions, clock, logger, provider, simulate, liveNumbers } = deps;
 
-  /** Unrestricted when no `liveNumber` is set — see `SmsServiceDeps.liveNumber`. */
+  /** Unrestricted when `liveNumbers` is empty — see `SmsServiceDeps.liveNumbers`. */
   function isLive(destination: string): boolean {
-    return liveNumber === undefined || phonesMatch(destination, liveNumber);
+    return (
+      liveNumbers.length === 0 ||
+      liveNumbers.some((liveNumber) => phonesMatch(destination, liveNumber))
+    );
   }
 
   function simulatedProviderMessageId(): string {
