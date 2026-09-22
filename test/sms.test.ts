@@ -1108,6 +1108,7 @@ const ZERO_ATTENTION_SUMMARY = {
   activeSessionUnread: 0,
   closedSessionUnread: 0,
   unmatchedUnread: 0,
+  referrerUnread: 0,
 };
 
 async function attentionSummary(testApp: TestApp, token: string): Promise<unknown> {
@@ -1132,7 +1133,7 @@ describe('the administrator attention summary', () => {
     expect(response.status).toBe(403);
   });
 
-  it('returns the three counts and nothing else, leaking no message content', async () => {
+  it('returns the four counts and nothing else, leaking no message content', async () => {
     const testApp = buildSmsTestApp();
     const { accessToken: adminToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
 
@@ -1208,6 +1209,26 @@ describe('the administrator attention summary', () => {
     expect(await attentionSummary(testApp, adminToken)).toEqual({
       ...ZERO_ATTENTION_SUMMARY,
       unmatchedUnread: 1,
+    });
+  });
+
+  it('counts an unread referrer message separately from a loose household reply', async () => {
+    const testApp = buildSmsTestApp();
+    const { accessToken: adminToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world = await setUpReferralWorld(testApp, adminToken);
+    await submitReferral(testApp, world, {
+      collectionMethod: 'referrer_collect',
+      referrerPhone: '07700 900555',
+    });
+    // A loose household reply, from an unrelated number, alongside it.
+    await postReply(testApp, '07700 900999', 'Who is this?');
+
+    await postReply(testApp, '07700 900555', 'On my way');
+
+    expect(await attentionSummary(testApp, adminToken)).toEqual({
+      ...ZERO_ATTENTION_SUMMARY,
+      unmatchedUnread: 1,
+      referrerUnread: 1,
     });
   });
 
@@ -2000,7 +2021,7 @@ describe('referrer_reply: inbound texts from a referrer collecting a parcel', ()
 
     expect(await attentionSummary(testApp, adminToken)).toEqual({
       ...ZERO_ATTENTION_SUMMARY,
-      unmatchedUnread: 1,
+      referrerUnread: 1,
     });
   });
 });

@@ -2228,24 +2228,28 @@ paths:
   /api/v1/sms-messages/attention-summary:
     get:
       tags: [SMS]
-      summary: Three counts of unread replies, split by who they are for
+      summary: Four counts of unread replies, split by who they are for
       description: >
         **Admin only.** No message body, household name, phone number or
-        referral data — three counts and nothing else.
+        referral data — four counts and nothing else.
 
         Splits unread `household_reply` and `referrer_reply` messages within
-        retention by `location`: `activeSessionUnread` is on a session still
-        planned or under way — the team leader running it reads these, not an
-        administrator, and the count is shown only so an administrator can
-        see whether the team leader is keeping up. `closedSessionUnread` and
-        `unmatchedUnread` are what an administrator is actually told needs
-        doing: a reply whose session has since been confirmed or cancelled,
-        and a loose reply or referrer message with no session behind it at
-        all. Failures, reminders and staff replies are always excluded; none
-        of the three is ever unread.
+        retention: `activeSessionUnread` is a household reply on a session
+        still planned or under way — the team leader running it reads these,
+        not an administrator, and the count is shown only so an administrator
+        can see whether the team leader is keeping up. `closedSessionUnread`,
+        `unmatchedUnread` and `referrerUnread` are what an administrator is
+        actually told needs doing: a household reply whose session has since
+        been confirmed or cancelled, a loose household reply with no session
+        behind it at all, and every unread referrer message
+        (`referrer_reply`) — kept apart from `unmatchedUnread` even though a
+        referrer message also has no session, because it is never a
+        household's own reply and is never treated as one. Failures,
+        reminders and staff replies are always excluded; none of those three
+        is ever unread.
       responses:
         '200':
-          description: The three counts
+          description: The four counts
           content:
             application/json:
               schema: { $ref: '#/components/schemas/SmsAttentionSummary' }
@@ -4964,7 +4968,7 @@ components:
 
     SmsAttentionSummary:
       type: object
-      required: [activeSessionUnread, closedSessionUnread, unmatchedUnread]
+      required: [activeSessionUnread, closedSessionUnread, unmatchedUnread, referrerUnread]
       properties:
         activeSessionUnread:
           type: integer
@@ -4982,9 +4986,15 @@ components:
         unmatchedUnread:
           type: integer
           description: >-
-            Unread messages with no session behind them at all — a loose
-            household reply, and every unread referrer reply
-            (`referrer_reply`), which never has a session to begin with.
+            Unread loose household replies — no session behind them at all,
+            and not a referrer message (see `referrerUnread`).
+        referrerUnread:
+          type: integer
+          description: >-
+            Every unread referrer reply (`referrer_reply`). Also has no
+            session behind it, but kept apart from `unmatchedUnread` — a
+            referrer message is never a household's own reply and is never
+            treated as one.
 
     SmsInboxSession:
       type: object
@@ -5015,12 +5025,16 @@ components:
         household later moved to another session does not retroactively move
         an old message with it.
 
-        - `unmatched` — a loose reply, no session behind it.
+        - `unmatched` — a loose reply, or any referrer message — neither has
+          a session behind it. Unread, the two count separately in
+          `SmsAttentionSummary`: a loose reply towards `unmatchedUnread`, a
+          referrer message towards `referrerUnread`.
         - `active_session` — its session is still planned or under way; this
           is the team leader's to read.
         - `closed_session` — its session has since been confirmed or
           cancelled; nobody else was coming back to it, which is why this one
-          counts towards `SmsAttentionSummary` when unread.
+          counts towards `SmsAttentionSummary` (`closedSessionUnread`) when
+          unread.
 
         `session` is null when `location` is `unmatched`, which is also true
         of every `kind: 'referrer_reply'` row — it is never snapshotted

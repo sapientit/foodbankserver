@@ -109,21 +109,29 @@ export function createSmsRepository(db: Database) {
     },
 
     /**
-     * Unread household replies and referrer messages within retention,
-     * split by `SmsMessageLocation`: `unmatchedUnread` is a loose reply or a
-     * `referrer_reply` (no session snapshot, either way — a `referrer_reply`
-     * is never one household's business to begin with), `activeSessionUnread`
-     * is a household reply still on a planned/in-progress session — the team
-     * leader's business, kept separate so an administrator can see it
-     * without it counting as their own job — and `closedSessionUnread` is a
-     * household reply whose session has since closed (confirmed or
-     * cancelled), which is nobody else's job by then.
+     * Unread household replies and referrer messages within retention, split
+     * four ways: `referrerUnread` is every unread `referrer_reply` — kept
+     * apart from a loose household reply, per the spec, because a referrer
+     * message is never a household's own reply and is never treated as one.
+     * Of the rest (`household_reply` only), `unmatchedUnread` is a loose
+     * reply with no session snapshot at all, `activeSessionUnread` is one
+     * still on a planned/in-progress session — the team leader's business,
+     * kept separate so an administrator can see it without it counting as
+     * their own job — and `closedSessionUnread` is one whose session has
+     * since closed (confirmed or cancelled), which is nobody else's job by
+     * then.
      */
     async countUnreadByLocation(cutoff: string): Promise<{
       activeSessionUnread: number;
       closedSessionUnread: number;
       unmatchedUnread: number;
+      referrerUnread: number;
     }> {
+      const isReferrer = eq(smsMessages.kind, 'referrer_reply');
+      const isLooseHouseholdReply = and(
+        isNull(smsMessages.sessionId),
+        eq(smsMessages.kind, 'household_reply'),
+      );
       const isClosedSession = and(
         isNotNull(smsMessages.sessionId),
         inArray(sessions.status, [...CLOSED_SESSION_STATUSES]),
@@ -134,7 +142,8 @@ export function createSmsRepository(db: Database) {
       );
       const rows = await db
         .select({
-          unmatchedUnread: sql<number>`SUM(CASE WHEN ${isNull(smsMessages.sessionId)} THEN 1 ELSE 0 END)`,
+          referrerUnread: sql<number>`SUM(CASE WHEN ${isReferrer} THEN 1 ELSE 0 END)`,
+          unmatchedUnread: sql<number>`SUM(CASE WHEN ${isLooseHouseholdReply} THEN 1 ELSE 0 END)`,
           activeSessionUnread: sql<number>`SUM(CASE WHEN ${isActiveSession} THEN 1 ELSE 0 END)`,
           closedSessionUnread: sql<number>`SUM(CASE WHEN ${isClosedSession} THEN 1 ELSE 0 END)`,
         })
@@ -152,6 +161,7 @@ export function createSmsRepository(db: Database) {
         activeSessionUnread: row?.activeSessionUnread ?? 0,
         closedSessionUnread: row?.closedSessionUnread ?? 0,
         unmatchedUnread: row?.unmatchedUnread ?? 0,
+        referrerUnread: row?.referrerUnread ?? 0,
       };
     },
 

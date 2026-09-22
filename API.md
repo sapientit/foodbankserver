@@ -1452,7 +1452,7 @@ POST /api/v1/referrals/{id}/sms-messages          { body }  → text them back
 POST /api/v1/referrals/{id}/sms-messages/read     → mark that household read
 
 GET  /api/v1/sms-messages/attention-summary       admin only
-  → { activeSessionUnread, closedSessionUnread, unmatchedUnread }
+  → { activeSessionUnread, closedSessionUnread, unmatchedUnread, referrerUnread }
 GET  /api/v1/sms-messages                         admin only → { messages: [...] }
 GET  /api/v1/sms-messages/unmatched               admin only (superseded, see below)
 POST /api/v1/sms-messages/{id}/read               admin only
@@ -1553,10 +1553,11 @@ unchanged rather than removed — build new work against the inbox instead.
 Two endpoints, both admin only, neither of which marks anything read:
 
 - `GET /sms-messages/attention-summary` →
-  `{ activeSessionUnread, closedSessionUnread, unmatchedUnread }`. No message
-  body, household name, phone number or referral data — three counts and
-  nothing else, one per `location` below. `closedSessionUnread +
-unmatchedUnread` is what to badge an admin nav item with — that is what an
+  `{ activeSessionUnread, closedSessionUnread, unmatchedUnread, referrerUnread }`.
+  No message body, household name, phone number or referral data — four
+  counts and nothing else, one per `location` below plus `referrerUnread`
+  split out of `unmatched`. `closedSessionUnread + unmatchedUnread +
+referrerUnread` is what to badge an admin nav item with — that is what an
   administrator is actually told needs doing; `activeSessionUnread` is the
   team leader's business, included only so an administrator can see whether
   the team leader is keeping up. Poll it the same way you poll `sms-summary`.
@@ -1574,15 +1575,20 @@ unmatchedUnread` is what to badge an admin nav item with — that is what an
 
 Each row in the list carries a `location`:
 
-| `location`       | Meaning                                                        | `attention-summary` field         |
-| ---------------- | -------------------------------------------------------------- | --------------------------------- |
-| `unmatched`      | A loose reply, or any referrer message — no session behind it. | `unmatchedUnread`, if unread.     |
-| `active_session` | Its session is still `planned` or `in_progress`.               | `activeSessionUnread`, if unread. |
-| `closed_session` | Its session has since been `confirmed` or `cancelled`.         | `closedSessionUnread`, if unread. |
+| `location`       | Meaning                                                        | `attention-summary` field                                                                    |
+| ---------------- | -------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `unmatched`      | A loose reply, or any referrer message — no session behind it. | `unmatchedUnread` if a `household_reply`, `referrerUnread` if a `referrer_reply`, if unread. |
+| `active_session` | Its session is still `planned` or `in_progress`.               | `activeSessionUnread`, if unread.                                                            |
+| `closed_session` | Its session has since been `confirmed` or `cancelled`.         | `closedSessionUnread`, if unread.                                                            |
+
+`unmatched` is the one `location` shared by two different `attention-summary`
+fields — a referrer message is never a household's own reply, loose or
+otherwise, and is never treated as one, so it gets its own count even though
+it has no session either.
 
 Only unread `household_reply` and `referrer_reply` rows are ever counted at
 all — a `reminder`, `staff_reply` or `failure` is never unread, so `location`
-is informational for those, not a trigger for any of the three counts.
+is informational for those, not a trigger for any of the four counts.
 
 `session` (session id, `sessionDate`, `startTime`, `status`) is included on
 every row except `unmatched`, where it is `null`. `phone` is now on **every**

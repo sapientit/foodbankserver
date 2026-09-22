@@ -105,27 +105,32 @@ export interface SmsSendResultResponse {
 }
 
 /**
- * The three counts the admin inbox screen makes prominent, one per
- * `SmsMessageLocation`. `activeSessionUnread` is the team leader's business,
- * shown so an administrator can see it without it being their own job;
- * `closedSessionUnread` and `unmatchedUnread` are what administrators are
- * actually told needs doing.
+ * The four counts the admin inbox screen makes prominent. `activeSessionUnread`
+ * is the team leader's business, shown so an administrator can see it without
+ * it being their own job; `closedSessionUnread`, `unmatchedUnread` and
+ * `referrerUnread` are what administrators are actually told needs doing.
+ * `referrerUnread` is kept apart from `unmatchedUnread` even though both are
+ * sessionless — a referrer message is never a household's own reply, loose or
+ * otherwise, and is never treated as one.
  */
 export interface SmsAttentionSummaryResponse {
   readonly activeSessionUnread: number;
   readonly closedSessionUnread: number;
   readonly unmatchedUnread: number;
+  readonly referrerUnread: number;
 }
 
 export function toAttentionSummaryResponse(counts: {
   readonly activeSessionUnread: number;
   readonly closedSessionUnread: number;
   readonly unmatchedUnread: number;
+  readonly referrerUnread: number;
 }): SmsAttentionSummaryResponse {
   return {
     activeSessionUnread: counts.activeSessionUnread,
     closedSessionUnread: counts.closedSessionUnread,
     unmatchedUnread: counts.unmatchedUnread,
+    referrerUnread: counts.referrerUnread,
   };
 }
 
