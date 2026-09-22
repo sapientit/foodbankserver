@@ -1104,7 +1104,13 @@ async function cancelSession(testApp: TestApp, token: string, sessionId: string)
   expect(response.status).toBe(200);
 }
 
-async function attentionTotal(testApp: TestApp, token: string): Promise<unknown> {
+const ZERO_ATTENTION_SUMMARY = {
+  activeSessionUnread: 0,
+  closedSessionUnread: 0,
+  unmatchedUnread: 0,
+};
+
+async function attentionSummary(testApp: TestApp, token: string): Promise<unknown> {
   const response = await testApp.request(`${API_PREFIX}/sms-messages/attention-summary`, {
     headers: authHeaders(token),
   });
@@ -1126,7 +1132,7 @@ describe('the administrator attention summary', () => {
     expect(response.status).toBe(403);
   });
 
-  it('returns unreadTotal and nothing else, leaking no message content', async () => {
+  it('returns the three counts and nothing else, leaking no message content', async () => {
     const testApp = buildSmsTestApp();
     const { accessToken: adminToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
 
@@ -1138,20 +1144,23 @@ describe('the administrator attention summary', () => {
     expect(response.status).toBe(200);
     // toEqual, not toMatchObject: this is a leakage check, so an extra field
     // must fail it as loudly as a missing one.
-    expect(await response.json()).toEqual({ unreadTotal: 1 });
+    expect(await response.json()).toEqual({ ...ZERO_ATTENTION_SUMMARY, unmatchedUnread: 1 });
   });
 
-  it('does not count an unread reply while its session is still planned', async () => {
+  it("counts an unread reply as the team leader's while its session is still planned", async () => {
     const testApp = buildSmsTestApp();
     const { accessToken: adminToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
     const world = await setUpReferralWorld(testApp, adminToken);
     await submitReferral(testApp, world);
     await postReply(testApp, '07700 900123');
 
-    expect(await attentionTotal(testApp, adminToken)).toEqual({ unreadTotal: 0 });
+    expect(await attentionSummary(testApp, adminToken)).toEqual({
+      ...ZERO_ATTENTION_SUMMARY,
+      activeSessionUnread: 1,
+    });
   });
 
-  it('counts an unread reply once its session has been confirmed', async () => {
+  it('counts an unread reply as a closed session once its session has been confirmed', async () => {
     const testApp = buildSmsTestApp();
     const { accessToken: adminToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
     const world = await setUpReferralWorld(testApp, adminToken);
@@ -1160,10 +1169,13 @@ describe('the administrator attention summary', () => {
 
     await confirmSession(testApp, adminToken, world.sessionId);
 
-    expect(await attentionTotal(testApp, adminToken)).toEqual({ unreadTotal: 1 });
+    expect(await attentionSummary(testApp, adminToken)).toEqual({
+      ...ZERO_ATTENTION_SUMMARY,
+      closedSessionUnread: 1,
+    });
   });
 
-  it('counts an unread reply once its session has been cancelled', async () => {
+  it('counts an unread reply as a closed session once its session has been cancelled', async () => {
     const testApp = buildSmsTestApp();
     const { accessToken: adminToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
     const world = await setUpReferralWorld(testApp, adminToken);
@@ -1181,7 +1193,10 @@ describe('the administrator attention summary', () => {
 
     await cancelSession(testApp, adminToken, world.sessionId);
 
-    expect(await attentionTotal(testApp, adminToken)).toEqual({ unreadTotal: 1 });
+    expect(await attentionSummary(testApp, adminToken)).toEqual({
+      ...ZERO_ATTENTION_SUMMARY,
+      closedSessionUnread: 1,
+    });
   });
 
   it('counts an unread loose reply with no session behind it at all', async () => {
@@ -1190,7 +1205,10 @@ describe('the administrator attention summary', () => {
 
     await postReply(testApp, '07700 900999', 'Who is this?');
 
-    expect(await attentionTotal(testApp, adminToken)).toEqual({ unreadTotal: 1 });
+    expect(await attentionSummary(testApp, adminToken)).toEqual({
+      ...ZERO_ATTENTION_SUMMARY,
+      unmatchedUnread: 1,
+    });
   });
 
   it('does not count a reply that has already been read, even on a closed session', async () => {
@@ -1211,7 +1229,7 @@ describe('the administrator attention summary', () => {
     });
     expect(markRead.status).toBe(200);
 
-    expect(await attentionTotal(testApp, adminToken)).toEqual({ unreadTotal: 0 });
+    expect(await attentionSummary(testApp, adminToken)).toEqual(ZERO_ATTENTION_SUMMARY);
   });
 
   it('never counts a failure row, even on a closed session, because a failure always arrives read', async () => {
@@ -1232,7 +1250,7 @@ describe('the administrator attention summary', () => {
 
     await confirmSession(testApp, adminToken, world.sessionId);
 
-    expect(await attentionTotal(testApp, adminToken)).toEqual({ unreadTotal: 0 });
+    expect(await attentionSummary(testApp, adminToken)).toEqual(ZERO_ATTENTION_SUMMARY);
   });
 });
 
@@ -1451,7 +1469,10 @@ describe('the sessionId snapshot survives a referral move', () => {
     // The proof that matters: it counts as a closed-session item, which it
     // could only do by keying off the snapshot — a live join through the
     // referral would find session B, still `planned`, and not count it at all.
-    expect(await attentionTotal(testApp, adminToken)).toEqual({ unreadTotal: 1 });
+    expect(await attentionSummary(testApp, adminToken)).toEqual({
+      ...ZERO_ATTENTION_SUMMARY,
+      closedSessionUnread: 1,
+    });
   });
 });
 
@@ -1519,7 +1540,10 @@ describe('marking one inbox message read', () => {
     await postReply(testApp, '07700 900222', 'Second household');
     await confirmSession(testApp, adminToken, world.sessionId);
 
-    expect(await attentionTotal(testApp, adminToken)).toEqual({ unreadTotal: 2 });
+    expect(await attentionSummary(testApp, adminToken)).toEqual({
+      ...ZERO_ATTENTION_SUMMARY,
+      closedSessionUnread: 2,
+    });
 
     const rows = await db.select().from(smsMessages).where(eq(smsMessages.kind, 'household_reply'));
     const [first, second] = rows;
@@ -1533,7 +1557,10 @@ describe('marking one inbox message read', () => {
     expect(markRead.status).toBe(200);
 
     // Exactly one cleared — the count drops by one, not to zero.
-    expect(await attentionTotal(testApp, adminToken)).toEqual({ unreadTotal: 1 });
+    expect(await attentionSummary(testApp, adminToken)).toEqual({
+      ...ZERO_ATTENTION_SUMMARY,
+      closedSessionUnread: 1,
+    });
 
     const [untouched] = await db
       .select()
@@ -1971,7 +1998,10 @@ describe('referrer_reply: inbound texts from a referrer collecting a parcel', ()
 
     await postReply(testApp, '07700 900555', 'On my way');
 
-    expect(await attentionTotal(testApp, adminToken)).toEqual({ unreadTotal: 1 });
+    expect(await attentionSummary(testApp, adminToken)).toEqual({
+      ...ZERO_ATTENTION_SUMMARY,
+      unmatchedUnread: 1,
+    });
   });
 });
 

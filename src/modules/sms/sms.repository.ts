@@ -6,10 +6,10 @@ import {
   exists,
   gte,
   inArray,
+  isNotNull,
   isNull,
   ne,
   notInArray,
-  or,
   sql,
 } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/sqlite-core';
@@ -109,17 +109,35 @@ export function createSmsRepository(db: Database) {
     },
 
     /**
-     * Unread household replies and referrer messages needing an
-     * administrator, within retention: unmatched or a `referrer_reply` (no
-     * session snapshot, either way), or a household reply on a session that
-     * has since closed (confirmed or cancelled). A household reply still on
-     * a planned/in-progress session is the team leader's business and is
-     * deliberately excluded — a `referrer_reply` has no session to be
-     * excluded by, since it is never one household's business to begin with.
+     * Unread household replies and referrer messages within retention,
+     * split by `SmsMessageLocation`: `unmatchedUnread` is a loose reply or a
+     * `referrer_reply` (no session snapshot, either way — a `referrer_reply`
+     * is never one household's business to begin with), `activeSessionUnread`
+     * is a household reply still on a planned/in-progress session — the team
+     * leader's business, kept separate so an administrator can see it
+     * without it counting as their own job — and `closedSessionUnread` is a
+     * household reply whose session has since closed (confirmed or
+     * cancelled), which is nobody else's job by then.
      */
-    async countAttentionNeeded(cutoff: string): Promise<number> {
+    async countUnreadByLocation(cutoff: string): Promise<{
+      activeSessionUnread: number;
+      closedSessionUnread: number;
+      unmatchedUnread: number;
+    }> {
+      const isClosedSession = and(
+        isNotNull(smsMessages.sessionId),
+        inArray(sessions.status, [...CLOSED_SESSION_STATUSES]),
+      );
+      const isActiveSession = and(
+        isNotNull(smsMessages.sessionId),
+        notInArray(sessions.status, [...CLOSED_SESSION_STATUSES]),
+      );
       const rows = await db
-        .select({ count: sql<number>`COUNT(*)` })
+        .select({
+          unmatchedUnread: sql<number>`SUM(CASE WHEN ${isNull(smsMessages.sessionId)} THEN 1 ELSE 0 END)`,
+          activeSessionUnread: sql<number>`SUM(CASE WHEN ${isActiveSession} THEN 1 ELSE 0 END)`,
+          closedSessionUnread: sql<number>`SUM(CASE WHEN ${isClosedSession} THEN 1 ELSE 0 END)`,
+        })
         .from(smsMessages)
         .leftJoin(sessions, eq(smsMessages.sessionId, sessions.id))
         .where(
@@ -127,13 +145,14 @@ export function createSmsRepository(db: Database) {
             inArray(smsMessages.kind, ['household_reply', 'referrer_reply']),
             isNull(smsMessages.readAt),
             gte(smsMessages.occurredAt, cutoff),
-            or(
-              isNull(smsMessages.sessionId),
-              inArray(sessions.status, [...CLOSED_SESSION_STATUSES]),
-            ),
           ),
         );
-      return rows[0]?.count ?? 0;
+      const row = rows[0];
+      return {
+        activeSessionUnread: row?.activeSessionUnread ?? 0,
+        closedSessionUnread: row?.closedSessionUnread ?? 0,
+        unmatchedUnread: row?.unmatchedUnread ?? 0,
+      };
     },
 
     /**

@@ -551,11 +551,11 @@ export function createSmsService(deps: SmsServiceDeps) {
     return repository.listUnmatched();
   }
 
-  /** The one number the admin inbox screen makes prominent. */
+  /** The three counts the admin inbox screen makes prominent. */
   async function attentionSummary(): Promise<SmsAttentionSummaryResponse> {
     const cutoff = smsRetentionCutoffIso(clock.nowIso());
-    const unreadTotal = await repository.countAttentionNeeded(cutoff);
-    return toAttentionSummaryResponse(unreadTotal);
+    const counts = await repository.countUnreadByLocation(cutoff);
+    return toAttentionSummaryResponse(counts);
   }
 
   /**

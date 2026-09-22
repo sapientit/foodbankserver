@@ -1451,7 +1451,8 @@ GET  /api/v1/referrals/{id}/sms-messages          → the thread, both direction
 POST /api/v1/referrals/{id}/sms-messages          { body }  → text them back
 POST /api/v1/referrals/{id}/sms-messages/read     → mark that household read
 
-GET  /api/v1/sms-messages/attention-summary       admin only → { unreadTotal }
+GET  /api/v1/sms-messages/attention-summary       admin only
+  → { activeSessionUnread, closedSessionUnread, unmatchedUnread }
 GET  /api/v1/sms-messages                         admin only → { messages: [...] }
 GET  /api/v1/sms-messages/unmatched               admin only (superseded, see below)
 POST /api/v1/sms-messages/{id}/read               admin only
@@ -1551,10 +1552,14 @@ unchanged rather than removed — build new work against the inbox instead.
 
 Two endpoints, both admin only, neither of which marks anything read:
 
-- `GET /sms-messages/attention-summary` → `{ unreadTotal }`. No message body,
-  household name, phone number or referral data — a count and nothing else.
-  This is the number to badge an admin nav item with; poll it the same way you
-  poll `sms-summary`.
+- `GET /sms-messages/attention-summary` →
+  `{ activeSessionUnread, closedSessionUnread, unmatchedUnread }`. No message
+  body, household name, phone number or referral data — three counts and
+  nothing else, one per `location` below. `closedSessionUnread +
+unmatchedUnread` is what to badge an admin nav item with — that is what an
+  administrator is actually told needs doing; `activeSessionUnread` is the
+  team leader's business, included only so an administrator can see whether
+  the team leader is keeping up. Poll it the same way you poll `sms-summary`.
 - `GET /sms-messages` → `{ messages: [...] }`. **Not every retained message.**
   Only phone numbers with at least one message that is not a `reminder` — a
   `staff_reply`, a `household_reply` or a `failure`, real or simulated makes
@@ -1569,15 +1574,15 @@ Two endpoints, both admin only, neither of which marks anything read:
 
 Each row in the list carries a `location`:
 
-| `location`       | Meaning                                                | Counts towards `attention-summary`? |
-| ---------------- | ------------------------------------------------------ | ----------------------------------- |
-| `unmatched`      | A loose reply — no session behind it.                  | Yes, if unread.                     |
-| `active_session` | Its session is still `planned` or `in_progress`.       | No — the team lead's to read.       |
-| `closed_session` | Its session has since been `confirmed` or `cancelled`. | Yes, if unread.                     |
+| `location`       | Meaning                                                        | `attention-summary` field         |
+| ---------------- | -------------------------------------------------------------- | --------------------------------- |
+| `unmatched`      | A loose reply, or any referrer message — no session behind it. | `unmatchedUnread`, if unread.     |
+| `active_session` | Its session is still `planned` or `in_progress`.               | `activeSessionUnread`, if unread. |
+| `closed_session` | Its session has since been `confirmed` or `cancelled`.         | `closedSessionUnread`, if unread. |
 
 Only unread `household_reply` and `referrer_reply` rows are ever counted at
 all — a `reminder`, `staff_reply` or `failure` is never unread, so `location`
-is informational for those, not a trigger for attention.
+is informational for those, not a trigger for any of the three counts.
 
 `session` (session id, `sessionDate`, `startTime`, `status`) is included on
 every row except `unmatched`, where it is `null`. `phone` is now on **every**

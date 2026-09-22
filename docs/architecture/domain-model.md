@@ -147,13 +147,16 @@ it besides a sent reminder, but shows that number whole.** `listInbox` returns e
 retention for a phone number that has at least one `staff_reply`, `household_reply` or `failure` in
 that window — a number that was only ever reminded is not returned at all — and once a number
 qualifies, its reminders come back alongside everything else, because a reply answers a reminder.
-`GET /sms-messages/attention-summary` tells an administrator about far less than even that list
-shows: an unread `household_reply` needs an administrator only when it is unmatched or its
-snapshotted session has since moved to `confirmed` or `cancelled`; one on a `planned` or
-`in_progress` session stays the team leader's responsibility, and an administrator may view it but
-it never contributes to `unreadTotal`. Nothing here creates an ownership, handover, acknowledgement
-or preference record — a message is still simply read or unread, and `POST /sms-messages/{id}/read`
-(now usable on any unread household reply, not only a loose one) touches only the one row named.
+`GET /sms-messages/attention-summary` tells an administrator less than even that list shows, and
+splits it into three rather than one combined figure: `unmatchedUnread` (a loose reply, or any
+unread `referrer_reply` — always sessionless) and `closedSessionUnread` (a `household_reply` whose
+snapshotted session has since moved to `confirmed` or `cancelled`) are what an administrator is
+actually told needs doing; `activeSessionUnread` (a `household_reply` still on a `planned` or
+`in_progress` session) stays the team leader's responsibility — an administrator may view it, but it
+is broken out separately so it never reads as their own job. Nothing here creates an ownership,
+handover, acknowledgement or preference record — a message is still simply read or unread, and
+`POST /sms-messages/{id}/read` (now usable on any unread household reply, not only a loose one)
+touches only the one row named.
 
 ## Rules the code must enforce, not merely document
 

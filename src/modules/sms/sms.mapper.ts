@@ -104,13 +104,29 @@ export interface SmsSendResultResponse {
   readonly simulated: number;
 }
 
-/** The one number the admin inbox screen makes prominent. */
+/**
+ * The three counts the admin inbox screen makes prominent, one per
+ * `SmsMessageLocation`. `activeSessionUnread` is the team leader's business,
+ * shown so an administrator can see it without it being their own job;
+ * `closedSessionUnread` and `unmatchedUnread` are what administrators are
+ * actually told needs doing.
+ */
 export interface SmsAttentionSummaryResponse {
-  readonly unreadTotal: number;
+  readonly activeSessionUnread: number;
+  readonly closedSessionUnread: number;
+  readonly unmatchedUnread: number;
 }
 
-export function toAttentionSummaryResponse(unreadTotal: number): SmsAttentionSummaryResponse {
-  return { unreadTotal };
+export function toAttentionSummaryResponse(counts: {
+  readonly activeSessionUnread: number;
+  readonly closedSessionUnread: number;
+  readonly unmatchedUnread: number;
+}): SmsAttentionSummaryResponse {
+  return {
+    activeSessionUnread: counts.activeSessionUnread,
+    closedSessionUnread: counts.closedSessionUnread,
+    unmatchedUnread: counts.unmatchedUnread,
+  };
 }
 
 /**

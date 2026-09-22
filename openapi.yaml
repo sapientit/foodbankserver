@@ -2228,19 +2228,24 @@ paths:
   /api/v1/sms-messages/attention-summary:
     get:
       tags: [SMS]
-      summary: Count of unread replies an administrator needs to deal with
+      summary: Three counts of unread replies, split by who they are for
       description: >
         **Admin only.** No message body, household name, phone number or
-        referral data — a count and nothing else.
+        referral data — three counts and nothing else.
 
-        Counts only unread household replies that are unmatched, or that
-        belong to a session which has since been confirmed or cancelled. A
-        reply on a session still planned or under way is excluded — that one
-        is the team leader running it who reads it, not an administrator.
-        Failures are always excluded; they arrive already read.
+        Splits unread `household_reply` and `referrer_reply` messages within
+        retention by `location`: `activeSessionUnread` is on a session still
+        planned or under way — the team leader running it reads these, not an
+        administrator, and the count is shown only so an administrator can
+        see whether the team leader is keeping up. `closedSessionUnread` and
+        `unmatchedUnread` are what an administrator is actually told needs
+        doing: a reply whose session has since been confirmed or cancelled,
+        and a loose reply or referrer message with no session behind it at
+        all. Failures, reminders and staff replies are always excluded; none
+        of the three is ever unread.
       responses:
         '200':
-          description: The count
+          description: The three counts
           content:
             application/json:
               schema: { $ref: '#/components/schemas/SmsAttentionSummary' }
@@ -4959,16 +4964,27 @@ components:
 
     SmsAttentionSummary:
       type: object
-      required: [unreadTotal]
+      required: [activeSessionUnread, closedSessionUnread, unmatchedUnread]
       properties:
-        unreadTotal:
+        activeSessionUnread:
           type: integer
           description: >-
-            Unread household replies that are unmatched or belong to a
-            confirmed or cancelled session, plus unread referrer replies
-            (`referrer_reply`), which have no session to be excluded by. A
-            household reply on a session still planned or under way is
-            excluded — that one is the team leader's to read.
+            Unread household replies on a session still planned or under way
+            — the team leader's to read, not an administrator's. Shown so an
+            administrator can see whether the team leader is keeping up; it
+            does not count towards what an administrator is told needs doing.
+        closedSessionUnread:
+          type: integer
+          description: >-
+            Unread household replies whose session has since been confirmed
+            or cancelled. Nobody is running that session's screen any more,
+            so this is an administrator's job.
+        unmatchedUnread:
+          type: integer
+          description: >-
+            Unread messages with no session behind them at all — a loose
+            household reply, and every unread referrer reply
+            (`referrer_reply`), which never has a session to begin with.
 
     SmsInboxSession:
       type: object
