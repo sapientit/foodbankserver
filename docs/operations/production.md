@@ -1,30 +1,44 @@
 # Going to production
 
-## There are two deployments, and two databases
+## There are three deployments, and three databases
 
-|                      | Test                                             | Production                      |
+**The account migration described below (2026-09-21) was reverted 2026-09-22.** It had made the
+charity's own account the top-level (default, no-`--env`) deploy target, but the migrated test
+system turned out to have issues and needs rebuilding, and it left `deploy_foodbank` /
+`foodbank-deploy-server` — which assume no-`--env` means the old personal-account
+`foodbank-server` — failing with a Cloudflare "database could not be found" error, because the
+scripts and `wrangler.jsonc` no longer agreed on which account the default target meant. Top-level
+now points at the personal account again, matching the deploy scripts; the charity-account config
+that had been there is preserved as the `new-test` Wrangler environment, described below.
+
+|                      | Test (live)                                      | Production                      |
 | -------------------- | ------------------------------------------------ | ------------------------------- |
-| Worker               | `api-test`                                       | `api`                           |
+| Worker               | `foodbank-server`                                | `api`                           |
 | Wrangler environment | top-level (no `--env`)                           | `--env production`              |
 | Deploy with          | `npm run deploy:test`                            | `npm run deploy`                |
 | Migrate with         | `npm run db:migrate:test`                        | `npm run db:migrate:production` |
-| D1 database          | `foodbank-test` (EU)                             | `foodbank` (EU)                 |
-| URL                  | `https://api-test.guildfordfoodbank.workers.dev` | no application deployed         |
+| D1 database          | `foodbank-test` (EU, personal account)           | `foodbank` (EU)                 |
+| URL                  | `https://foodbank-server.losttemple.workers.dev` | no application deployed         |
 
-These names — `api-test`/`api`, on the charity's own Cloudflare account
-(`deb0c45ee0e89fad81d6b1227d7c439a`) — are the result of the account migration in "Migrating to the
-charity's own Cloudflare account" below, done on 2026-09-21. Before that, both lived on a personal
-account as `foodbank-server`/`foodbank-server-production`; that old deployment still exists pending
-a decommission decision, but is no longer where new work should go.
+There is also a third, currently unused target, `new-test` (`--env new-test`): `api-test` on the
+charity's own Cloudflare account (`deb0c45ee0e89fad81d6b1227d7c439a`), database `foodbank-test`
+(EU), reachable in principle at `https://api-test.guildfordfoodbank.workers.dev` but **stale** —
+nothing has deployed to it since the revert, so its `GET /health` version cannot be trusted. It
+needs rebuilding (Pete, 2026-09-22) before it becomes a real deploy target again; nothing about the
+D1 database, worker names or Google sign-in client discovered during the original migration needs
+re-deriving when that happens, it is all still in `wrangler.jsonc` under that environment.
+`~/bin/foodbank-deploy-server` does not know about it — driving it needs raw `wrangler` commands
+with `CLOUDFLARE_API_TOKEN` scoped to the charity account, since the account isn't the one the local
+`wrangler login` session is authenticated as.
 
-`api` **does exist on the account**, but only as the empty shell that `wrangler secret put
+`api` **does exist on the charity account**, but only as the empty shell that `wrangler secret put
 --env production` created on 2026-09-21 — no application code, no route, and it answers `404`. Its
 `foodbank` database exists (EU jurisdiction) but is unmigrated. Treat production as unbuilt, not as
 something already running.
 
-`~/bin/foodbank-deploy-server` drives both: test by default, `--production` behind a typed
-confirmation that also reports the `AUTH_MODE` tripwire and any uncommitted work. (This script
-predates the account migration — confirm it still points at the new account before relying on it.)
+`~/bin/foodbank-deploy-server` drives the live test system and production: test by default,
+`--production` behind a typed confirmation that also reports the `AUTH_MODE` tripwire and any
+uncommitted work.
 
 **The two databases are separate on purpose**, for exactly the reason the two Google vars are: a
 test deployment must not be able to write into the charity's real data. Both are EU-jurisdiction,
@@ -39,6 +53,13 @@ anyone, so the row's login email was changed on the deployed test database after
 any future test database rather than leaving the published one live.
 
 ## Migrating to the charity's own Cloudflare account
+
+**This migration's test-system portion was reverted 2026-09-22** — the checklist below is a record
+of what was done, and everything discovered while doing it (account id, database ids, worker names,
+the Google sign-in client) is still valid and still in `wrangler.jsonc`, just moved to the
+`new-test` environment rather than left as the default target. See "There are three deployments"
+above for the current state. Nothing below needs re-doing to rebuild `new-test` — start from
+"5. Deploy and verify".
 
 Everything today — **both** the deployed test system and the (unbuilt) production shell — runs on
 one personal Cloudflare account (`ea7ad751ffa489bc577330c6eedd7500`), shared with an unrelated
@@ -69,12 +90,26 @@ none of them move by copying a value, each has to be recreated against the new a
       — and updated `wrangler.jsonc` with the returned ids.
 - [x] **[Claude]** Updated `CF_ACCOUNT_ID` and `CF_D1_DATABASE_ID` in `wrangler.jsonc`'s `vars` for
       both environments and regenerated binding types (`npm run cf-typegen`).
-- [ ] **[Pete]** Still deferred until a domain exists (same dependency as the spreadsheet extract's
-      OAuth verification below) — a Turnstile widget is bound to the domain(s) it's created for, and
-      the frontend doesn't have one yet. Once it does: create the widget (dashboard, or ask me to do
-      it via the Cloudflare API with the account token, since `wrangler` doesn't expose this) and
-      give me the secret key.
-- [ ] **[Claude]** Set `TURNSTILE_SECRET_KEY` from what you give me, once the step above is unblocked.
+- [ ] **[Pete or Claude]** Still needed for this (charity) account, scoped to `new-test`'s own
+      frontend origin once it exists. This does **not** need a custom domain — a `workers.dev`
+      widget already exists and works fine on the personal account (see below), so a `workers.dev`
+      origin is enough here too; ignore the old note tying this to the spreadsheet extract's OAuth
+      verification, which is a different, genuinely domain-gated dependency. `wrangler turnstile
+widget create` can do this directly (no dashboard round-trip needed) once run against the
+      charity account's credentials.
+- [ ] **[Claude]** Set `TURNSTILE_SECRET_KEY --env new-test` (or whatever this environment ends up
+      named) from the widget's secret, once the step above is done.
+
+**Fixed on the personal account, 2026-09-23**: the live test system (`foodbank-server`) had no
+`TURNSTILE_SECRET_KEY` set at all — Turnstile verification was being silently skipped there.
+A widget already existed on this account (`foodbank-referral-test`, sitekey
+`0x4AAAAAAEW-EE-GNrXmJW7R`, created 2026-08-20, scoped to `foodbank-client.losttemple.workers.dev`
+and `localhost`), but its secret had apparently only been set on the charity account's paused
+`api`/`api-test` Worker during the 2026-09-21 migration — the wrong account for what's actually
+deployed since the revert. `TURNSTILE_SECRET_KEY` is now set on `foodbank-server` from that same
+widget's secret. The charity account's copy was left as is (not reachable with the credentials this
+session has); decide whether to rotate or delete it once `new-test` is rebuilt.
+
 - [ ] **[Pete]** (Optional — only if you want the platform-usage job running) create a second API
       token scoped to Analytics + D1 read, and give it to me. Dashboard path: **My Profile → API
       Tokens → Create Token → Custom token**, with **Account → D1 → Read** and **Account →

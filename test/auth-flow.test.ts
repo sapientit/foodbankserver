@@ -123,7 +123,9 @@ describe('auth flow', () => {
   });
 
   it('does not register the dev-login route when AUTH_MODE is google', async () => {
-    const testApp = buildTestApp({ bindings: { AUTH_MODE: 'google' } });
+    const testApp = buildTestApp({
+      bindings: { AUTH_MODE: 'google', GOOGLE_AUTH_CLIENT_ID: GOOGLE_TEST_CLIENT_ID },
+    });
 
     const response = await testApp.request('/api/v1/auth/dev-login', {
       method: 'POST',

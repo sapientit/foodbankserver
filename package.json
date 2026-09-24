@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy --env production --var GIT_SHA:$(git rev-parse HEAD)",
-    "deploy:test": "wrangler deploy --var GIT_SHA:$(git rev-parse HEAD)",
+    "deploy:test": "wrangler deploy --env \"\" --var GIT_SHA:$(git rev-parse HEAD)",
     "cf-typegen": "wrangler types --strict-vars",
     "load:stock": "node scripts/load-stock-data.mjs",
     "db:generate": "drizzle-kit generate",

@@ -14,6 +14,7 @@ import { refreshTokens, users } from '../src/db/schema/users.ts';
 import { purgeReferralPii } from '../src/modules/jobs/purge-pii.ts';
 import { createLogger } from '../src/core/log.ts';
 import { buildTestApp, devLogin } from './helpers/app.ts';
+import { GOOGLE_TEST_CLIENT_ID } from './helpers/google-token.ts';
 import { setUpReferralWorld, submission, submitReferral } from './helpers/referral-fixtures.ts';
 
 const db = createDatabase(env.DB);
@@ -378,6 +379,7 @@ describe('security headers', () => {
       bindings: {
         ENVIRONMENT: 'production',
         AUTH_MODE: 'google',
+        GOOGLE_AUTH_CLIENT_ID: GOOGLE_TEST_CLIENT_ID,
         TURNSTILE_SECRET_KEY: 'secret',
         SMS_WEBHOOK_SECRET: 'sms-webhook-secret-long-enough',
         // The ambient env carries wrangler.jsonc's dev-only SMS_SIMULATE=true;

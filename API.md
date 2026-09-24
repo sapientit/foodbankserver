@@ -794,12 +794,12 @@ next referral from that address is not held up. Three things to build around:
   trust is not everybody who works where they work. There is no domain option on
   this endpoint on purpose; a domain rule is a deliberate trip to the authorised
   referrers screen.
-- **`organisationName` is required, and the administrator types it.** Do not
-  pre-fill it silently from `referrerOrganisation` — that is free text the
-  referrer chose, and it is how the list ends up holding "Guildford BC",
-  "Guildford Borough Council" and "guildford borough council" as three
-  organisations. Offering the existing names as suggestions is the useful shape;
-  the charity asked for the administrator to key it and confirm.
+- **`organisationName` is required, and starts as `referrerOrganisation`.** It
+  remains editable: the referral's free text is a useful default, not the
+  reporting name the charity must accept. The administrator can correct or
+  standardise it before confirming, so the authorised list does not fill with
+  "Guildford BC", "Guildford Borough Council" and "guildford borough council"
+  as three organisations.
 - **A `409` means nothing happened.** If that address is already on the list the
   referral is _not_ accepted either, so the next step is plain accept. A `422`
   means the referral has no referrer address to authorise at all.
