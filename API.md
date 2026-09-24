@@ -12,8 +12,13 @@ rendering and no PDF — printing and layout are the client's.
 |            | URL                                              |
 | ---------- | ------------------------------------------------ |
 | Local      | `http://127.0.0.1:8787`                          |
-| Test       | `https://api-test.guildfordfoodbank.workers.dev` |
+| Test       | `https://foodbank-server.losttemple.workers.dev` |
+| UAT        | `https://api-test.guildfordfoodbank.workers.dev` |
 | Production | not yet deployed                                 |
+
+Test runs dummy authentication (anyone knowing a seeded address is an admin). UAT runs real Google
+sign-in instead — proved live there before production depends on it. Neither ever holds real
+personal data.
 
 `/health` and `/ready` sit at the **root**, not under `/api/v1`. Everything else
 is under the base path.

@@ -21,12 +21,19 @@ info:
 servers:
   - url: http://127.0.0.1:8787
     description: Local wrangler dev
+  - url: https://foodbank-server.losttemple.workers.dev
+    description: >-
+      Test system, on the personal Cloudflare account. Dummy authentication, so
+      anyone knowing a seeded address is an admin — never put real personal data
+      in it. The browser does not call this host directly: the client Worker
+      forwards to it over a service binding, so the refresh cookie stays
+      same-origin. See API.md.
   - url: https://api-test.guildfordfoodbank.workers.dev
     description: >-
-      Test system. Dummy authentication, so anyone knowing a seeded address is an
-      admin — never put real personal data in it. The browser does not call this
-      host directly: the client Worker forwards to it over a service binding, so
-      the refresh cookie stays same-origin. See API.md.
+      UAT, on the charity's own Cloudflare account. Real Google sign-in (not
+      dummy auth) — deliberately, so that path is proved live before production
+      depends on it. Still never put real personal data in it. Same
+      same-origin/service-binding note as the test system above.
   - url: https://api.guildfordfoodbank.workers.dev
     description: >-
       Production — NOT YET DEPLOYED. Expected to move to a custom domain before

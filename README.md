@@ -31,41 +31,46 @@ curl http://127.0.0.1:8787/ready
 
 ## First-time Cloudflare setup
 
-There are two deployments and **two separate databases** — `foodbank-test` for the test system and
-`foodbank` for production — so a test deployment cannot write into the charity's real data. Both are
-created with the EU jurisdiction, because they hold UK personal data. **This cannot be changed
-afterwards.**
+There are three deployments and **three separate databases** — `foodbank-test` on the personal
+account for the live test system, `foodbank-test` on the charity's own account for UAT, and
+`foodbank` for production — so no deployment can write into another's data. All are created with the
+EU jurisdiction, because they hold UK personal data. **This cannot be changed afterwards.**
 
 ```bash
 npx wrangler d1 create foodbank-test --jurisdiction=eu
 ```
 
 Paste the returned `database_id` into the **top-level** `d1_databases` block in `wrangler.jsonc`
-(production's lives in `env.production` and must stay different), then:
+(UAT's lives in `env.uat`, production's in `env.production`, and all three must stay different),
+then:
 
 ```bash
 npm run cf-typegen
 npm run db:migrate:test
 ```
 
-The test system is live at `https://api-test.guildfordfoodbank.workers.dev`. It runs with dummy
-authentication and **must never hold real personal data**. See
+The test system is live at `https://foodbank-server.losttemple.workers.dev`, on the personal
+Cloudflare account; UAT is live at `https://api-test.guildfordfoodbank.workers.dev`, on the
+charity's own account, and signs in with real Google identities rather than dummy auth. Neither
+**must ever hold real personal data**. See
 [`docs/operations/production.md`](./docs/operations/production.md) for the deployment table, the
 free-plan limits and the go-live sequence.
 
 ## Scripts
 
-| Command                         | Description                                             |
-| ------------------------------- | ------------------------------------------------------- |
-| `npm run dev`                   | Run locally with wrangler                               |
-| `npm run check`                 | Typegen, typecheck, lint, format, tests, deploy dry-run |
-| `npm test`                      | Run the test suite inside workerd                       |
-| `npm run db:generate`           | Generate a migration from the Drizzle schema            |
-| `npm run db:migrate:local`      | Apply migrations to the local D1                        |
-| `npm run db:migrate:test`       | Apply migrations to the remote `foodbank-test`          |
-| `npm run db:migrate:production` | Apply migrations to the remote `foodbank`               |
-| `npm run deploy:test`           | Deploy the test environment                             |
-| `npm run deploy`                | Deploy the production environment                       |
+| Command                         | Description                                                       |
+| ------------------------------- | ----------------------------------------------------------------- |
+| `npm run dev`                   | Run locally with wrangler                                         |
+| `npm run check`                 | Typegen, typecheck, lint, format, tests, deploy dry-run           |
+| `npm test`                      | Run the test suite inside workerd                                 |
+| `npm run db:generate`           | Generate a migration from the Drizzle schema                      |
+| `npm run db:migrate:local`      | Apply migrations to the local D1                                  |
+| `npm run db:migrate:test`       | Apply migrations to the remote `foodbank-test` (personal account) |
+| `npm run db:migrate:uat`        | Apply migrations to the remote `foodbank-test` (charity account)  |
+| `npm run db:migrate:production` | Apply migrations to the remote `foodbank`                         |
+| `npm run deploy:test`           | Deploy the test environment (personal account)                    |
+| `npm run deploy:uat`            | Deploy the UAT environment (charity account)                      |
+| `npm run deploy`                | Deploy the production environment                                 |
 
 Run `npm run check` before committing. CI runs the same command on every push and pull request
 (`.github/workflows/check.yml`), so a missed local run is caught rather than merged.

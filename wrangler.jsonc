@@ -33,7 +33,7 @@
     "GOOGLE_SHEETS_SPREADSHEET_ID": "1gQK_ore1UOeHY_CwONpua307GUbh5J0_4zt90hlmcs8",
     "GOOGLE_OAUTH_CLIENT_ID": "643990075975-48flcohql0sc2cekh3940uscrqflrbnn.apps.googleusercontent.com",
     // No sign-in client here: this deployment runs AUTH_MODE=dummy, and the
-    // Google sign-in client set up 2026-09-21 is scoped to the new-test
+    // Google sign-in client set up 2026-09-21 is scoped to the uat
     // environment's own origin below, not this one's.
     "GOOGLE_AUTH_CLIENT_ID": "",
     // Every SMS send in this environment is a fake success rather than a
@@ -112,16 +112,17 @@
     // Wrangler environments do NOT inherit top-level keys — every binding,
     // var and trigger must be repeated in full.
     //
-    // NOT currently deployed to. This is the charity's own Cloudflare account
-    // (pete@guildfordfoodbank.org, account id below), set up 2026-09-21 as a
-    // replacement test system — see STATUS.md "Deployed" and
+    // The UAT tier: the charity's own Cloudflare account
+    // (pete@guildfordfoodbank.org, account id below), set up 2026-09-21 and
+    // reinstated 2026-09-24 as a genuine third tier alongside the
+    // personal-account test system above (which keeps running unchanged) and
+    // production below — see STATUS.md and
     // docs/operations/production.md "Migrating to the charity's own Cloudflare
-    // account" for the full history. Pete found it has issues and it needs
-    // rebuilding before anything deploys here again (2026-09-22); until then
-    // `foodbank-server`/`foodbank-test` above (the old personal account) stays
-    // the one deploy target, and neither `deploy_foodbank` nor
-    // `foodbank-deploy-server` know this environment exists.
-    "new-test": {
+    // account" for the full history. Deploy with `npm run deploy:uat`
+    // (`foodbank-deploy-server --uat` drives it end to end); this environment
+    // key was named `new-test` until 2026-09-24 — renamed for clarity, no
+    // underlying resource changed by the rename.
+    "uat": {
       "name": "api-test",
       "observability": { "enabled": true },
       "vars": {
