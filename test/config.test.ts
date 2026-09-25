@@ -119,11 +119,9 @@ describe('loadConfig', () => {
     ).toThrow(/SMS_LIVE_NUMBERS must be a comma-separated list of recognisable UK numbers/);
   });
 
-  it('refuses SMS_LIVE_NUMBERS set to only separators, rather than silently becoming unrestricted', () => {
-    // `isLive()` treats an empty list as unrestricted — every destination
-    // genuinely sent. A value that is set but splits to no entries must
-    // refuse to boot, not fall through to that, or a deliberately restricted
-    // test environment would start texting every household.
+  it('refuses SMS_LIVE_NUMBERS set to only separators, rather than silently becoming an empty list', () => {
+    // A value that is set but splits to no entries is a typo: somebody meant
+    // a tester to be live, and an empty list would quietly mean nobody is.
     expect(() =>
       loadConfig({
         AUTH_JWT_SECRET: SECRET,
@@ -139,6 +137,30 @@ describe('loadConfig', () => {
     });
 
     expect(config.smsLiveNumbers).toEqual(['07700 900111', '07700 900222', '07700900333']);
+  });
+
+  it('sends to nobody live outside production when SMS_LIVE_NUMBERS is unset, even with a key', () => {
+    const config = loadConfig({
+      AUTH_JWT_SECRET: SECRET,
+      ENVIRONMENT: 'test',
+      SMS_API_KEY: 'a-real-looking-key',
+      SMS_SENDER: '447700900000',
+    });
+
+    expect(config.smsLiveNumbers).toEqual([]);
+  });
+
+  it('sends to everyone in production, and only in production', () => {
+    const config = loadConfig({
+      AUTH_JWT_SECRET: SECRET,
+      ENVIRONMENT: 'production',
+      AUTH_MODE: 'google',
+      GOOGLE_AUTH_CLIENT_ID: 'client-id.apps.googleusercontent.com',
+      TURNSTILE_SECRET_KEY: 'turnstile-secret',
+      SMS_WEBHOOK_SECRET: 'sms-webhook-secret-long-enough',
+    });
+
+    expect(config.smsLiveNumbers).toBe('everyone');
   });
 
   it('memoises per bindings object', () => {

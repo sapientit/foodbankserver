@@ -53,14 +53,15 @@ export interface SmsServiceDeps {
    */
   readonly simulate: boolean;
   /**
-   * When non-empty, only these destinations are ever actually handed to
-   * `sendSms`; every other destination falls through to `simulate` (or to a
+   * The destinations ever actually handed to `sendSms`: `'everyone'` in
+   * production only, otherwise just these numbers, and an empty list means
+   * nobody. Every other destination falls through to `simulate` (or to a
    * `failure`, if that is also off). Lets a staging environment run against
    * a real TheSMSWorks account without texting real households from a copy
-   * of live referral data, with more than one tester able to receive a
-   * genuine message. `SMS_LIVE_NUMBERS`, refused in production.
+   * of live referral data — and an environment given the key but not the
+   * list fails closed. `SMS_LIVE_NUMBERS`; see `config/env.ts`.
    */
-  readonly liveNumbers: readonly string[];
+  readonly liveNumbers: 'everyone' | readonly string[];
 }
 
 /** Outbound fetches in flight at once, so a session of 25+ does not open 25+ concurrent requests. */
@@ -105,10 +106,10 @@ const RESTRICTED_REASON = 'SMS sending is restricted to a test number in this en
 export function createSmsService(deps: SmsServiceDeps) {
   const { db, repository, sessions, clock, logger, provider, simulate, liveNumbers } = deps;
 
-  /** Unrestricted when `liveNumbers` is empty — see `SmsServiceDeps.liveNumbers`. */
+  /** See `SmsServiceDeps.liveNumbers`: an empty list is nobody, never everybody. */
   function isLive(destination: string): boolean {
     return (
-      liveNumbers.length === 0 ||
+      liveNumbers === 'everyone' ||
       liveNumbers.some((liveNumber) => phonesMatch(destination, liveNumber))
     );
   }

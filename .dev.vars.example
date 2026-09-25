@@ -34,3 +34,11 @@ AUTH_JWT_SECRET=replace-me-with-at-least-32-random-characters
 # no browser flow to produce a real Google ID token, so it stays on the dummy
 # provider regardless. Uncomment if your wrangler.jsonc's default ever changes.
 # AUTH_MODE=dummy
+
+# TheSMSWorks. Outside production a real key texts ONLY the numbers in
+# SMS_LIVE_NUMBERS - unset means nobody, and every other send falls back to
+# SMS_SIMULATE (on in wrangler.jsonc's dev vars). Production texts everyone and
+# refuses SMS_LIVE_NUMBERS.
+# SMS_API_KEY=
+# SMS_SENDER=
+# SMS_LIVE_NUMBERS=07700 900123,07700 900456

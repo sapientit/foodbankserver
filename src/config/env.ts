@@ -109,14 +109,16 @@ const configSchema = z
       .transform((value) => value === 'true'),
 
     /**
-     * The destinations that are still actually sent through TheSMSWorks when
-     * set — every other destination falls back to `SMS_SIMULATE` (or a
-     * `failure`, if that is also off). For testing a real account without
-     * texting real households from a copy of live referral data, with more
-     * than one tester able to receive a genuine message. Comma-separated,
-     * same convention as `ALLOWED_ORIGINS`. A Worker secret like the three
-     * above: a phone number is not committed to source any more readily than
-     * a credential is. Refused in production.
+     * Outside production, the only destinations actually sent through
+     * TheSMSWorks — every other destination falls back to `SMS_SIMULATE` (or
+     * a `failure`, if that is also off). **Unset means nobody**, even with a
+     * real `SMS_API_KEY`: a non-production environment runs on test data or a
+     * copy of live referrals, and one set up later with the key but without
+     * this list must fail closed rather than text every household in it.
+     * Production is the only environment that sends to everyone, and refuses
+     * this list outright. Comma-separated, same convention as
+     * `ALLOWED_ORIGINS`. A Worker secret like the three above: a phone number
+     * is not committed to source any more readily than a credential is.
      */
     SMS_LIVE_NUMBERS: z.string().min(1).optional(),
 
@@ -246,9 +248,8 @@ const configSchema = z
     // false for anything unparseable — a typo here would otherwise mean that
     // one "live" number is never live, silently, rather than refusing to boot.
     // A value that is set but splits to **no** entries (`","`, whitespace
-    // only) must refuse to boot for the same reason: `isLive()` treats an
-    // empty list as unrestricted, so silently accepting this would flip a
-    // deliberately restricted test environment to texting every household.
+    // only) must refuse to boot for the same reason: it is a typo, and it
+    // would silently mean nobody is live when somebody plainly meant to be.
     if (value.SMS_LIVE_NUMBERS !== undefined) {
       const numbers = splitLiveNumbers(value.SMS_LIVE_NUMBERS);
       if (numbers.length === 0 || numbers.some((number) => normalisePhone(number) === null)) {
@@ -284,7 +285,12 @@ export interface AppConfig {
   readonly smsSender: string | undefined;
   readonly smsWebhookSecret: string | undefined;
   readonly smsSimulate: boolean;
-  readonly smsLiveNumbers: readonly string[];
+  /**
+   * Who is genuinely texted when a provider is configured: `'everyone'` in
+   * production and nowhere else, otherwise only these numbers — an empty list
+   * meaning nobody. See `SMS_LIVE_NUMBERS`.
+   */
+  readonly smsLiveNumbers: 'everyone' | readonly string[];
   readonly googleSpreadsheetId: string | undefined;
   readonly googleOauthClientId: string | undefined;
   readonly googleAuthClientId: string | undefined;
@@ -329,10 +335,14 @@ export function loadConfig(bindings: object): AppConfig {
     smsSender: result.data.SMS_SENDER,
     smsWebhookSecret: result.data.SMS_WEBHOOK_SECRET,
     smsSimulate: result.data.SMS_SIMULATE,
+    // Decided by the environment, not by whether the list happens to be set:
+    // the validator has already refused the list in production.
     smsLiveNumbers:
-      result.data.SMS_LIVE_NUMBERS === undefined
-        ? []
-        : splitLiveNumbers(result.data.SMS_LIVE_NUMBERS),
+      result.data.ENVIRONMENT === 'production'
+        ? 'everyone'
+        : result.data.SMS_LIVE_NUMBERS === undefined
+          ? []
+          : splitLiveNumbers(result.data.SMS_LIVE_NUMBERS),
     googleSpreadsheetId: result.data.GOOGLE_SHEETS_SPREADSHEET_ID,
     googleOauthClientId: result.data.GOOGLE_OAUTH_CLIENT_ID,
     googleAuthClientId: result.data.GOOGLE_AUTH_CLIENT_ID,

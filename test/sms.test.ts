@@ -2,6 +2,7 @@ import { env } from 'cloudflare:workers';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { API_PREFIX } from '../src/app.ts';
+import { GOOGLE_JWKS_URL } from '../src/config/constants.ts';
 import { fixedClock } from '../src/core/clock.ts';
 import { createLogger } from '../src/core/log.ts';
 import { createDatabase } from '../src/db/client.ts';
@@ -15,10 +16,26 @@ import { stockItems, stockLedger } from '../src/db/schema/stock.ts';
 import { refreshTokens, users } from '../src/db/schema/users.ts';
 import { purgeSmsMessages } from '../src/modules/jobs/purge-sms.ts';
 import { composeReferrerReminder, composeReminder } from '../src/modules/sms/messages.ts';
-import { authHeaders, buildTestApp, devLogin, type TestApp } from './helpers/app.ts';
+import {
+  authHeaders,
+  buildTestApp,
+  devLogin,
+  googleLogin,
+  seedUser,
+  type TestApp,
+} from './helpers/app.ts';
+import {
+  defaultGoogleClaims,
+  generateGoogleTestKeyPair,
+  googleJwksBody,
+  GOOGLE_TEST_CLIENT_ID,
+  jsonResponse,
+  signGoogleIdToken,
+} from './helpers/google-token.ts';
 import { generatePickList, setUpPickingWorld } from './helpers/picking-fixtures.ts';
 import {
   setUpReferralWorld,
+  submission,
   submitReferral,
   UNKNOWN_REFERRER,
 } from './helpers/referral-fixtures.ts';
@@ -41,6 +58,12 @@ function basicAuth(secret: string): Record<string, string> {
  * a test that mounted its own copy would pass even if the module were never
  * reachable in the running Worker.
  */
+/**
+ * Outside production a key alone texts nobody, so a test that needs the real
+ * (mocked) provider called puts the fixture household's number on the list.
+ */
+const FIXTURE_NUMBER_LIVE = { SMS_LIVE_NUMBERS: '07700 900123' };
+
 function buildSmsTestApp(bindings: Record<string, unknown> = {}): TestApp {
   return buildTestApp({
     clock: fixedClock(NOW),
@@ -106,7 +129,7 @@ describe('sending reminders', () => {
   it('sends a household holding a place a reminder and sets the flag', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(providerSuccess('prov-1'));
 
-    const testApp = buildSmsTestApp();
+    const testApp = buildSmsTestApp(FIXTURE_NUMBER_LIVE);
     const { accessToken: adminToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
     const world = await setUpReferralWorld(testApp, adminToken);
     const { id: referralId } = await submitReferral(testApp, world);
@@ -250,7 +273,7 @@ describe('sending reminders', () => {
   });
 
   it('retries a household whose reminder failed on the next press', async () => {
-    const testApp = buildSmsTestApp();
+    const testApp = buildSmsTestApp(FIXTURE_NUMBER_LIVE);
     const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
     const world = await setUpReferralWorld(testApp, accessToken);
     const { id: referralId } = await submitReferral(testApp, world);
@@ -340,6 +363,100 @@ describe('sending reminders', () => {
   });
 });
 
+describe('production genuinely hands a reminder to the provider', () => {
+  /**
+   * Everything else in this file runs on `ENVIRONMENT: 'test'`, where
+   * `smsLiveNumbers` is never `'everyone'` — see `config/env.ts`. That leaves
+   * a gap the non-production tests cannot close: nothing proves that a real
+   * production configuration, with no `SMS_LIVE_NUMBERS` list at all, still
+   * reaches the real provider. Built the way `dev-test-referral-imports.test.ts`
+   * builds a production app — `AUTH_MODE: 'google'` plus a signed Google ID
+   * token, because `AUTH_MODE: 'dummy'` is refused in production and dev-login
+   * is not mounted there.
+   *
+   * Three outbound fetches happen in sequence — Google's JWKS, Turnstile's
+   * siteverify, and the SMS provider's send — so the mock dispatches on the
+   * URL rather than assuming call order.
+   */
+  it('reminds a household in production with no SMS_LIVE_NUMBERS set, via the real provider', async () => {
+    const keyPair = await generateGoogleTestKeyPair();
+    const clock = fixedClock(NOW);
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url === GOOGLE_JWKS_URL) {
+        return Promise.resolve(jsonResponse(googleJwksBody(keyPair)));
+      }
+      if (url === 'https://challenges.cloudflare.com/turnstile/v0/siteverify') {
+        return Promise.resolve(
+          new Response(JSON.stringify({ success: true, 'error-codes': [] }), {
+            headers: { 'content-type': 'application/json' },
+          }),
+        );
+      }
+      if (url === 'https://api.thesmsworks.co.uk/v1/message/send') {
+        return Promise.resolve(providerSuccess('prod-live-1'));
+      }
+      return Promise.reject(new Error(`Unexpected fetch to ${url}`));
+    });
+
+    const testApp = buildTestApp({
+      clock,
+      bindings: {
+        ENVIRONMENT: 'production',
+        AUTH_MODE: 'google',
+        GOOGLE_AUTH_CLIENT_ID: GOOGLE_TEST_CLIENT_ID,
+        TURNSTILE_SECRET_KEY: 'turnstile-secret',
+        SMS_WEBHOOK_SECRET: 'sms-webhook-secret-long-enough',
+        // Refused in production, and the ambient dev env sets it — see the
+        // dev/test simulator tests' own comment on the same override.
+        SMS_SIMULATE: undefined,
+        SMS_API_KEY: 'test-key',
+        SMS_SENDER: 'FOODBANK',
+        // Deliberately absent: production refuses this var outright, and the
+        // whole point of this test is that "everyone" holds with no list at
+        // all — see `config/env.ts`'s `smsLiveNumbers`.
+      },
+    });
+
+    await seedUser({ email: 'pete@guildfordfoodbank.org', role: 'admin' });
+    const idToken = await signGoogleIdToken(
+      keyPair.privateKey,
+      defaultGoogleClaims(clock.nowEpochSeconds()),
+    );
+    const { accessToken } = await googleLogin(testApp, idToken);
+
+    const world = await setUpReferralWorld(testApp, accessToken);
+
+    const submitResponse = await testApp.request('/api/v1/public/referrals', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'cf-turnstile-response': 'a-token' },
+      body: JSON.stringify(submission(world)),
+    });
+    expect(submitResponse.status).toBe(201);
+    const { id: referralId }: { id: string } = await submitResponse.json();
+
+    const response = await testApp.request(
+      `${API_PREFIX}/sessions/${world.sessionId}/sms-reminders`,
+      { method: 'POST', headers: authHeaders(accessToken) },
+    );
+
+    expect(await response.json()).toMatchObject({ reminded: 1, failed: 0, simulated: 0 });
+
+    // The real (mocked) provider was genuinely called, with the household's
+    // own number — not a simulated success and not a restricted-number
+    // failure, which is what `isLive` ignoring 'everyone' would produce.
+    const providerCall = fetchSpy.mock.calls.find(
+      (call) => call[0] === 'https://api.thesmsworks.co.uk/v1/message/send',
+    );
+    expect(providerCall).toBeDefined();
+    expect(providerCall?.[1]?.body).toContain('+447700900123');
+
+    const [referral] = await db.select().from(referrals).where(eq(referrals.id, referralId));
+    expect(referral?.smsReminderSentAt).not.toBeNull();
+  });
+});
+
 describe('the dev/test SMS simulator', () => {
   /** The shape `toSmsMessageResponse` produces on the thread endpoint. */
   interface ThreadMessage {
@@ -418,6 +535,49 @@ describe('the dev/test SMS simulator', () => {
     expect(messages).toHaveLength(1);
     expect(messages[0]).toMatchObject({ kind: 'reminder', simulated: true });
     expect(messages[0]?.body.length).toBeGreaterThan(0);
+  });
+
+  it('does not call the real provider outside production when SMS_LIVE_NUMBERS is unset, even with a key', async () => {
+    // The fail-closed default: a non-production environment given the key but
+    // not the list must never text the households in its (possibly copied)
+    // data. `buildSmsTestApp` sets the key; nothing here sets the list.
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+
+    const testApp = buildSmsTestApp({ SMS_SIMULATE: 'true' });
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world = await setUpReferralWorld(testApp, accessToken);
+    const { id: referralId } = await submitReferral(testApp, world);
+
+    const response = await testApp.request(
+      `${API_PREFIX}/sessions/${world.sessionId}/sms-reminders`,
+      { method: 'POST', headers: authHeaders(accessToken) },
+    );
+    expect(await response.json()).toMatchObject({ reminded: 1, failed: 0, simulated: 1 });
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    const reply = await testApp.request(`${API_PREFIX}/referrals/${referralId}/sms-messages`, {
+      method: 'POST',
+      headers: json(accessToken),
+      body: JSON.stringify({ body: 'See you there' }),
+    });
+    expect(reply.status).toBe(201);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('records a failure rather than texting anyone when SMS_LIVE_NUMBERS is unset and simulate is off', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+
+    const testApp = buildSmsTestApp({ SMS_SIMULATE: 'false' });
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world = await setUpReferralWorld(testApp, accessToken);
+    await submitReferral(testApp, world);
+
+    const response = await testApp.request(
+      `${API_PREFIX}/sessions/${world.sessionId}/sms-reminders`,
+      { method: 'POST', headers: authHeaders(accessToken) },
+    );
+    expect(await response.json()).toMatchObject({ reminded: 0, failed: 1, simulated: 0 });
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it('does not call the real provider for a destination outside SMS_LIVE_NUMBERS, and records a simulated success', async () => {
@@ -544,7 +704,7 @@ describe('the dev/test SMS simulator', () => {
 
     // A live, configured destination that actually reaches the provider —
     // simulate must not mask a genuine provider failure as a fake success.
-    const testApp = buildSmsTestApp({ SMS_SIMULATE: 'true' });
+    const testApp = buildSmsTestApp({ ...FIXTURE_NUMBER_LIVE, SMS_SIMULATE: 'true' });
     const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
     const world = await setUpReferralWorld(testApp, accessToken);
     const { id: referralId } = await submitReferral(testApp, world);
@@ -607,7 +767,7 @@ describe('the session summary', () => {
   });
 
   it('counts a household reply and a failure, but a failure is never unread', async () => {
-    const testApp = buildSmsTestApp();
+    const testApp = buildSmsTestApp(FIXTURE_NUMBER_LIVE);
     const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
     const world = await setUpReferralWorld(testApp, accessToken);
     const { id: referralId } = await submitReferral(testApp, world);
@@ -707,7 +867,7 @@ describe('the thread and staff replies', () => {
   it('refuses a staff reply the provider could not send, and writes nothing', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('', { status: 500 }));
 
-    const testApp = buildSmsTestApp();
+    const testApp = buildSmsTestApp(FIXTURE_NUMBER_LIVE);
     const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
     const world = await setUpReferralWorld(testApp, accessToken);
     const { id: referralId } = await submitReferral(testApp, world);

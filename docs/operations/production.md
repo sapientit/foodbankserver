@@ -153,13 +153,21 @@ that `uat` is a real, documented tier rather than something pending rebuild.
 - [ ] **[Pete]** Update TheSMSWorks' webhook configuration to the value I just set for
       `SMS_WEBHOOK_SECRET` — it's a shared secret with them, so their side has to match. Ask me for
       the value if you need it; I won't put it in chat unprompted.
-- [ ] **[Pete]** Decided: `SMS_API_KEY` carries over unchanged (same TheSMSWorks account). Still
-      need the actual value from you, though — I have no access to TheSMSWorks and it isn't stored
-      anywhere I can read (not in `.dev.vars`, and Cloudflare never lets a secret's value be read
-      back once set). Give it to me, or run
-      `wrangler secret put SMS_API_KEY --env production` (and the top-level one for test) yourself
-      so it never passes through this conversation.
-- [ ] **[Claude]** Set it once you've supplied it or confirmed you've set it yourself.
+- [x] **[Pete, 2026-09-25]** Set `SMS_API_KEY` (same TheSMSWorks account, carried over unchanged)
+      on `production` and `uat`, piped from the clipboard through `~/bin/foodbank-charity-wrangler` so
+      it never passed through a conversation. Confirmed present on both via `secret list`. That
+      wrapper runs any wrangler command against the charity account (Keychain token, pinned account
+      id): a plain `wrangler … --env production` on this machine goes to the **personal** account,
+      which on 2026-09-25 created a stray `api` Worker there holding the key — deleted the same day.
+- [x] **[Pete, 2026-09-25]** Set `SMS_LIVE_NUMBERS` (the testers' numbers) on `uat`. Required before
+      the key there: the code UAT is currently running treats a key with no list as texting
+      everyone. From the fix of 2026-09-25 onwards a non-production environment with no list texts
+      nobody.
+- [ ] **[Pete]** `SMS_SENDER` — deliberately unset for now: the reply number still serves the
+      existing process. Until it is set the key is inert (the provider is only wired when key and
+      sender are both present): UAT simulates every send, production records every reminder as a
+      failure. Setting it is the switchover, and needs the TheSMSWorks webhook item above done
+      first so replies reach `POST /webhooks/sms`.
 
 ### 4. Bring the data across
 
