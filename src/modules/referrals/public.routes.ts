@@ -1,4 +1,6 @@
 import { Hono, type Context } from 'hono';
+import { createConfigurationReleasesRepository } from '../configuration-releases/configuration-releases.repository.ts';
+import { createConfigurationReleasesService } from '../configuration-releases/configuration-releases.service.ts';
 import type { AppEnv } from '../../http/types.ts';
 import { parseJsonBody } from '../../http/validate.ts';
 import { rateLimit } from '../../http/middleware/rate-limit.ts';
@@ -67,5 +69,10 @@ function serviceFor(c: Context<AppEnv>) {
     referrersService: createReferrersService({ repository: referrers, clock }),
     pickLists: createPickListsRepository(db),
     voucherConfig: createVoucherConfigRepository(db),
+    releases: createConfigurationReleasesService({
+      db,
+      clock,
+      repository: createConfigurationReleasesRepository(db),
+    }),
   });
 }

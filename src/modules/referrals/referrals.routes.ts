@@ -3,6 +3,8 @@ import { UnauthorizedError } from '../../core/errors.ts';
 import type { Actor } from '../../core/actor.ts';
 import { requireAuth, requireRole } from '../../http/middleware/require-auth.ts';
 import { parseJsonBody, parseOptionalJsonBody, parseOrThrow } from '../../http/validate.ts';
+import { createConfigurationReleasesRepository } from '../configuration-releases/configuration-releases.repository.ts';
+import { createConfigurationReleasesService } from '../configuration-releases/configuration-releases.service.ts';
 import type { AppEnv } from '../../http/types.ts';
 import { createPickListsRepository } from '../pick-lists/pick-lists.repository.ts';
 import { createReferrersRepository } from '../referrers/referrers.repository.ts';
@@ -29,6 +31,7 @@ import {
   acceptReferralSchema,
   cancelReferralSchema,
   copyReferralSchema,
+  reReferralSchema,
   firstTimeReviewSchema,
   referralAdminAmendSchema,
   referralListQuerySchema,
@@ -213,6 +216,24 @@ export function referralRoutes(): Hono<AppEnv> {
   });
 
   /**
+   * A copy made on today's form, for a household whose referral was made
+   * under an earlier release — `copy` refuses those with a `409`. `{id}` is
+   * the referral being copied from, which decides eligibility and supplies the
+   * referrer; the body is the administrator's completed form. `201` with the
+   * new referral. See `reRefer` in the service.
+   */
+  routes.post('/referrals/:id/re-refer', ...admins, async (c) => {
+    const input = await parseJsonBody(c, reReferralSchema);
+    const actor = actorOf(c);
+    const service = serviceFor(c);
+
+    const source = await service.getReferral(c.req.param('id'));
+    const created = await service.reRefer(source, input, actor);
+
+    return c.json(await oneReferral(service, created, actor), 201);
+  });
+
+  /**
    * The two halves of deciding a referral that arrived from an unrecognised
    * address. Both refuse anything that is not waiting to be reviewed.
    *
@@ -349,5 +370,10 @@ function serviceFor(c: Context<AppEnv>) {
     referrersService: createReferrersService({ repository: referrers, clock }),
     pickLists: createPickListsRepository(db),
     voucherConfig: createVoucherConfigRepository(db),
+    releases: createConfigurationReleasesService({
+      db,
+      clock,
+      repository: createConfigurationReleasesRepository(db),
+    }),
   });
 }

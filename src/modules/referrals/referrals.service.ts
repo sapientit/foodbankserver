@@ -45,7 +45,12 @@ import {
   type ListenerSheetVoucherContext,
   type ReferralOutcome,
 } from './referrals.mapper.ts';
-import type { ReferralAmend, ReferralSearch, ReferralSubmission } from './referrals.schema.ts';
+import type {
+  ReferralAmend,
+  ReferralSearch,
+  ReferralSubmission,
+  ReReferral,
+} from './referrals.schema.ts';
 
 export interface ReferralsServiceDeps {
   readonly db: Database;
@@ -67,8 +72,19 @@ export interface ReferralsServiceDeps {
    * derived from. Never written here.
    */
   readonly voucherConfig: VoucherConfigRepository;
+  readonly releases: ReleaseLookup;
   readonly clock: Clock;
   readonly logger: Logger;
+}
+
+/**
+ * The two things this module needs from `configuration-releases`, reached
+ * through its service rather than its repository. Which release a referral
+ * was filled in under is recorded here; what the release says is never read.
+ */
+export interface ReleaseLookup {
+  currentFormId(): Promise<string>;
+  assertSubmittable(formId: string): Promise<void>;
 }
 
 /**
@@ -131,6 +147,7 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     voucherConfig,
     clock,
     logger,
+    releases,
   } = deps;
 
   async function getReferral(id: string): Promise<Referral> {
@@ -692,9 +709,10 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
    * `assertBookingCutoffNotPassed` and `assertDeliveryCapacityAvailable`.
    * `move` and `copy` share only `assertSessionAccepts` with this.
    *
-   * The dynamic answers are **not** a fifth gate. The referral form is client
-   * configuration, so the server holds no definition to check them against and
-   * stores what it is given.
+   * The dynamic answers are **not** a fifth gate. The server keeps the form's
+   * releases but never reads them, so it has nothing it will check answers
+   * against and stores what it is given. It records only *which* release they
+   * were given to: the one the form names, or the one in use if it names none.
    */
   async function submit(input: ReferralSubmission): Promise<Referral> {
     const authorisation = await referrersService.checkAuthorisation(input.referrerEmail);
@@ -706,6 +724,14 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     const reason = await referrers.findActiveReasonById(input.reasonId);
     if (reason === undefined) {
       throw new UnprocessableError('That reason for referral is no longer offered');
+    }
+
+    let formId: string;
+    if (input.formId === undefined) {
+      formId = await releases.currentFormId();
+    } else {
+      await releases.assertSubmittable(input.formId);
+      formId = input.formId;
     }
 
     const now = clock.nowIso();
@@ -750,6 +776,7 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
       refereePostcodeNormalised: normalisePostcode(input.refereePostcode),
       refereePhoneNormalised: refereePhone === null ? null : normalisePhone(refereePhone),
       answersJson: JSON.stringify(input.answers),
+      formId,
       piiPurgedAt: null,
       createdByUserId: null,
       createdAt: now,
@@ -1382,6 +1409,29 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
   }
 
   /**
+   * Copy's eligibility, shared with `reRefer`: only a referral that can no
+   * longer come to anything. See `copy` for why.
+   */
+  async function assertCopyable(referral: Referral): Promise<void> {
+    // First, and on its own: a forgotten referral has nothing left to copy, so
+    // there is no point asking what became of the household.
+    assertNotPurged(referral);
+
+    const outcome = await outcomeFor(referral.id);
+
+    const finishedWith =
+      referral.status === 'cancelled' ||
+      referral.status === 'rejected' ||
+      outcome === 'no_show' ||
+      outcome === 'attended';
+    if (!finishedWith) {
+      throw new ConflictError(
+        'That referral can still be completed, so it is moved rather than copied',
+      );
+    }
+  }
+
+  /**
    * Copies a referral that came to nothing onto a later session, so a
    * household can be given another chance. `INITIAL_SPEC1.txt`,
    * `#Copying a referral`.
@@ -1441,20 +1491,17 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     acknowledgeOverCapacity: boolean,
     actor: Actor,
   ): Promise<Referral> {
-    // First, and on its own: a forgotten referral has nothing left to copy, so
-    // there is no point asking what became of the household.
-    assertNotPurged(referral);
+    await assertCopyable(referral);
 
-    const outcome = await outcomeFor(referral.id);
-
-    const finishedWith =
-      referral.status === 'cancelled' ||
-      referral.status === 'rejected' ||
-      outcome === 'no_show' ||
-      outcome === 'attended';
-    if (!finishedWith) {
+    // A copy carries the original's answers, and they only mean what they
+    // meant under the release they were given to. Once any newer release is in
+    // use — even one that changed only the rules — the household is asked
+    // again on today's form, through `reRefer`. Guessing which old answers
+    // still apply is worse than asking. `INITIAL_SPEC1.txt`,
+    // `#Copying a referral`.
+    if (referral.formId !== (await releases.currentFormId())) {
       throw new ConflictError(
-        'That referral can still be completed, so it is moved rather than copied',
+        'The referral form has changed since this referral was made, so it must be reviewed on the current form rather than copied',
       );
     }
 
@@ -1500,6 +1547,8 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
       refereePostcodeNormalised: normalisePostcode(referral.refereePostcode),
       refereePhoneNormalised: refereePhone === null ? null : normalisePhone(refereePhone),
       answersJson: referral.answersJson,
+      // The same release, which the check above has just said is the one in use.
+      formId: referral.formId,
       // Replaces rather than extends: a copy is a fresh start on what the
       // office knows about the household, and an administrator who wants the
       // old note reads the referral it was written on. The date is the
@@ -1537,6 +1586,110 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     return getReferral(copyId);
   }
 
+  /**
+   * A copy made on today's form: what an administrator submits after checking
+   * a household through when the form has changed since their referral.
+   * `INITIAL_SPEC1.txt`, `#Copying a referral`.
+   *
+   * `source` is the referral being copied from. It decides eligibility — the
+   * same as `copy`'s — and supplies the referrer, who is carried forward
+   * unchanged rather than supplied again. Everything about the household comes
+   * from the form the administrator submitted, and the answers are stored as
+   * sent, unchecked, like every other referral's.
+   *
+   * Otherwise made exactly as a copy is: `reviewed` with no comment, timestamped
+   * now, `authorisedReferrerId` null, the same administrators' note, and the
+   * same over-capacity warning. Allowed whether or not the source's release is
+   * still the one in use — an administrator may choose to go through the form
+   * again anyway.
+   *
+   * **The release is always the one in use**, never one the caller names: that
+   * is the form the administrator has just filled in. Read before the insert
+   * rather than inside it, so a publish landing in between records this under
+   * the release that was current a moment ago — the one the administrator's
+   * screen actually showed.
+   *
+   * **A reason the charity has retired is refused**, unlike `copy`, which
+   * carries one across. Here the administrator is choosing the reason again on
+   * today's form, the same as `submit` and `applyAmendment` do. That is a guess
+   * — `x-assumed` on the route.
+   *
+   * Not idempotent, the same as `copy`: the charity does not want either guarded.
+   */
+  async function reRefer(source: Referral, input: ReReferral, actor: Actor): Promise<Referral> {
+    await assertCopyable(source);
+    await assertSessionAccepts(input.sessionId, input.acknowledgeOverCapacity);
+
+    const reason = await referrers.findActiveReasonById(input.reasonId);
+    if (reason === undefined) {
+      throw new UnprocessableError('That reason for referral is no longer offered');
+    }
+
+    const formId = await releases.currentFormId();
+    const now = clock.nowIso();
+    const referralId = crypto.randomUUID();
+    const refereePhone = input.refereePhone ?? null;
+
+    const reReferred: NewReferral = {
+      id: referralId,
+      sessionId: input.sessionId,
+      status: 'reviewed',
+      referredAt: now,
+      cancelledAt: null,
+      cancelledReason: null,
+      reviewComment: null,
+      reviewedByUserId: actor.userId,
+      referrerOrganisation: source.referrerOrganisation,
+      authorisedReferrerId: null,
+      adults: input.adults,
+      children: input.children,
+      isDelivery: input.collectionMethod === 'delivery' ? 1 : 0,
+      collectionMethod: input.collectionMethod,
+      reasonId: input.reasonId,
+      needsFuelHelp: input.needsFuelHelp ? 1 : 0,
+      referrerName: source.referrerName,
+      referrerEmail: source.referrerEmail,
+      referrerPhone: source.referrerPhone,
+      refereeFirstName: input.refereeFirstName,
+      refereeSurname: input.refereeSurname,
+      refereeDateOfBirth: input.refereeDateOfBirth,
+      refereeAddress: input.refereeAddress,
+      refereePostcode: input.refereePostcode,
+      refereePhone,
+      refereePostcodeNormalised: normalisePostcode(input.refereePostcode),
+      refereePhoneNormalised: refereePhone === null ? null : normalisePhone(refereePhone),
+      answersJson: JSON.stringify(input.answers),
+      formId,
+      adminInfo: `Copied from referral dated ${instantToLondonWallClock(source.referredAt).date}`,
+      smsReminderSentAt: null,
+      piiPurgedAt: null,
+      createdByUserId: actor.userId,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    await db.batch([
+      repository.buildInsertReferral(reReferred),
+      repository.buildAudit({
+        id: crypto.randomUUID(),
+        occurredAt: now,
+        actorKind: 'user',
+        actorUserId: actor.userId,
+        entityType: 'referral',
+        entityId: referralId,
+        action: 're_referred',
+        detailJson: JSON.stringify({ copiedFromReferralId: source.id }),
+      }),
+    ]);
+
+    logger.info('referral re-referred', {
+      referralId,
+      sessionId: input.sessionId,
+      userId: actor.userId,
+    });
+    return getReferral(referralId);
+  }
+
   return {
     submit,
     listenerSheet,
@@ -1551,6 +1704,7 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     cancel,
     move,
     copy,
+    reRefer,
     outcomeFor,
     repeatReferralSummary,
     listRepeatReferralsFor,

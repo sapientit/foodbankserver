@@ -29,8 +29,8 @@ const plainDate = z.string().refine(isPlainDate, 'must be a real YYYY-MM-DD date
 /**
  * The dynamic answers, stored exactly as sent.
  *
- * The referral form is client configuration, so the server holds no definition
- * to validate against and does not try to — it takes what it is given. The
+ * The server keeps the form's releases but never reads them, so it has no
+ * definition to validate against and does not try to — it takes what it is given. The
  * only checks here are on **size**, because this arrives on an unauthenticated
  * write and an unbounded blob is a storage vector rather than a referral.
  * These are limits on the request, not rules about the form.
@@ -77,8 +77,8 @@ export const referralSubmissionSchema = z.object({
   /**
    * The household as two counts, and the server has no opinion about how the
    * client arrived at them. Whatever the form asks — age bands or anything
-   * else — is the client's form definition to hold and the client's rules to
-   * apply; what reaches here is the operational pair everything downstream
+   * else — is the client's to define and the client's rules to apply; what
+   * reaches here is the operational pair everything downstream
    * speaks: the 5x6 grid, the parcel snapshot, `familySize`.
    *
    * At least one adult: the household grid starts at one adult, so a
@@ -103,6 +103,14 @@ export const referralSubmissionSchema = z.object({
   needsFuelHelp: z.boolean().default(false),
 
   answers: answers.default({}),
+
+  /**
+   * The release of the form the referrer filled in, as the public form loaded
+   * it. Optional, and never refused for being absent: a referral that does not
+   * say is recorded under the release in use when it arrives.
+   * `INITIAL_SPEC1.txt`, `#referral`.
+   */
+  formId: z.uuid().optional(),
 });
 
 export type ReferralSubmission = z.infer<typeof referralSubmissionSchema>;
@@ -127,8 +135,8 @@ export type ReferralSubmission = z.infer<typeof referralSubmissionSchema>;
  * send one corrected field without restating the rest. **`answers` is the
  * exception**: it replaces the stored set outright rather than merging, because
  * the client holds the form and a key it omits has been removed. Which answer
- * counts as "other information" is the client's to know — the server holds no
- * form definition and does not police which key moved.
+ * counts as "other information" is the client's to know — the server keeps
+ * the form's releases but never reads them, and does not police which key moved.
  */
 export const referralAmendSchema = z.object({
   refereeFirstName: personName.optional(),
@@ -214,6 +222,37 @@ export const copyReferralSchema = z.strictObject({
   sessionId: z.uuid(),
   acknowledgeOverCapacity: z.boolean().default(false),
 });
+
+/**
+ * `POST /referrals/{id}/re-refer` — today's form, filled in by an administrator
+ * for a household whose original referral was made under an earlier release.
+ * `INITIAL_SPEC1.txt`, `#Copying a referral`.
+ *
+ * Unlike a copy it carries the household, because the whole point is that an
+ * administrator has checked it through on the current form. **The referrer
+ * does not**: who sent the household is carried from the original unchanged,
+ * the same as a copy, and is not the administrator's to supply.
+ *
+ * **`formId` is refused rather than ignored.** The server always records the
+ * release in use; a client that thinks it is choosing one should find out now
+ * rather than have it silently dropped.
+ */
+export const reReferralSchema = referralSubmissionSchema
+  .omit({
+    referrerName: true,
+    referrerEmail: true,
+    referrerOrganisation: true,
+    referrerPhone: true,
+    formId: true,
+  })
+  .extend({
+    acknowledgeOverCapacity: z.boolean().default(false),
+    formId: z
+      .never({ error: 'formId is not accepted: the server records the release in use' })
+      .optional(),
+  });
+
+export type ReReferral = z.infer<typeof reReferralSchema>;
 
 /**
  * The administrator's note on why a referral was let through or turned away.

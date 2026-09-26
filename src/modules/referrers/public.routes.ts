@@ -10,8 +10,8 @@ import { toReferralReasonResponse } from './referrers.mapper.ts';
 /**
  * Unauthenticated. A referrer uses these before they have any credentials.
  *
- * The questions on the referral form are not served here — the form is client
- * configuration. The reason dropdown still is, because it is a maintained
+ * The questions on the referral form are not served here — the server keeps
+ * the form's releases but never reads them. The reason dropdown still is, because it is a maintained
  * lookup the referral itself points at by id.
  */
 export function publicReferrerRoutes(): Hono<AppEnv> {

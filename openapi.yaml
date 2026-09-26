@@ -66,6 +66,12 @@ tags:
     description: >-
       The one Christmas-voucher date range an administrator maintains. Admin
       only, reading included.
+  - name: Configuration releases
+    description: >-
+      The referral form and its preference rules, published by an administrator
+      as one release. The server stores and serves each release exactly as
+      uploaded and never reads it. Admin only, except the bulk read (admin,
+      team lead and fuel administrator) and the public questionnaire.
   - name: Target stock lists
     description: >-
       Named standing target stock lists an administrator maintains, and a team
@@ -412,9 +418,8 @@ paths:
         Active options only, in display order, for the dropdown on the referral
         form.
 
-        **The questions on the form are not served here.** The referral form is
-        client configuration: it ships with the application, is seen in the test
-        system first, and goes live when a new version of the client does. The
+        **The questions on the form are not served here** — they come from
+        `GET /public/questionnaire`, the release in use. The
         reason list stays on the server because it is a maintained lookup the
         referral points at by `reasonId`.
       security: []
@@ -583,7 +588,9 @@ paths:
                       details: { deliveryCapacity: 8, booked: 8 }
                       requestId: 8f14e45f-0c1e-4a3b-9f2a-2d6b7e1a9c3d
         '422':
-          description: The chosen reason is no longer offered
+          description: >-
+            The chosen reason is no longer offered, or `formId` names a release
+            that does not exist or is still a draft
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
@@ -594,6 +601,40 @@ paths:
                       code: UNPROCESSABLE
                       message: That reason for referral is no longer offered
                       requestId: 8f14e45f-0c1e-4a3b-9f2a-2d6b7e1a9c3d
+                unknownForm:
+                  value:
+                    error:
+                      code: UNPROCESSABLE
+                      message: formId does not name a published referral form
+                      requestId: 8f14e45f-0c1e-4a3b-9f2a-2d6b7e1a9c3d
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/public/questionnaire:
+    get:
+      tags: [Public]
+      summary: The referral form in use
+      description: |
+        The questionnaire of the release in use, and its `formId`. Load it once
+        when the form opens, keep `formId` with the in-progress form, and send
+        it back on `POST /public/referrals`.
+
+        **`questionnaire` is a string**: the JSON document exactly as uploaded,
+        byte for byte. `JSON.parse` it yourself. The server never parses it,
+        and returning it re-serialised would change the bytes the uploader's
+        hash describes.
+
+        **The rules are never returned here.** They are not for the public.
+      security: []
+      responses:
+        '200':
+          description: The questionnaire in use
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PublicQuestionnaire' }
+        '404':
+          description: >-
+            No release is published — cannot happen once migration `0040` has
+            run, which seeds one
         '429': { $ref: '#/components/responses/RateLimited' }
 
   /api/v1/public/organisations:
@@ -1040,9 +1081,9 @@ paths:
         historic session date and nothing else about the referral.
 
         `answers` is the referral's dynamic answers **whole and unfiltered**, and
-        **the client chooses which of them belong on the sheet**: its referral
-        form marks them, because the client owns that definition and the server
-        holds none. Naming keys here would be a guess rather than a contract —
+        **the client chooses which of them belong on the sheet**: the referral's
+        release (`formId`) marks them, and the server keeps releases but never
+        reads them. Naming keys here would be a guess rather than a contract —
         and a guess that goes stale, since the charity renames its questions.
         **Who is on it: the households coming to the session in person.**
         `pending_review`, `active` and `reviewed` alike — whether an
@@ -1997,6 +2038,16 @@ paths:
         Unlike `POST /public/referrals` there is **no Turnstile token** — this
         is authenticated, and nothing on it was typed by a member of the public.
 
+        **A referral made under an earlier release is a `409`, and nothing is
+        created.** Once any newer release of the form has been published — even
+        one that changed only the rules — the household is asked again on
+        today's form: open the current questionnaire pre-filled with what
+        cannot have changed, let the administrator check it through, and submit
+        it to `POST /referrals/{id}/re-refer`. Compare the referral's `formId`
+        with the release in use before offering Copy; this `409` is the
+        backstop for a stale screen or a publish mid-session.
+        `INITIAL_SPEC1.txt`, `#Copying a referral`.
+
         **Copying is not idempotent and nothing stops a second copy.** A
         double-clicked button, or a retried request, produces two referrals for
         the same household on the same session — two places held and two parcels
@@ -2034,9 +2085,106 @@ paths:
         '409':
           description: >-
             The referral can still be completed so it should be moved rather
-            than copied, the referral's details have been forgotten, or the
-            target session is cancelled, confirmed, or full and not
-            acknowledged
+            than copied, the referral's details have been forgotten, it was
+            made under a release of the form that is no longer in use (review
+            it through `re-refer` instead), or the target session is
+            cancelled, confirmed, or full and not acknowledged
+
+  /api/v1/referrals/{id}/re-refer:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    post:
+      tags: [Referrals]
+      summary: Copy a referral on today's form, after an administrator has reviewed it
+      description: |
+        Admin only. What Copy becomes once the form has changed since the
+        original was made: the administrator fills in the **current**
+        questionnaire for the household and this creates the new referral from
+        it. `INITIAL_SPEC1.txt`, `#Copying a referral`.
+
+        `{id}` is the referral being copied **from**. It decides eligibility —
+        exactly `copy`'s: its `status` is `cancelled` or `rejected`, or its
+        `outcome` is `no_show` or `attended`, and its details have not been
+        forgotten; anything else is a `409` — and it supplies the referrer's
+        name, organisation, email and phone, carried forward unchanged. The
+        body is the rest of the completed form.
+
+        Allowed whether or not the original's release is still the one in use.
+
+        **`formId` is not a request field and is refused (`400`) if sent.**
+        The new referral is always recorded under the release in use — the one
+        the administrator has just filled in. It is in the response.
+
+        `answers` is stored exactly as sent and never checked against the
+        questionnaire, the same as everywhere else.
+
+        Stamped exactly as a copy is: `status: "reviewed"`, `reviewComment:
+        null`, `referredAt` now, `adminInfo` set to `Copied from referral dated
+        YYYY-MM-DD` (the **original's** submission date, `Europe/London`).
+        Capacity is warned about, never refused: send `acknowledgeOverCapacity:
+        true`. No Turnstile. **Not idempotent** — guard the submit button
+        against a double press, as for Copy.
+      x-assumed: >-
+        A reason for referral the charity has retired is refused with a `422`,
+        as for a new submission or a correction — the administrator is
+        choosing the reason again on today's form. Copy, by contrast, carries a
+        retired reason across. Not stated by the spec.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                [
+                  sessionId,
+                  reasonId,
+                  refereeFirstName,
+                  refereeSurname,
+                  refereeDateOfBirth,
+                  refereeAddress,
+                  refereePostcode,
+                  adults,
+                  children,
+                  collectionMethod,
+                ]
+              properties:
+                sessionId: { type: string, format: uuid }
+                acknowledgeOverCapacity: { type: boolean, default: false }
+                reasonId: { type: string, format: uuid }
+                refereeFirstName: { type: string, minLength: 1, maxLength: 100 }
+                refereeSurname: { type: string, minLength: 1, maxLength: 100 }
+                refereeDateOfBirth: { type: string, format: date }
+                refereeAddress: { type: string, minLength: 1, maxLength: 500 }
+                refereePostcode: { type: string, minLength: 2, maxLength: 12 }
+                refereePhone: { type: string, minLength: 5, maxLength: 30 }
+                adults: { type: integer, minimum: 1, maximum: 30 }
+                children: { type: integer, minimum: 0, maximum: 30 }
+                collectionMethod:
+                  type: string
+                  enum: [collection, delivery, referrer_collect]
+                needsFuelHelp: { type: boolean, default: false }
+                answers:
+                  type: object
+                  additionalProperties: true
+                  maxProperties: 100
+                  description: >-
+                    Keyed by the current release's question keys. Same bounds
+                    as `ReferralSubmission.answers`.
+      responses:
+        '201':
+          description: The new referral. The original is unchanged.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Referral' }
+        '400': { description: Invalid body, including any `formId` }
+        '404':
+          description: No such referral, or no such target session
+        '409':
+          description: >-
+            The original can still be completed, its details have been
+            forgotten, or the target session is cancelled, confirmed, or full
+            and not acknowledged
+        '422': { description: The chosen reason is no longer offered }
 
   # ------------------------------------------------------------------- sms --
   /api/v1/sessions/{sessionId}/sms-reminders:
@@ -3325,6 +3473,171 @@ paths:
         '400': { description: '`endDate` is before `startDate`' }
 
   # ------------------------------------------------------ target stock lists --
+  # ------------------------------------------------ configuration releases --
+  /api/v1/configuration-releases:
+    get:
+      tags: [Configuration releases]
+      summary: Every release, newest first, without content
+      description: >-
+        Admin only. The history of uploads, publishes and rollbacks: status,
+        manifest and who did what. `questionnaire` and `rules` are left out —
+        fetch those through `/configuration-releases/bulk`. The full record of
+        every publish and rollback is kept on the server; `publishedAt` /
+        `publishedByUserId` here are the **most recent** one.
+      responses:
+        '200':
+          description: Releases, newest upload first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ConfigurationReleaseSummary' }
+    post:
+      tags: [Configuration releases]
+      summary: Upload a release as a draft
+      description: |
+        Admin only. Stores the questionnaire and rules **together** as a new
+        `draft`, exactly as sent, and returns it with its new `formId`. A draft
+        changes nothing until it is published. More than one draft can exist;
+        there is no deleting one.
+
+        **Nothing is validated.** `questionnaire` and `rules` are strings holding
+        the JSON documents — they are not parsed, not checked as JSON, and
+        returned byte for byte. The hashes are stored for audit and never
+        recomputed. All checking happens in the uploader before this call, and
+        in the client when it loads a release.
+      x-assumed: >-
+        `questionnaire` and `rules` are capped at 500,000 characters each, as a
+        bound on what one row holds. Today's documents are about 30,000.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConfigurationReleaseUpload' }
+      responses:
+        '201':
+          description: The new draft
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConfigurationRelease' }
+        '400': { description: A field is missing or too long }
+
+  /api/v1/configuration-releases/config:
+    get:
+      tags: [Configuration releases]
+      summary: Which configuration workbook, and which Google OAuth client
+      description: |
+        **Admin only.** What the publish screen needs before it can read the
+        charity's configuration workbook from the browser: the workbook's id
+        and the public OAuth client to ask Sheets consent against — the
+        **same** client as `GET /extracts/config`.
+
+        **The server never reads the workbook** and holds no Google credential.
+        Neither value is a secret. The workbook is the **same in every
+        environment**, deliberately, and is never the extract spreadsheet.
+
+        `configured: false` means the deployment has not set both;
+        `spreadsheetId` and `googleClientId` are then absent. Say so rather
+        than starting a flow that cannot finish.
+      responses:
+        '200':
+          description: The workbook configuration
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkbookConfig' }
+        '403':
+          description: The caller is not an administrator
+
+  /api/v1/configuration-releases/bulk:
+    get:
+      tags: [Configuration releases]
+      summary: Several releases, in full
+      description: |
+        Admin, team lead and fuel administrator. The releases a screen needs to
+        render answers or evaluate rules: collect the distinct `formId`s of the
+        referrals in front of you and ask for them in one call. The picking
+        list and the fuel help list both show answers, which mean nothing
+        without the questions they answered.
+
+        Any status is returned, drafts included. An id that names no release is
+        **left out** of the result rather than failing the call — check what
+        came back.
+
+        **A fuel administrator is given no `rules`** — the key is absent, not
+        null. Their screen labels answers and never evaluates a rule. Admin and
+        team lead get both documents.
+      x-assumed: >-
+        At most 50 ids per call. A screen needs the handful of releases its
+        referrals were made under, never an unbounded list.
+      parameters:
+        - name: formIds
+          in: query
+          required: true
+          description: >-
+            Comma-separated release ids, 1 to 50, each a UUID. Duplicates are
+            ignored. More than 50, or anything not a UUID, is a `400` before
+            anything is read.
+          schema: { type: string }
+      responses:
+        '200':
+          description: The releases found
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [releases]
+                properties:
+                  releases:
+                    type: array
+                    items: { $ref: '#/components/schemas/ConfigurationRelease' }
+        '400': { description: Missing, malformed or too many ids }
+
+  /api/v1/configuration-releases/{formId}/publish:
+    parameters: [{ $ref: '#/components/parameters/FormId' }]
+    post:
+      tags: [Configuration releases]
+      summary: Publish a draft
+      description: |
+        Admin only. No body. Makes this draft the release in use and retires
+        the one before it to `superseded`, in one step: there is never a moment
+        with no release in use or with two. The content is not looked at.
+
+        Only a `draft` can be published. To bring back an earlier release, use
+        `rollback` — a `superseded` release never goes through `publish`.
+      responses:
+        '200':
+          description: The release, now `published`
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConfigurationRelease' }
+        '404': { description: No such release }
+        '409':
+          description: >-
+            The release is not a draft, or changed state while the request was
+            being made
+
+  /api/v1/configuration-releases/{formId}/rollback:
+    parameters: [{ $ref: '#/components/parameters/FormId' }]
+    post:
+      tags: [Configuration releases]
+      summary: Go back to an earlier release
+      description: >-
+        Admin only. No body. Publishes a `superseded` release again, retiring
+        the one in use, in the same single step as `publish`, and recorded as a
+        rollback rather than a publish. Only a `superseded` release can be
+        rolled back to — the one already in use is a `409`, and so is a draft.
+      responses:
+        '200':
+          description: The release, now `published`
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConfigurationRelease' }
+        '404': { description: No such release }
+        '409':
+          description: >-
+            The release is not superseded, or changed state while the request
+            was being made
+
   /api/v1/target-stock-lists:
     get:
       tags: [Target stock lists]
@@ -3475,8 +3788,8 @@ paths:
 
         **Preference lines are optional and belong to the client.** The body may
         carry the stock items your own preference rules resolved, per referral —
-        the server holds no form definition and never reads your rule
-        configuration. They are merged into the parcels **this call creates**,
+        the server stores the rules in each release but never reads them;
+        evaluate each referral with its own release's rules. They are merged into the parcels **this call creates**,
         and a preference asks for *at least* its quantity: where the model
         parcel already contains the item, the higher of the two wins, so a
         preference can never cut a larger household's share. Send the whole
@@ -4291,6 +4604,11 @@ components:
       name: sessionId
       required: true
       schema: { type: string, format: uuid }
+    FormId:
+      in: path
+      name: formId
+      required: true
+      schema: { type: string, format: uuid }
     StockOrder:
       in: query
       name: order
@@ -4695,14 +5013,24 @@ components:
             delivery address. `referrer_collect` is the referrer collecting
             on the referee's behalf, and counts as a collection everywhere
             that matters — a session's delivery capacity does not see it.
+        formId:
+          type: string
+          format: uuid
+          description: >-
+            The release the form was filled in under — the `formId` from `GET
+            /public/questionnaire`, kept with the in-progress form. Optional:
+            a referral without one is recorded under the release in use when it
+            arrives, and is **never refused for leaving it out**. A release that
+            has since been superseded is accepted (a form loaded just before a
+            publish is still a real form); an unknown id or a draft is a `422`.
         answers:
           type: object
           description: >
-            The dynamic answers, keyed by the question keys in **your** form
-            configuration. The server holds no form definition and does not
-            validate these against anything — it stores what you send and
-            returns it unchanged, so the keys and their meaning are yours to
-            keep stable.
+            The dynamic answers, keyed by the question keys of the release
+            named by `formId`. The server keeps releases but never reads them,
+            so it does not validate these against anything — it stores what you
+            send and returns it unchanged, so the keys and their meaning are
+            yours to keep stable.
 
             Bounded only for storage safety, because this is an unauthenticated
             write: at most 100 keys, keys at most 60 characters, and at most
@@ -4809,8 +5137,11 @@ components:
         one-field correction stays a one-field request. `answers` is the
         exception: it **replaces** the stored set rather than merging into it,
         because you hold the form and a key you omit has been removed. Which key
-        counts as "other information" is yours to know — the server holds no
-        form definition and does not police which of them changed.
+        counts as "other information" is yours to know — the server never
+        reads the form and does not police which of them changed.
+        **A correction never changes `formId`**: the answers are corrected on
+        the form the household answered, so render and edit them with that
+        release even when a newer one is in use.
 
         **The referrer's own details are not here and cannot be amended.**
         `referrerEmail` above all: it is what the authorisation decision was
@@ -5530,6 +5861,7 @@ components:
           refereePostcode,
           refereePhone,
           answers,
+          formId,
           piiPurgedAt,
         ]
       properties:
@@ -5592,6 +5924,16 @@ components:
         refereeAddress: { type: [string, 'null'] }
         refereePostcode: { type: [string, 'null'] }
         refereePhone: { type: [string, 'null'] }
+        formId:
+          type: [string, 'null']
+          format: uuid
+          description: >-
+            The release of the referral form these answers were given to.
+            Render `answers` with **that** release's questionnaire (and, when
+            picking, its rules) from `GET /configuration-releases/bulk` — never
+            with whichever release is in use now. Null never in practice:
+            migration `0040` recorded every earlier referral under the
+            baseline release. The column is nullable, so the type says so.
         answers:
           type: object
           description: >
@@ -5989,6 +6331,7 @@ components:
           reason,
           needsFuelHelp,
           answers,
+          formId,
           firstTimeMarker,
           voucherInstruction,
         ]
@@ -6011,6 +6354,16 @@ components:
             nobody is identifiable. A reason the charity has since retired
             still appears, because the referral was made under it.
         needsFuelHelp: { type: boolean }
+        formId:
+          type: [string, 'null']
+          format: uuid
+          description: >-
+            The release of the referral form these answers were given to.
+            Render `answers` with **that** release's questionnaire (and, when
+            picking, its rules) from `GET /configuration-releases/bulk` — never
+            with whichever release is in use now. Null never in practice:
+            migration `0040` recorded every earlier referral under the
+            baseline release. The column is nullable, so the type says so.
         answers:
           type: object
           additionalProperties: true
@@ -6194,6 +6547,7 @@ components:
           referrerName,
           referrerOrganisation,
           answers,
+          formId,
           adminInfo,
         ]
       properties:
@@ -6229,6 +6583,16 @@ components:
             `NOT NULL` on the table and outside the PII block, so a purged
             referral still reports it. `referrerName` is unchanged and still
             returned.
+        formId:
+          type: [string, 'null']
+          format: uuid
+          description: >-
+            The release of the referral form these answers were given to.
+            Render `answers` with **that** release's questionnaire (and, when
+            picking, its rules) from `GET /configuration-releases/bulk` — never
+            with whichever release is in use now. Null never in practice:
+            migration `0040` recorded every earlier referral under the
+            baseline release. The column is nullable, so the type says so.
         answers:
           type: object
           additionalProperties: true
@@ -6236,8 +6600,8 @@ components:
             The referral's dynamic answers, whole and unfiltered, exactly as the
             listener sheet and a parcel hand them over. **The secondary cause of
             crisis and the additional crisis detail are in here**, under keys the
-            referral form owns — the server holds no form definition, does not
-            know which keys they are and will not guess. Extract them yourself,
+            referral form owns — the server never reads the form's releases, does
+            not know which keys they are and will not guess. Extract them yourself,
             the same arrangement as every other answer a sheet shows.
         adminInfo:
           type: [string, 'null']
@@ -6278,6 +6642,7 @@ components:
           refereePhone,
           needsFuelHelp,
           answers,
+          formId,
         ]
       properties:
         referralId: { type: string, format: uuid }
@@ -6320,6 +6685,16 @@ components:
             because the client form shows this question as a fixed field
             everywhere else it appears. Survives the PII purge, unlike the
             other fields on this row.
+        formId:
+          type: [string, 'null']
+          format: uuid
+          description: >-
+            The release of the referral form these answers were given to.
+            Render `answers` with **that** release's questionnaire (and, when
+            picking, its rules) from `GET /configuration-releases/bulk` — never
+            with whichever release is in use now. Null never in practice:
+            migration `0040` recorded every earlier referral under the
+            baseline release. The column is nullable, so the type says so.
         answers:
           type: object
           additionalProperties: true
@@ -6411,6 +6786,132 @@ components:
             Unlike an item line, allows one decimal place — a shopping run can
             reasonably ask for half a crate.
 
+    WorkbookConfig:
+      type: object
+      description: >-
+        The two values the publish screen needs. Neither is a secret, and
+        neither is a Google credential — the server has none.
+      required: [configured]
+      properties:
+        configured:
+          type: boolean
+          description: >-
+            False unless the deployment has set both. The other two fields are
+            then absent.
+        spreadsheetId:
+          type: string
+          description: The configuration workbook. The same in every environment.
+        googleClientId:
+          type: string
+          description: >-
+            The public Google OAuth client id to request Sheets consent
+            against — the same one the spreadsheet extract uses.
+
+    PublicQuestionnaire:
+      type: object
+      required: [formId, questionnaire]
+      properties:
+        formId: { type: string, format: uuid }
+        questionnaire:
+          type: string
+          description: The questionnaire JSON document, exactly as uploaded. Parse it yourself.
+
+    ConfigurationReleaseUpload:
+      type: object
+      required:
+        [
+          questionnaire,
+          rules,
+          questionnaireHash,
+          rulesHash,
+          generationId,
+          generatedAt,
+          sourceWorkbookId,
+        ]
+      properties:
+        questionnaire:
+          type: string
+          minLength: 1
+          maxLength: 500000
+          description: >-
+            The questionnaire JSON document as a string, exactly as generated.
+            Stored and returned byte for byte, never parsed.
+        rules:
+          type: string
+          minLength: 1
+          maxLength: 500000
+          description: The preference-rules JSON document as a string; as for `questionnaire`.
+        questionnaireHash: { type: string, minLength: 1, maxLength: 200 }
+        rulesHash: { type: string, minLength: 1, maxLength: 200 }
+        generationId: { type: string, minLength: 1, maxLength: 200 }
+        generatedAt:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: The manifest's generation time, stored as sent; no format is imposed.
+        sourceWorkbookId:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: For audit. An identifier, never a credential.
+
+    ConfigurationReleaseSummary:
+      type: object
+      required:
+        [
+          formId,
+          status,
+          questionnaireHash,
+          rulesHash,
+          generationId,
+          generatedAt,
+          sourceWorkbookId,
+          createdAt,
+          createdByUserId,
+          publishedAt,
+          publishedByUserId,
+        ]
+      properties:
+        formId: { type: string, format: uuid }
+        status:
+          type: string
+          enum: [draft, published, superseded]
+          description: >-
+            Exactly one release is `published` at any time. `draft` →
+            `published` by publish; `published` → `superseded` when another is
+            published; `superseded` → `published` by rollback.
+        questionnaireHash: { type: string }
+        rulesHash: { type: string }
+        generationId: { type: string }
+        generatedAt: { type: string }
+        sourceWorkbookId: { type: string }
+        createdAt: { type: string, format: date-time }
+        createdByUserId:
+          type: [string, 'null']
+          description: Null only for the baseline release the migration seeded.
+        publishedAt:
+          type: [string, 'null']
+          format: date-time
+          description: The most recent publish or rollback to this release; null for one never published.
+        publishedByUserId: { type: [string, 'null'] }
+
+    ConfigurationRelease:
+      description: >-
+        A release in full. `questionnaire` and `rules` are the JSON documents as
+        strings, exactly as uploaded — parse and validate them yourself before
+        use.
+      allOf:
+        - { $ref: '#/components/schemas/ConfigurationReleaseSummary' }
+        - type: object
+          required: [questionnaire]
+          properties:
+            questionnaire: { type: string }
+            rules:
+              type: string
+              description: >-
+                Always present, except in a fuel administrator's bulk read,
+                where it is left out.
+
     TargetStockList:
       type: object
       required: [id, name, lines]
@@ -6473,8 +6974,8 @@ components:
           description: >-
             The pick-list information as it should read on the sheet, composed
             by you from the answers your form marks as belonging there —
-            labels and all. The server holds no form definition, never inspects
-            an answer and never understands a question key; it stores exactly
+            labels and all. The server never reads the form's releases, never
+            inspects an answer and never understands a question key; it stores exactly
             what you send.
 
             Trimmed before it is measured, and it must not be empty once
@@ -6580,6 +7081,7 @@ components:
           attendance,
           notes,
           answers,
+          formId,
           firstTimeMarker,
           voucherInstruction,
           lines,
@@ -6625,6 +7127,16 @@ components:
             purge, in the same run as `answers` — see `x-assumed` on
             `PickListInformationEntry.notes` for the current gap between that
             and what the purge job actually does today.
+        formId:
+          type: [string, 'null']
+          format: uuid
+          description: >-
+            The release of the referral form these answers were given to.
+            Render `answers` with **that** release's questionnaire (and, when
+            picking, its rules) from `GET /configuration-releases/bulk` — never
+            with whichever release is in use now. Null never in practice:
+            migration `0040` recorded every earlier referral under the
+            baseline release. The column is nullable, so the type says so.
         answers:
           type: object
           additionalProperties: true

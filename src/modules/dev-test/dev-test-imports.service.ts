@@ -80,6 +80,8 @@ export interface DevTestImportsServiceDeps {
   readonly referrals: ReferralsRepository;
   readonly sessions: SessionsRepository;
   readonly referrers: ReferrersRepository;
+  /** Every imported referral is recorded under the release in use, like a public one naming none. */
+  readonly releases: { currentFormId(): Promise<string> };
   readonly clock: Clock;
   readonly logger: Logger;
 }
@@ -96,7 +98,7 @@ export interface ImportResult {
 }
 
 export function createDevTestImportsService(deps: DevTestImportsServiceDeps) {
-  const { db, repository, referrals, sessions, referrers, clock, logger } = deps;
+  const { db, repository, referrals, sessions, referrers, releases, clock, logger } = deps;
 
   async function importReferrals(
     input: ReferralImportRequest,
@@ -155,6 +157,7 @@ export function createDevTestImportsService(deps: DevTestImportsServiceDeps) {
       }
     }
 
+    const formId = await releases.currentFormId();
     const now = clock.nowIso();
     const created = input.referrals.map((referral, index) => {
       const referralId = crypto.randomUUID();
@@ -191,6 +194,7 @@ export function createDevTestImportsService(deps: DevTestImportsServiceDeps) {
         refereePostcodeNormalised: normalisePostcode(referral.refereePostcode),
         refereePhoneNormalised: refereePhone === null ? null : normalisePhone(refereePhone),
         answersJson: JSON.stringify(referral.answers),
+        formId,
         adminInfo: null,
         smsReminderSentAt: null,
         piiPurgedAt: null,

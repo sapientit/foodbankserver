@@ -423,13 +423,22 @@ households clamp into the corner.
 generated the contents are **copied** into `parcel_lines`. That copy is the entire immutability
 guarantee: a parcel already picked is unaffected by any later edit, and the next pick list picks the
 change up. A draft/publish lifecycle on top would be ceremony protecting something already
-protected.
+protected. (The referral form _is_ versioned, for a different reason — below: a referral's answers
+are read again long after they were given, so it has to keep the form they were given to.)
 
-## The referral form is not ours
+## The referral form is stored here, and never read here
 
-The questions ship with the frontend. This repo holds no form definition, no versioning and no
-publish flow, and **does not validate the answers** — `POST /public/referrals` stores what it is
-given. Answers are a JSON column, stored and returned verbatim, each carrying the key it was asked
+The questions and the preference rules are **configuration releases** (`configuration_releases`,
+migration `0040`): the charity maintains them in its workbook, an administrator uploads the two
+together as a `draft` and publishes it. Exactly one release is `published` — a partial unique index
+holds that — and publish and rollback swap the pointer in one guarded batch. A release's content
+never changes after insert; a correction is a new release. Every referral records the release it
+was filled in under (`referrals.form_id`), and is read with that release forever — a correction to
+its answers keeps it, and a copy is refused once a newer release is in use, in favour of re-referring
+on today's form. `INITIAL_SPEC1.txt`, `#referral` and `#Copying a referral`.
+
+**The server stores and serves releases as strings and never parses them**, and **does not
+validate the answers** — `POST /public/referrals` stores what it is given. Answers are a JSON column, stored and returned verbatim, each carrying the key it was asked
 under. The only checks are size bounds (`MAX_ANSWERS*` in `config/constants.ts`), which exist
 because the submission is unauthenticated.
 

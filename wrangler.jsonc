@@ -32,6 +32,12 @@
     // deployment can never write into the charity's real spreadsheet.
     "GOOGLE_SHEETS_SPREADSHEET_ID": "1gQK_ore1UOeHY_CwONpua307GUbh5J0_4zt90hlmcs8",
     "GOOGLE_OAUTH_CLIENT_ID": "643990075975-48flcohql0sc2cekh3940uscrqflrbnn.apps.googleusercontent.com",
+    // The charity's referral-form configuration workbook, read by an
+    // administrator's browser to publish a release. Not a secret. The SAME
+    // workbook in every environment, deliberately — unlike the extract
+    // spreadsheet above, which must differ. Blank would make the
+    // publish screen report itself unconfigured.
+    "CONFIGURATION_SPREADSHEET_ID": "1n2DFIwbFtWy3QeiOE9akSViMNz-Jc6qAg8iETyov5xI",
     // No sign-in client here: this deployment runs AUTH_MODE=dummy, and the
     // Google sign-in client set up 2026-09-21 is scoped to the uat
     // environment's own origin below, not this one's.
@@ -141,6 +147,12 @@
         // deployment can never write into the charity's real spreadsheet.
         "GOOGLE_SHEETS_SPREADSHEET_ID": "1gQK_ore1UOeHY_CwONpua307GUbh5J0_4zt90hlmcs8",
         "GOOGLE_OAUTH_CLIENT_ID": "643990075975-48flcohql0sc2cekh3940uscrqflrbnn.apps.googleusercontent.com",
+        // The charity's referral-form configuration workbook, read by an
+        // administrator's browser to publish a release. Not a secret. The SAME
+        // workbook in every environment, deliberately — unlike the extract
+        // spreadsheet above, which must differ. Blank would make the
+        // publish screen report itself unconfigured.
+        "CONFIGURATION_SPREADSHEET_ID": "1n2DFIwbFtWy3QeiOE9akSViMNz-Jc6qAg8iETyov5xI",
         // The sign-in client — a SEPARATE Google Cloud OAuth client from the
         // one above, created 2026-09-21 for this test deployment specifically
         // (its Authorised JavaScript origin is
@@ -205,6 +217,12 @@
         // unconfigured rather than failing at Google.
         "GOOGLE_SHEETS_SPREADSHEET_ID": "",
         "GOOGLE_OAUTH_CLIENT_ID": "",
+        // The charity's referral-form configuration workbook, read by an
+        // administrator's browser to publish a release. Not a secret. The SAME
+        // workbook in every environment, deliberately — unlike the extract
+        // spreadsheet above, which must differ. Blank would make the
+        // publish screen report itself unconfigured.
+        "CONFIGURATION_SPREADSHEET_ID": "1n2DFIwbFtWy3QeiOE9akSViMNz-Jc6qAg8iETyov5xI",
         // The sign-in client — see the top-level block's comment. A separate
         // Google Cloud OAuth client from the one above, scoped to production's
         // own origin once it has one. Blank means AUTH_MODE cannot be "google"

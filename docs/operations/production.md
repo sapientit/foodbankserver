@@ -281,6 +281,10 @@ configuration.**
    - `GOOGLE_OAUTH_CLIENT_ID` — the public OAuth client the browser requests Sheets consent
      against. It needs the Sheets scope and the frontend's origin as an authorised JavaScript
      origin; that setup is in the Google Cloud console, not here.
+   - `CONFIGURATION_SPREADSHEET_ID` — the charity's configuration workbook, which the publish
+     screen reads to publish a referral form release. **The same value in every environment**, and
+     never the extract spreadsheet. It uses the same `GOOGLE_OAUTH_CLIENT_ID`, so publishing needs
+     that set too.
 
    Both are blank in the production block until somebody fills them in, and blank means unset: the
    extract reports itself unconfigured and refuses rather than the Worker failing to boot.

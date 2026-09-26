@@ -11,6 +11,7 @@
  * - Enums are CHECK constraints, enumerated generously — SQLite cannot alter
  *   a CHECK constraint without rebuilding the table.
  */
+export * from './configuration-releases.ts';
 export * from './crates.ts';
 export * from './dev-test-imports.ts';
 export * from './jobs.ts';

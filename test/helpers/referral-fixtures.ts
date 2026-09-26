@@ -4,9 +4,15 @@ import { authHeaders, type TestApp } from './app.ts';
 /**
  * Shared setup for the referral tests: a session, a reason, a referrer.
  *
- * There is no form to set up. The referral form is client configuration, so the
- * server has nothing to publish and nothing to validate answers against.
+ * There is no form-shape to set up: the referral form is client configuration,
+ * and the server never validates an answer against it. What the server does
+ * hold is *which release* a referral was made under (`formId`) — migration
+ * `0040` seeds exactly one, published, release before any test runs, so a
+ * referral submitted without naming one is always recorded under this id
+ * unless a test has published a newer release first.
  */
+export const BASELINE_FORM_ID = '6f1d2c3a-8b4e-4f5a-9c7d-0e1f2a3b4c40';
+
 export interface ReferralWorld {
   readonly sessionId: string;
   readonly reasonId: string;

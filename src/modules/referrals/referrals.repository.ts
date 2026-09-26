@@ -160,6 +160,7 @@ export interface ReferralSearchCandidate {
    * the server never looks inside it. See `toReferralSearchResult`.
    */
   readonly answersJson: string | null;
+  readonly formId: string | null;
   /**
    * The administrators' own note about the household. Inside the PII block, so
    * the purge nulls it — and a purged referral cannot be reached by this
@@ -520,6 +521,7 @@ export function createReferralsRepository(db: Database) {
             referrerName: referrals.referrerName,
             referrerOrganisation: referrals.referrerOrganisation,
             answersJson: referrals.answersJson,
+            formId: referrals.formId,
             adminInfo: referrals.adminInfo,
           })
           .from(referrals)

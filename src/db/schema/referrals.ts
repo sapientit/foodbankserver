@@ -1,5 +1,6 @@
 import { relations, sql } from 'drizzle-orm';
 import { check, index, integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { configurationReleases } from './configuration-releases.ts';
 import { authorisedReferrers, referralReasons } from './referrers.ts';
 import { sessions } from './sessions.ts';
 import { users } from './users.ts';
@@ -262,7 +263,7 @@ export const referrals = sqliteTable(
     /**
      * Dynamic answers, stored exactly as the client sent them.
      *
-     * The referral form is client configuration, so the server holds no
+     * The server keeps the form's releases but never reads them, so it has no
      * definition to interpret these against and does not try to. The blob is
      * self-describing — a key and the answer given — which is what keeps a
      * referral captured under an older form readable.
@@ -309,6 +310,20 @@ export const referrals = sqliteTable(
     smsReminderSentAt: text('sms_reminder_sent_at'),
 
     piiPurgedAt: text('pii_purged_at'),
+
+    /**
+     * The release of the form and rules this referral was filled in under;
+     * its answers are always read with that release. `INITIAL_SPEC1.txt`,
+     * `#referral`.
+     *
+     * Nullable only because SQLite can add a column without rebuilding this
+     * table only if it is. Migration `0040` backfilled every existing row to
+     * the baseline release and every insert path sets it, so a null here
+     * would be a bug, not legacy data. Outside the PII block: it says nothing
+     * about the household.
+     */
+    formId: text('form_id').references(() => configurationReleases.id),
+
     /** Null for a public submission; set when an admin enters one by phone. */
     createdByUserId: text('created_by_user_id').references(() => users.id),
     createdAt: text('created_at').notNull(),
@@ -323,6 +338,7 @@ export const referrals = sqliteTable(
     index('idx_referrals_match_dob').on(table.refereeDateOfBirth),
     index('idx_referrals_match_postcode').on(table.refereePostcodeNormalised),
     index('idx_referrals_match_phone').on(table.refereePhoneNormalised),
+    index('idx_referrals_form').on(table.formId),
     check(
       'referrals_status_valid',
       sql`${table.status} IN ('pending_review', 'active', 'reviewed', 'rejected', 'cancelled')`,

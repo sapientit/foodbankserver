@@ -41,7 +41,8 @@ export const parcelNotesSchema = z.string().trim().max(PARCEL_NOTES_MAX_LENGTH);
  *
  * The client evaluates its own preference rules against the referral answers
  * and sends the stock items it resolved them to — **ids, never names**, since
- * the server holds no form definition and must not start matching on text. It
+ * the server keeps the form's releases but never reads them and must not start
+ * matching on text. It
  * composes the pick-list information out of those same answers for the same
  * reason, and sends the finished words.
  *
@@ -55,8 +56,8 @@ export const generatePickListSchema = z.object({
    * The pick-list information the client composed for each referral, from the
    * form answers it marks as belonging on the sheet.
    *
-   * Finished text, never answer keys: the server holds no form definition, and
-   * the same reasoning that stops it matching stock items on names stops it
+   * Finished text, never answer keys: the server keeps the form's releases but
+   * never reads them, and the same reasoning that stops it matching stock items on names stops it
    * deciding which answers are picking information. Duplicates are refused
    * rather than concatenated, for the same reason a duplicate preference line
    * is — two notes for one household is an ambiguous instruction.

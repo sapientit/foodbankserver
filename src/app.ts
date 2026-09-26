@@ -4,6 +4,8 @@ import { requestContext, securityHeaders, type ContextOptions } from './http/con
 import { cors } from './http/cors.ts';
 import { errorHandler, notFoundHandler } from './http/error-handler.ts';
 import { authRoutes } from './modules/auth/auth.routes.ts';
+import { configurationReleaseRoutes } from './modules/configuration-releases/configuration-releases.routes.ts';
+import { publicConfigurationReleaseRoutes } from './modules/configuration-releases/public.routes.ts';
 import { devTestImportRoutes } from './modules/dev-test/dev-test.routes.ts';
 import { healthRoutes } from './modules/health/health.routes.ts';
 import { referrerAdminRoutes } from './modules/referrers/admin.routes.ts';
@@ -54,6 +56,7 @@ export function buildApp(config: AppConfig, options: ContextOptions = {}): Hono<
   app.route(`${API_PREFIX}/public`, publicSessionRoutes());
   app.route(`${API_PREFIX}/public`, publicReferrerRoutes());
   app.route(`${API_PREFIX}/public`, publicReferralRoutes());
+  app.route(`${API_PREFIX}/public`, publicConfigurationReleaseRoutes());
   app.route(API_PREFIX, sessionRoutes());
   app.route(API_PREFIX, referrerAdminRoutes());
   app.route(API_PREFIX, referralRoutes());
@@ -61,6 +64,7 @@ export function buildApp(config: AppConfig, options: ContextOptions = {}): Hono<
   app.route(API_PREFIX, exportRoutes());
   app.route(API_PREFIX, stockRoutes());
   app.route(API_PREFIX, targetStockListRoutes());
+  app.route(API_PREFIX, configurationReleaseRoutes());
   app.route(API_PREFIX, ruleRoutes());
   app.route(API_PREFIX, voucherConfigRoutes());
   app.route(API_PREFIX, pickListRoutes());

@@ -83,6 +83,13 @@ export interface ReferralResponse {
   readonly refereePostcode: string | null;
   readonly refereePhone: string | null;
   readonly answers: Record<string, unknown>;
+  /**
+   * The release of the referral form these answers were given to; render them
+   * with that release's questions (`GET /configuration-releases/bulk`). Null
+   * never in practice — migration `0040` backfilled every referral — but the
+   * column is nullable, so the contract says so.
+   */
+  readonly formId: string | null;
   readonly piiPurgedAt: string | null;
   /**
    * What became of the household, as against `status` above, which is what
@@ -208,6 +215,7 @@ export function toReferralResponse(
     refereePostcode: referral.refereePostcode,
     refereePhone: referral.refereePhone,
     answers: parseAnswers(referral.answersJson),
+    formId: referral.formId,
     piiPurgedAt: referral.piiPurgedAt,
     // Spread for the same reason `adminInfo` is: a caller that did not pay
     // for the query gets no field at all, rather than a `null` a client would
@@ -304,7 +312,7 @@ export function toReceiptResponse(referral: Referral): ReferralReceiptResponse {
  *
  * `answers` is handed over **whole**, exactly as `toParcelResponse` does it.
  * The sheet's "Cause Details" is one of those answers, and which one is the
- * client's to know: it owns the form definition and the server holds none.
+ * client's to know: the server keeps the form's releases but never reads them.
  * Picking the key out here would be the same guess that four hard-coded
  * dietary keys turned out to be.
  *
@@ -331,6 +339,13 @@ export interface ListenerSheetHousehold {
   readonly reason: string | null;
   readonly needsFuelHelp: boolean;
   readonly answers: Record<string, unknown>;
+  /**
+   * The release of the referral form these answers were given to; render them
+   * with that release's questions (`GET /configuration-releases/bulk`). Null
+   * never in practice — migration `0040` backfilled every referral — but the
+   * column is nullable, so the contract says so.
+   */
+  readonly formId: string | null;
   /**
    * `first_time`, `admin` or no marker at all — identical to
    * `Parcel.firstTimeMarker` and derived by the same
@@ -370,6 +385,7 @@ export function toListenerSheetHousehold(
     reason: reasonLabel ?? null,
     needsFuelHelp: referral.needsFuelHelp === 1,
     answers: parseAnswers(referral.answersJson),
+    formId: referral.formId,
     firstTimeMarker: firstTimeMarkerFor(referral.firstTimeReviewStatus),
     voucherInstruction: voucherInstructionFor(voucher.sessionDate, voucher.voucherRange, {
       status: referral.firstTimeReviewStatus,
@@ -523,8 +539,8 @@ export function toRepeatReferralListResponse(list: {
  * **`answers` is handed over whole, exactly as the listener sheet and a parcel
  * hand it over.** The secondary cause of crisis and the additional crisis
  * detail the administrator needs on this screen live in there, under keys the
- * referral form owns. The server holds no form definition, so it does not know
- * which keys those are and **must not guess** — extracting two of them by name
+ * referral form owns. The server keeps the form's releases but never reads
+ * them, so it does not know which keys those are and **must not guess** — extracting two of them by name
  * here would put the server in the business of knowing the form, which is the
  * one thing this design has consistently refused. The whole blob belongs to the
  * client; the client reads what it needs out of it.
@@ -567,6 +583,13 @@ export interface ReferralSearchResult {
   readonly referrerOrganisation: string;
   readonly answers: Record<string, unknown>;
   /**
+   * The release of the referral form these answers were given to; render them
+   * with that release's questions (`GET /configuration-releases/bulk`). Null
+   * never in practice — migration `0040` backfilled every referral — but the
+   * column is nullable, so the contract says so.
+   */
+  readonly formId: string | null;
+  /**
    * The administrators' own note about the household, or `null` when there is
    * none. Always present — see the note above on why this is not optional.
    */
@@ -591,6 +614,7 @@ interface ReferralSearchMatchInput {
   readonly referrerName: string | null;
   readonly referrerOrganisation: string;
   readonly answersJson: string | null;
+  readonly formId: string | null;
   readonly adminInfo: string | null;
 }
 
@@ -607,6 +631,7 @@ export function toReferralSearchResult(match: ReferralSearchMatchInput): Referra
     referrerName: match.referrerName,
     referrerOrganisation: match.referrerOrganisation,
     answers: parseAnswers(match.answersJson),
+    formId: match.formId,
     adminInfo: match.adminInfo,
   };
 }

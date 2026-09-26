@@ -2,6 +2,8 @@ import { Hono, type Context } from 'hono';
 import type { Actor } from '../../core/actor.ts';
 import { UnauthorizedError } from '../../core/errors.ts';
 import { requireAuth, requireRole } from '../../http/middleware/require-auth.ts';
+import { createConfigurationReleasesRepository } from '../configuration-releases/configuration-releases.repository.ts';
+import { createConfigurationReleasesService } from '../configuration-releases/configuration-releases.service.ts';
 import type { AppEnv } from '../../http/types.ts';
 import { createReferralsRepository } from '../referrals/referrals.repository.ts';
 import { createReferralsService } from '../referrals/referrals.service.ts';
@@ -112,6 +114,11 @@ function serviceFor(c: Context<AppEnv>) {
       referrersService,
       pickLists: createPickListsRepository(db),
       voucherConfig: createVoucherConfigRepository(db),
+      releases: createConfigurationReleasesService({
+        db,
+        clock,
+        repository: createConfigurationReleasesRepository(db),
+      }),
     }),
     referrersService,
     stockService: createStockService({

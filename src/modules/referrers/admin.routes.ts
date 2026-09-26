@@ -16,8 +16,9 @@ import { toAdminReferralReasonResponse, toAuthorisedReferrerResponse } from './r
  * Admin-only. Who may refer and why people are referred are both policy
  * decisions — a team lead runs sessions, they do not set policy.
  *
- * The questions on the referral form are **not** here: the form is client
- * configuration, so there is nothing on the server to maintain.
+ * The questions on the referral form are **not** here: the server keeps the
+ * form's releases but never reads them, so there is nothing about their
+ * content for this module to maintain.
  *
  * Middleware is attached per route, never via a wildcard `use`. See CLAUDE.md.
  */

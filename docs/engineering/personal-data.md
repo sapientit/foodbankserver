@@ -120,8 +120,8 @@ longer identifiable, so those become statistics — which is how "we fed 340 hou
 **That only works because the reason for referral is chosen from a maintained list rather than
 typed.** Free text would have to go with the rest.
 
-Dynamic answers are dropped **whole**. The referral form is client configuration, so the server has
-no definition telling it which questions asked for personal data, and an answer that cannot be
+Dynamic answers are dropped **whole**. The server keeps the form's releases but never reads them, so
+it has nothing telling it which questions asked for personal data, and an answer that cannot be
 classified has to be assumed personal. Keeping a key because it looks harmless is the one mistake a
 purge cannot take back. Whether the charity needs any answers to survive for reporting is **Q12** in
 `OPEN-QUESTIONS.md`.

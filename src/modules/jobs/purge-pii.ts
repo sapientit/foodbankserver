@@ -38,8 +38,8 @@ export interface PurgePiiResult {
  * turned away a referral; the note says what the office knows about the
  * household. Only the second one describes a person.
  *
- * Dynamic answers are dropped **whole**. The referral form is client
- * configuration, so the server has no definition telling it which questions
+ * Dynamic answers are dropped **whole**. The server keeps the form's releases
+ * but never reads them, so it has no definition telling it which questions
  * asked for personal data — and an answer that cannot be classified has to be
  * assumed personal. Keeping a key because it looks harmless is the one mistake
  * a purge cannot take back. See Q12 in `OPEN-QUESTIONS.md`.

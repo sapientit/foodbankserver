@@ -76,13 +76,20 @@ export interface ParcelResponse {
    * The pick-list maintenance screen shows the household's preferences beside
    * the parcel, and **which answers are preferences is the client's to know**:
    * it owns the form definition and marks each question `preference: true`.
-   * The server holds no definition, so any attempt to pick out the relevant
-   * keys here would be a guess — which is exactly what the four hard-coded
+   * The server keeps the form's releases but never reads them, so any attempt
+   * to pick out the relevant keys here would be a guess — which is exactly what the four hard-coded
    * dietary keys this replaced turned out to be. Empty once the referral has
    * been purged, or if the referral has since been deleted from under the
    * parcel.
    */
   readonly answers: Record<string, unknown>;
+  /**
+   * The release of the referral form these answers were given to; render them
+   * with that release's questions (`GET /configuration-releases/bulk`). Null
+   * never in practice — migration `0040` backfilled every referral — but the
+   * column is nullable, so the contract says so.
+   */
+  readonly formId: string | null;
   readonly lines: ParcelLineResponse[];
   /**
    * `first_time`, `admin` or no marker at all — never the historic date or
@@ -146,6 +153,7 @@ export function toParcelResponse(
     attendance: parcel.attendance,
     notes: parcel.notes,
     answers: parseAnswers(referral?.answersJson ?? null),
+    formId: referral?.formId ?? null,
     firstTimeMarker: firstTimeMarkerFor(referral?.firstTimeReviewStatus),
     voucherInstruction: voucherInstructionFor(voucher.sessionDate, voucher.voucherRange, {
       status: referral?.firstTimeReviewStatus ?? 'unreviewed',

@@ -12,6 +12,7 @@ import { stockItems, stockLedger } from '../src/db/schema/stock.ts';
 import { refreshTokens, users } from '../src/db/schema/users.ts';
 import { voucherConfig } from '../src/db/schema/voucher-config.ts';
 import { authHeaders, buildTestApp, devLogin, type TestApp } from './helpers/app.ts';
+import { BASELINE_FORM_ID } from './helpers/referral-fixtures.ts';
 import {
   generatePickList,
   readPickList,
@@ -119,6 +120,9 @@ describe('the listener sheet', () => {
       // marker mirrors Parcel.firstTimeMarker, the instruction is absent.
       firstTimeMarker: 'admin',
       voucherInstruction: null,
+      // The submission named no release, so it is recorded under the one
+      // baseline release migration `0040` seeds and publishes.
+      formId: BASELINE_FORM_ID,
     });
   });
 

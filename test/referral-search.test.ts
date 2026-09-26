@@ -12,6 +12,7 @@ import { refreshTokens, users } from '../src/db/schema/users.ts';
 import { purgeReferralPii } from '../src/modules/jobs/purge-pii.ts';
 import { authHeaders, buildTestApp, devLogin, type TestApp } from './helpers/app.ts';
 import {
+  BASELINE_FORM_ID,
   setUpReferralWorld,
   submitReferral,
   UNKNOWN_REFERRER,
@@ -410,7 +411,7 @@ describe('each identifier finds a referral on its own', () => {
    * back, so searching on it and then reading the whole row is the sharpest
    * place to pin the shape.
    */
-  it('finds by date of birth alone, and a result row carries exactly the twelve agreed fields', async () => {
+  it('finds by date of birth alone, and a result row carries exactly the thirteen agreed fields', async () => {
     const { testApp, token, world: w } = await referralWorld(NOW);
     const { id } = await submitReferral(
       testApp,
@@ -452,6 +453,9 @@ describe('each identifier finds a referral on its own', () => {
           // describe. See the dedicated describe block below for the
           // populated case.
           adminInfo: null,
+          // The submission named no release, so it is recorded under the one
+          // baseline release migration `0040` seeds and publishes.
+          formId: BASELINE_FORM_ID,
         },
       ],
     });

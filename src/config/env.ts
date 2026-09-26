@@ -143,6 +143,14 @@ const configSchema = z
     GOOGLE_SHEETS_SPREADSHEET_ID: blankIsUnset,
     /** The public OAuth client id the browser asks for Sheets consent against. */
     GOOGLE_OAUTH_CLIENT_ID: blankIsUnset,
+    /**
+     * The charity's configuration workbook, which an administrator's browser
+     * reads to publish a referral form release. Not a secret and not a
+     * credential, like the two above — but the same workbook in every
+     * environment, and never the extract spreadsheet. Optional: blank means
+     * publishing reports itself unconfigured.
+     */
+    CONFIGURATION_SPREADSHEET_ID: blankIsUnset,
 
     /**
      * The OAuth client id Google sign-in checks an ID token's `aud` claim
@@ -293,6 +301,7 @@ export interface AppConfig {
   readonly smsLiveNumbers: 'everyone' | readonly string[];
   readonly googleSpreadsheetId: string | undefined;
   readonly googleOauthClientId: string | undefined;
+  readonly configurationSpreadsheetId: string | undefined;
   readonly googleAuthClientId: string | undefined;
   readonly cfAccountId: string | undefined;
   readonly cfD1DatabaseId: string | undefined;
@@ -345,6 +354,7 @@ export function loadConfig(bindings: object): AppConfig {
           : splitLiveNumbers(result.data.SMS_LIVE_NUMBERS),
     googleSpreadsheetId: result.data.GOOGLE_SHEETS_SPREADSHEET_ID,
     googleOauthClientId: result.data.GOOGLE_OAUTH_CLIENT_ID,
+    configurationSpreadsheetId: result.data.CONFIGURATION_SPREADSHEET_ID,
     googleAuthClientId: result.data.GOOGLE_AUTH_CLIENT_ID,
     cfAccountId: result.data.CF_ACCOUNT_ID,
     cfD1DatabaseId: result.data.CF_D1_DATABASE_ID,

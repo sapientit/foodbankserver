@@ -219,26 +219,29 @@ reaches the stock take and nothing else, and it lapses after fourteen days. See
 
 Three roles. Use them for menus; **never for access control.**
 
-|                                                          | `admin` | `team_lead` | `fuel_admin` |
-| -------------------------------------------------------- | ------- | ----------- | ------------ |
-| Run a session: pick lists, printing, attendance          | ✅      | ✅          | ❌           |
-| Read sessions, stock, referrals                          | ✅      | ✅          | ❌           |
-| See the session list more than six days ahead            | ✅      | ❌          | ❌           |
-| The weekly stock take                                    | ✅      | ✅          | ❌           |
-| Create or amend sessions and referrals                   | ✅      | ❌          | ❌           |
-| Maintain the stock item list                             | ✅      | ❌          | ❌           |
-| Model parcels and the household grid (**incl. reading**) | ✅      | ❌          | ❌           |
-| Target stock lists: maintain (create / amend / delete)   | ✅      | ❌          | ❌           |
-| Target stock lists: read                                 | ✅      | ✅          | ❌           |
-| Referrers and reasons for referral                       | ✅      | ❌          | ❌           |
-| User maintenance                                         | ✅      | ❌          | ❌           |
-| **See why someone was referred**                         | ✅      | ❌          | ❌           |
-| **The fuel help list**                                   | ✅      | ❌          | ✅           |
+|                                                           | `admin` | `team_lead` | `fuel_admin` |
+| --------------------------------------------------------- | ------- | ----------- | ------------ |
+| Run a session: pick lists, printing, attendance           | ✅      | ✅          | ❌           |
+| Read sessions, stock, referrals                           | ✅      | ✅          | ❌           |
+| See the session list more than six days ahead             | ✅      | ❌          | ❌           |
+| The weekly stock take                                     | ✅      | ✅          | ❌           |
+| Create or amend sessions and referrals                    | ✅      | ❌          | ❌           |
+| Maintain the stock item list                              | ✅      | ❌          | ❌           |
+| Model parcels and the household grid (**incl. reading**)  | ✅      | ❌          | ❌           |
+| Target stock lists: maintain (create / amend / delete)    | ✅      | ❌          | ❌           |
+| Target stock lists: read                                  | ✅      | ✅          | ❌           |
+| Referral form releases: upload, publish, roll back, list  | ✅      | ❌          | ❌           |
+| Referral form releases: read (bulk; fuel admin: no rules) | ✅      | ✅          | ✅           |
+| Referrers and reasons for referral                        | ✅      | ❌          | ❌           |
+| User maintenance                                          | ✅      | ❌          | ❌           |
+| **See why someone was referred**                          | ✅      | ❌          | ❌           |
+| **The fuel help list**                                    | ✅      | ❌          | ✅           |
 
 **`fuel_admin` is not a lesser `admin`, and a menu built by subtracting from
-one will be wrong for it.** It reaches `GET /api/v1/fuel-help-list` and
-`GET /api/v1/auth/me` and nothing else at all — every other endpoint answers
-`403`. Its whole screen is one list. See §5e.
+one will be wrong for it.** It reaches `GET /api/v1/fuel-help-list`,
+`GET /api/v1/configuration-releases/bulk` (to label the answers on that list)
+and `GET /api/v1/auth/me`, and nothing else at all — every other endpoint
+answers `403`. Its whole screen is one list. See §5e.
 
 **`GET /api/v1/target-stock-lists` is the one maintenance resource a team lead
 can read, settled 2026-08-31 (was Q48).** Everything else that says "admin
@@ -394,23 +397,40 @@ returned so the value matches what the server would have derived — the server
 still records its own match separately, so your string never decides which
 organisation gets the credit.
 
-### The form itself is yours
+### The form comes from the server, but is never read by it
 
-**The server does not hold the referral form.** The questions are configuration
-in your application: you change them, see them in the test system, and publish
-them by releasing a new version of the client. There is no draft, no publish
-call, and no form-maintenance screen to build.
+**The referral form and its preference rules are releases the server stores.**
+The charity maintains them in its workbook; an administrator uploads the two
+together as a draft and publishes it (§5p). A form change no longer needs a
+client release. `INITIAL_SPEC1.txt`, `#referral`.
+
+The public form loads the release in use with `GET /api/v1/public/questionnaire`
+→ `{ formId, questionnaire }`. `questionnaire` is the JSON document **as a
+string**, exactly as uploaded — `JSON.parse` it and validate it yourself; the
+server never parses it. The rules are never returned to the public. Keep
+`formId` with the in-progress form and send it back as `formId` on
+`POST /public/referrals`:
+
+- Leaving it out is **never refused**: the referral is recorded under the
+  release in use when it arrives. Do send it — a publish between loading the
+  form and submitting would otherwise file the answers under the wrong form.
+- A release retired since the form loaded is accepted. An unknown id or a draft
+  is a `422`.
+
+Every response carrying `answers` also carries `formId`. Render answers with
+**that** release, fetched through `GET /api/v1/configuration-releases/bulk`,
+never with the one in use now.
 
 What the server does with `answers` is store it and give it back:
 
-- It is **not validated** against anything. Required, max length, option lists,
-  and which questions are shown at all are your rules to enforce, before you
-  submit.
+- It is **not validated** against anything, including its own release.
+  Required, max length, option lists, and which questions are shown at all are
+  your rules to enforce, before you submit.
 - Keys are yours and must stay stable. A referral captured last year comes back
   with the keys it was captured under, so **never reuse a key for a different
   question** — that is what silently changes the meaning of old referrals.
-- Unknown keys are stored, not dropped. Nothing on the server has a list to
-  compare them against.
+- Unknown keys are stored, not dropped. The server keeps releases but never
+  reads them, so it has no list to compare them against.
 - Size is the only limit: at most 100 keys, keys at most 60 characters, 16KB
   serialised. That is a bound on an unauthenticated write, not form validation,
   and no real form comes near it.
@@ -771,8 +791,8 @@ beside it.
 **The secondary cause and the additional crisis detail are yours to extract.**
 They are answers, not columns, and `answers` comes through whole and unfiltered
 — the same arrangement as _Cause Details_ on the listener sheet, and for the
-same reason: the server holds no form definition, so it does not know which keys
-they are and will not guess. The whole blob belongs to you.
+same reason: the server keeps the form's releases but never reads them, so it
+does not know which keys they are and will not guess. The whole blob belongs to you.
 
 The response does not contain the date of birth, the address, the review
 comment, the referrer email or the referrer phone, and the client must not fetch
@@ -856,8 +876,8 @@ typed over. Confirm corrections that look destructive.
 **`reasonId` must be a reason the charity currently offers** — a retired one is a
 `422`. A referral already citing a retired reason keeps it.
 
-**Which key is "other information" is still yours.** The server holds no form
-definition and does not police which answers moved. That answer is a free note to
+**Which key is "other information" is still yours.** The server never reads the
+form and does not police which answers moved. That answer is a free note to
 whoever runs the session, not a substitute for correcting a field — almost every
 fact here has its own field and is corrected outright, above. It earns its place
 for what a field can't say: a corrected address reaches the driver, a note
@@ -960,6 +980,48 @@ referrals on the same session, two places held and two parcels picked. This is
 deliberate rather than a gap — the charity does not want it guarded, the same
 trade a public referral submission already carries — so the server will not
 refuse a second copy for you.
+
+**Copy only works while the form has not changed.** If the referral's `formId`
+is not the release in use — any newer release has been published, even one that
+changed only the rules — `copy` is a **`409`** and creates nothing. Compare the
+two ids yourself before offering Copy and go straight to the review below; the
+`409` is a backstop for a stale screen or a publish mid-session.
+`INITIAL_SPEC1.txt`, `#Copying a referral`.
+
+### Re-referring on today's form (admin only)
+
+```
+POST /api/v1/referrals/{id}/re-refer
+  { sessionId, acknowledgeOverCapacity?, reasonId, refereeFirstName, refereeSurname,
+    refereeDateOfBirth, refereeAddress, refereePostcode, refereePhone?, adults, children,
+    collectionMethod, needsFuelHelp?, answers }                         → 201 Referral
+```
+
+What Copy becomes once the form has changed. Open the current questionnaire,
+pre-filled with what cannot have changed — the household's name, date of birth,
+address, postcode, phone and numbers, the referrer and the reason — and leave
+blank any earlier answer with no obvious match on today's form. The
+administrator checks it through, answers anything new, chooses a session and
+submits; nothing exists until then.
+
+- `{id}` is the referral being copied **from**. It must be copy-eligible (the
+  same `status` / `outcome` rule, not forgotten) or this is a `409`. Allowed
+  whether or not its release is still in use.
+- **The referrer is not in the body.** Name, organisation, email and phone come
+  from the original, unchanged, exactly as Copy carries them.
+- **`formId` is not in the body, and sending one is a `400`.** The new referral
+  is recorded under the release in use; its `formId` is in the response.
+  `householdSize` is not accepted either — the server takes `adults` and
+  `children` only.
+- `answers` is stored as sent, never checked against the questionnaire.
+- Stamped exactly as a copy: `status: "reviewed"`, `reviewComment: null`,
+  `referredAt` now, and `adminInfo` `Copied from referral dated YYYY-MM-DD` (the
+  original's date, London).
+- Capacity: warned, never refused — `acknowledgeOverCapacity: true`, as for
+  Copy and a move.
+- **A retired reason is a `422`** — unlike Copy, the administrator is choosing
+  the reason again. This one is a guess (`x-assumed` in `openapi.yaml`).
+- Not idempotent. Guard the submit button against a double press.
 
 ### A forgotten referral can no longer be acted on
 
@@ -1351,9 +1413,9 @@ What is deliberately **not** on a sheet:
 `Parcel.answers` (on `GET /sessions/{id}/pick-list` and `GET /pick-lists/{id}`)
 carries the referral's **whole answers map**, unfiltered.
 
-Which of those are preferences is yours to know — you own the form definition
-and the `preference` flag on each question — so filter the map yourself. The
-server holds no definition and will not guess; that guess is exactly what
+Which of those are preferences is yours to know — the referral's release
+(`formId`) carries the `preference` flag on each question — so filter the map
+yourself. The server never reads a release and will not guess; that guess is exactly what
 `dietaryNotes` was. The map is empty once the referral's personal data has been
 purged.
 
@@ -1386,8 +1448,8 @@ since retired still appears, because the referral was made under it.
 
 **Cause Details is yours to extract.** `answers` is the referral's dynamic
 answers whole and unfiltered, and _Cause Details_ is one of them. The server
-holds no form definition, so it does not know which key that is and will not
-guess — the same reason `answers` comes through whole on a parcel.
+never reads the form's releases, so it does not know which key that is and will
+not guess — the same reason `answers` comes through whole on a parcel.
 
 The sheet is deliberately minimal: **no address, postcode, phone, date of birth
 or anything about the referrer.** It ends up on paper in a hall. If a screen
@@ -1939,9 +2001,10 @@ nobody asked for the answer.
 }
 ```
 
-**You own the rules; the server never reads them.** It holds no form
-definition, so it cannot know which answers are preferences or what they mean.
-Evaluate your own configuration and send the stock items you resolved — **ids,
+**You evaluate the rules; the server never reads them.** It stores each
+release but cannot know which answers are preferences or what they mean.
+Evaluate each referral with the rules of **its own** release (`formId`, fetched
+through `GET /configuration-releases/bulk`) and send the stock items you resolved — **ids,
 never names**. `GET /referrals?sessionId=` gives you everything to evaluate
 against (`id`, `adults`, `children` and the whole `answers` map) before any
 pick list exists; there is no separate inputs endpoint and none is needed.
@@ -2064,7 +2127,7 @@ the preference lines, and independently of them:
 
 **You compose the text; the server stores it verbatim.** Which answers belong
 on a picking sheet is yours to know for exactly the reason preferences are —
-you own the form definition and the server holds none. It never inspects an
+the server keeps the form's releases but never reads them. It never inspects an
 answer, never understands a question key, and does the labelling nowhere: send
 the finished words, labels and all.
 
@@ -2440,6 +2503,74 @@ scenario in your own `referrals` array — use it to line up which prepared
 scenario became which referral id.
 
 ---
+
+## 5p. Referral form releases
+
+The referral form and its preference rules are **releases** the server stores:
+the questionnaire JSON and the rules JSON together, never one without the other.
+The server stores and serves both **exactly as uploaded, as strings**, and never
+parses, validates or evaluates either — checking a release is the uploader's job
+before upload and yours when you load one. `INITIAL_SPEC1.txt`, `#referral`.
+
+```
+POST /api/v1/configuration-releases                    admin        → 201 ConfigurationRelease (draft)
+POST /api/v1/configuration-releases/{formId}/publish   admin        → 200 ConfigurationRelease
+POST /api/v1/configuration-releases/{formId}/rollback  admin        → 200 ConfigurationRelease
+GET  /api/v1/configuration-releases                    admin        → 200 ConfigurationReleaseSummary[]
+GET  /api/v1/configuration-releases/config             admin        → 200 { configured, spreadsheetId?, googleClientId? }
+GET  /api/v1/configuration-releases/bulk?formIds=a,b   admin, team lead, fuel admin
+                                                                    → 200 { releases: ConfigurationRelease[] }
+GET  /api/v1/public/questionnaire                      public       → 200 { formId, questionnaire }
+```
+
+**Where the workbook is.** `GET /configuration-releases/config` gives the
+publish screen the configuration workbook's id and the Google OAuth client to
+ask Sheets consent against — the same client as `/extracts/config`, and shaped
+the same way (`configured: false` with neither value when the deployment has
+not set both). The workbook is the **same in every environment** and is never
+the extract spreadsheet. The server never reads it. It is set in every
+environment; production still answers `configured: false` until its
+`GOOGLE_OAUTH_CLIENT_ID` is set.
+
+**Upload** takes `questionnaire` and `rules` as **strings** — the generated
+JSON text, not a parsed object — plus the manifest: `questionnaireHash`,
+`rulesHash`, `generationId`, `generatedAt`, `sourceWorkbookId`. Sending the
+text keeps it byte for byte, so the uploader's hashes still describe what is
+stored. The hashes are kept for audit and never recomputed. Each document is
+capped at 500,000 characters (`x-assumed`). More than one draft can exist; a
+draft can never be deleted, and changes nothing until published.
+
+**Status:** `draft` → `published` (publish) → `superseded` (when another is
+published) → `published` again (rollback). **Exactly one release is `published`
+at any time**, and a publish or rollback swaps it in one step, so there is never
+a moment with none or two. Publish takes only a draft; rollback takes only a
+superseded release — the one in use is a `409` for both. A release's content
+never changes after upload: a correction is a new release.
+
+**Bulk read** is for rendering answers and evaluating rules: gather the
+distinct `formId`s of the referrals in front of you and fetch them in one call,
+at most 50 (`x-assumed`); more, or a non-UUID, is a `400`. An unknown id is
+left out of `releases` rather than failing the call. Any status comes back,
+drafts included. **A fuel administrator gets no `rules` key** — only the
+questions, which is all labelling the fuel help list needs.
+
+**The history list** leaves out `questionnaire` and `rules`. Its `publishedAt`
+/ `publishedByUserId` are the **most recent** publish or rollback of that
+release; the server keeps every one.
+
+**The baseline.** Migration `0040` seeded one published release — your
+`referral-form.config.json` and `preference-rules.config.json` as they stood at
+client commit `4ed8d18`, byte for byte, `generationId: "baseline"`, id
+`6f1d2c3a-8b4e-4f5a-9c7d-0e1f2a3b4c40` in every environment — and recorded
+every existing referral under it.
+
+**Where `formId` now appears:** `ReferralSubmission` (optional, §3), `Referral`,
+`Parcel`, `ListenerSheetHousehold`, `ReferralSearchResult` and
+`FuelHelpHousehold`. Not the spreadsheet extract rows. It is typed nullable
+because the column is, but no referral has a null one.
+
+**Copy** refuses a referral made under an older release; use re-refer (§3,
+"Copying a referral").
 
 ## 5o. Platform usage monitoring
 

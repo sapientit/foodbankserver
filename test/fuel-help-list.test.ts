@@ -13,7 +13,7 @@ import { fixedClock } from '../src/core/clock.ts';
 import { londonWallClockToInstant } from '../src/core/time/london.ts';
 import { addDays } from '../src/core/time/plain-date.ts';
 import { authHeaders, buildTestApp, devLogin, type TestApp } from './helpers/app.ts';
-import { submitReferral } from './helpers/referral-fixtures.ts';
+import { BASELINE_FORM_ID, submitReferral } from './helpers/referral-fixtures.ts';
 import {
   generatePickList,
   readPickList,
@@ -150,6 +150,7 @@ interface FuelHousehold {
   refereePhone: string | null;
   needsFuelHelp: boolean;
   answers: Record<string, unknown>;
+  formId: string | null;
 }
 
 async function readList(
@@ -201,6 +202,7 @@ describe('the fuel help list', () => {
         refereePhone: '07700 900123',
         needsFuelHelp: true,
         answers: { Dietary: 'no pork' },
+        formId: BASELINE_FORM_ID,
       },
     ]);
   });
@@ -243,6 +245,7 @@ describe('the fuel help list', () => {
         refereePhone: null,
         needsFuelHelp: true,
         answers: {},
+        formId: BASELINE_FORM_ID,
       },
     ]);
   });

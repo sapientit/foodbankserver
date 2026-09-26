@@ -53,6 +53,13 @@ export interface FuelHelpHousehold {
   readonly refereePhone: string | null;
   readonly needsFuelHelp: boolean;
   readonly answers: Record<string, unknown>;
+  /**
+   * The release of the referral form these answers were given to; render them
+   * with that release's questions (`GET /configuration-releases/bulk`). Null
+   * never in practice — migration `0040` backfilled every referral — but the
+   * column is nullable, so the contract says so.
+   */
+  readonly formId: string | null;
 }
 
 export function toFuelHelpHousehold(referral: Referral, session: Session): FuelHelpHousehold {
@@ -67,5 +74,6 @@ export function toFuelHelpHousehold(referral: Referral, session: Session): FuelH
     refereePhone: referral.refereePhone,
     needsFuelHelp: referral.needsFuelHelp === 1,
     answers: parseAnswers(referral.answersJson),
+    formId: referral.formId,
   };
 }

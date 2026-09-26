@@ -1,3 +1,5 @@
+import { createConfigurationReleasesRepository } from '../configuration-releases/configuration-releases.repository.ts';
+import { createConfigurationReleasesService } from '../configuration-releases/configuration-releases.service.ts';
 import { Hono, type Context } from 'hono';
 import type { AppConfig } from '../../config/env.ts';
 import type { Actor } from '../../core/actor.ts';
@@ -59,6 +61,11 @@ function serviceFor(c: Context<AppEnv>) {
     referrals: createReferralsRepository(db),
     sessions: createSessionsRepository(db),
     referrers: createReferrersRepository(db),
+    releases: createConfigurationReleasesService({
+      db,
+      clock: c.get('clock'),
+      repository: createConfigurationReleasesRepository(db),
+    }),
     clock: c.get('clock'),
     logger: c.get('logger'),
   });

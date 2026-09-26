@@ -85,9 +85,9 @@ review screen depends on, and shortening it silently makes that count under-repo
 
 ### The one exception: preference lines at generation
 
-`POST /sessions/:id/pick-list` accepts stock-item lines from the client. It has to: the client owns
-the referral form definition, the server holds none, and a preference rule cannot be evaluated
-without one. Refusing the data would not make the server the authority on parcel contents — it would
+`POST /sessions/:id/pick-list` accepts stock-item lines from the client. It has to: the client
+evaluates each referral against its own release's preference rules, and the server stores those
+releases but never reads them, let alone evaluates a rule. Refusing the data would not make the server the authority on parcel contents — it would
 only move the same lines to a series of `PUT /parcels/:id/lines` calls after the fact, unvalidated
 against the catalogue and outside the atomic write.
 
@@ -106,5 +106,5 @@ What stops this being general licence, and what must stay true:
 - It reaches **only parcels being created**. No client payload can alter a parcel that exists.
 
 **The charity settled this as Option 2 on 2026-08-11** and it is now in `INITIAL_SPEC1.txt`, under
-"Picking list". Do not extend it to another route by analogy: the reasoning is about who owns the
-form definition, and nothing else in this system is owned that way.
+"Picking list". Do not extend it to another route by analogy: the reasoning is about who evaluates the form's rules, and nothing else in this system is
+evaluated that way.
