@@ -18,17 +18,34 @@ const activeUntil = plainDate.nullable();
 const deliveryWindowStart = plainTime.nullable();
 const deliveryWindowEnd = plainTime.nullable();
 
+export const DELIVERY_CAPACITY_EXCEEDS_CAPACITY =
+  'deliveryCapacity must not exceed capacity unless capacity is 0';
+
+/**
+ * `deliveryCapacity` may not exceed the overall `capacity` — except where
+ * `capacity` is 0. Setting capacity to 0 is how a session is blocked for a
+ * while, and the delivery capacity is left standing so that reopening is one
+ * number, not two. A blocked session takes nothing either way: the overall
+ * capacity gate refuses every referral before the delivery gate is reached.
+ *
+ * Shared by the create refinement below and the service's patch check, so
+ * the two cannot drift.
+ */
+export function deliveryCapacityFits(capacity: number, deliveryCapacity: number): boolean {
+  return capacity === 0 || deliveryCapacity <= capacity;
+}
+
 /**
  * Rule for a **create** schema, where both `capacity` and `deliveryCapacity`
- * are always present: `deliveryCapacity` may not exceed the overall
- * `capacity`. No DB `CHECK` — see the comment on `recurringSessions.deliveryCapacity`
- * in the schema — so this is the only place the rule is enforced for a create.
+ * are always present — see {@link deliveryCapacityFits}. No DB `CHECK` — see
+ * the comment on `recurringSessions.deliveryCapacity` in the schema — so this
+ * is the only place the rule is enforced for a create.
  */
 function refineCreateDeliveryCapacity<T extends { capacity: number; deliveryCapacity: number }>(
   schema: z.ZodType<T>,
 ) {
-  return schema.refine((value) => value.deliveryCapacity <= value.capacity, {
-    message: 'deliveryCapacity must not exceed capacity',
+  return schema.refine((value) => deliveryCapacityFits(value.capacity, value.deliveryCapacity), {
+    message: DELIVERY_CAPACITY_EXCEEDS_CAPACITY,
     path: ['deliveryCapacity'],
   });
 }

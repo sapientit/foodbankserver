@@ -11,7 +11,13 @@ import type {
   SessionsRepository,
   SessionWithBooked,
 } from './sessions.repository.ts';
-import type { AdHocSessionInput, RecurringSessionInput, SessionPatch } from './sessions.schema.ts';
+import {
+  DELIVERY_CAPACITY_EXCEEDS_CAPACITY,
+  deliveryCapacityFits,
+  type AdHocSessionInput,
+  type RecurringSessionInput,
+  type SessionPatch,
+} from './sessions.schema.ts';
 
 export interface SessionsServiceDeps {
   readonly repository: SessionsRepository;
@@ -66,8 +72,8 @@ export function createSessionsService({ repository, clock }: SessionsServiceDeps
 
     const deliveryCapacity = patch.deliveryCapacity ?? existing.deliveryCapacity;
     const capacity = patch.capacity ?? existing.capacity;
-    if (deliveryCapacity > capacity) {
-      throw new UnprocessableError('deliveryCapacity must not exceed capacity');
+    if (!deliveryCapacityFits(capacity, deliveryCapacity)) {
+      throw new UnprocessableError(DELIVERY_CAPACITY_EXCEEDS_CAPACITY);
     }
 
     const updated = await repository.updateRecurring(id, {
@@ -138,8 +144,8 @@ export function createSessionsService({ repository, clock }: SessionsServiceDeps
 
     const deliveryCapacity = patch.deliveryCapacity ?? existing.deliveryCapacity;
     const capacity = patch.capacity ?? existing.capacity;
-    if (deliveryCapacity > capacity) {
-      throw new UnprocessableError('deliveryCapacity must not exceed capacity');
+    if (!deliveryCapacityFits(capacity, deliveryCapacity)) {
+      throw new UnprocessableError(DELIVERY_CAPACITY_EXCEEDS_CAPACITY);
     }
 
     const updated = await repository.updateSession(id, {

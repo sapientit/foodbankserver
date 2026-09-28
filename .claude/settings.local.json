@@ -24,7 +24,8 @@
       "Bash(npx drizzle-kit *)",
       "Bash(npx wrangler *)",
       "Bash(textutil -convert txt -stdout \"/Users/petebennett/foodbankclient/For Jessica.rtf\")",
-      "Bash(grep -n -i -B6 -A10 \"Generate the pick list\\\\|pick-list$\")"
+      "Bash(grep -n -i -B6 -A10 \"Generate the pick list\\\\|pick-list$\")",
+      "Bash(git merge *)"
     ]
   }
 }

@@ -756,7 +756,8 @@ paths:
                   description: >-
                     How many of `capacity`'s places may be deliveries. Zero
                     means this session takes no deliveries at all. Must not
-                    exceed `capacity` — a `400` otherwise. See
+                    exceed `capacity` unless `capacity` is 0 — a `400`
+                    otherwise. See
                     `Session.deliveryCapacity`.
       responses:
         '201':
@@ -820,9 +821,9 @@ paths:
                   minimum: 0
                   maximum: 1000
                   description: >-
-                    Must not exceed the resulting `capacity` — a `422`
-                    otherwise, checked against whichever of the two this patch
-                    does not touch.
+                    Must not exceed the resulting `capacity` unless that
+                    `capacity` is 0 — a `422` otherwise, checked against
+                    whichever of the two this patch does not touch.
       responses:
         '200':
           description: Updated
@@ -966,7 +967,8 @@ paths:
                   description: >-
                     Copied onto every occurrence. How many of `capacity`'s
                     places may be deliveries; zero means no occurrence takes
-                    them. Must not exceed `capacity` — a `400` otherwise.
+                    them. Must not exceed `capacity` unless
+                    `capacity` is 0 — a `400` otherwise.
                 capacity: { type: integer, default: 25 }
                 activeFrom: { type: string, format: date }
                 activeUntil: { type: [string, 'null'], format: date }
@@ -1023,9 +1025,9 @@ paths:
                   minimum: 0
                   maximum: 1000
                   description: >-
-                    Must not exceed the resulting `capacity` — a `422`
-                    otherwise, checked against whichever of the two this patch
-                    does not touch.
+                    Must not exceed the resulting `capacity` unless that
+                    `capacity` is 0 — a `422` otherwise, checked against
+                    whichever of the two this patch does not touch.
                 capacity: { type: integer }
                 activeFrom: { type: string, format: date }
                 activeUntil: { type: [string, 'null'], format: date }
@@ -4848,6 +4850,13 @@ components:
           description: >
             How many of `capacity`'s places may be deliveries. Zero means
             this session takes no deliveries at all — nobody is driving.
+
+            Never more than `capacity`, **except where `capacity` is 0**:
+            setting capacity to 0 is how a session is blocked for a while,
+            and its delivery capacity is left as it was so reopening means
+            restoring one number. A blocked session takes no referrals of
+            either kind — the overall capacity refuses them first — so a
+            delivery capacity above a zero `capacity` books nothing.
 
             **`POST /public/referrals` refuses a delivery outright once this
             is reached** — a `409`, the same hard stop as a session at its

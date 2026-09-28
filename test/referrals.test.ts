@@ -184,6 +184,25 @@ describe('public referral submission', () => {
     expect(delivery.status).toBe(409);
   });
 
+  it('refuses a delivery to a session blocked with capacity 0, whatever its delivery capacity says', async () => {
+    // Capacity 0 is how a session is blocked for a while; its delivery
+    // capacity is left standing so reopening is one number. The overall gate
+    // must still refuse, so the leftover delivery places book nothing.
+    const { testApp, world: w } = await world({ capacity: 0, deliveryCapacity: 8 });
+
+    // Nor is it offered: the public list leaves out a session with no room.
+    const listed = await testApp.request('/api/v1/public/sessions');
+    const body: { sessions: { id: string }[] } = await listed.json();
+    expect(body.sessions.map((s) => s.id)).not.toContain(w.sessionId);
+
+    const delivery = await submitReferral(testApp, w, { collectionMethod: 'delivery' });
+    expect(delivery.status).toBe(409);
+    expect(delivery.body).toMatchObject({
+      error: { code: 'CONFLICT', details: { capacity: 0, booked: 0 } },
+    });
+    expect((await submitReferral(testApp, w, { collectionMethod: 'collection' })).status).toBe(409);
+  });
+
   it('rejects a referral to a cancelled session', async () => {
     const { testApp, token, world: w } = await world();
     await testApp.request(`/api/v1/sessions/${w.sessionId}/cancel`, {

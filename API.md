@@ -501,7 +501,11 @@ Three things that follow, and they matter:
 `Session` and `RecurringSession` carry **`deliveryCapacity`**: how many of the
 session's overall `capacity` may be deliveries. Zero means that session has
 nobody to drive, and it can never exceed `capacity` — the API rejects a create
-or patch that would let it. `PublicSession` does not carry the number itself;
+or patch that would let it — **except where `capacity` is 0**. Zero capacity is
+how a session is blocked for a while, and its delivery capacity is left alone
+so that reopening it is one number, not two; a blocked session still takes no
+referral of either kind. Don't clamp or warn on `deliveryCapacity >
+capacity` when `capacity` is 0. `PublicSession` does not carry the number itself;
 it carries **`deliveryAvailability`**, one of `not_offered`, `full` or
 `available`, so the unauthenticated list never leaks a raw capacity or booked
 count.

@@ -1128,6 +1128,81 @@ describe('delivery fields', () => {
     expect(unchangedBody.deliveryCapacity).toBe(5);
   });
 
+  it('allows deliveryCapacity above capacity when capacity is 0, on create and on patch', async () => {
+    // Capacity 0 blocks a session for a while; the delivery capacity is left
+    // as it was so that reopening is one number, not two.
+    const { testApp, token } = await adminApp();
+
+    const created = await testApp.request('/api/v1/sessions', {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sessionDate: '2026-08-06',
+        startTime: '18:00',
+        durationMinutes: 90,
+        location: 'Community Centre',
+        capacity: 0,
+        deliveryCapacity: 8,
+      }),
+    });
+    expect(created.status).toBe(201);
+    const { id }: { id: string } = await created.json();
+
+    const reopened = await testApp.request(`/api/v1/sessions/${id}`, {
+      method: 'PATCH',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({ capacity: 25 }),
+    });
+    expect(reopened.status).toBe(200);
+
+    const blocked = await testApp.request(`/api/v1/sessions/${id}`, {
+      method: 'PATCH',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({ capacity: 0 }),
+    });
+    expect(blocked.status).toBe(200);
+    const blockedBody: { capacity: number; deliveryCapacity: number } = await blocked.json();
+    expect(blockedBody.capacity).toBe(0);
+    expect(blockedBody.deliveryCapacity).toBe(8);
+
+    // Only 0 is exempt: a capacity of 1 is not a block, and 8 deliveries do
+    // not fit in it.
+    const tooSmall = await testApp.request(`/api/v1/sessions/${id}`, {
+      method: 'PATCH',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({ capacity: 1 }),
+    });
+    expect(tooSmall.status).toBe(422);
+  });
+
+  it('allows a recurring template to be blocked with capacity 0 and its delivery capacity kept', async () => {
+    const { testApp, token } = await adminApp();
+
+    const created = await testApp.request('/api/v1/recurring-sessions', {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Thursday evening',
+        weekday: 4,
+        startTime: '18:00',
+        durationMinutes: 90,
+        location: 'Community Centre',
+        capacity: 0,
+        deliveryCapacity: 8,
+        activeFrom: '2026-08-06',
+      }),
+    });
+    expect(created.status).toBe(201);
+    const { id }: { id: string } = await created.json();
+
+    const tooSmall = await testApp.request(`/api/v1/recurring-sessions/${id}`, {
+      method: 'PATCH',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({ capacity: 4 }),
+    });
+    expect(tooSmall.status).toBe(422);
+  });
+
   it('carries both fields on a recurring template and can amend them', async () => {
     const { testApp, token } = await adminApp();
 
