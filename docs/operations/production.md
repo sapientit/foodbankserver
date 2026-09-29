@@ -275,10 +275,13 @@ configuration.**
 5. Set `PII_RETENTION_DAYS=456` — the period is settled; see below.
 6. Set the spreadsheet extract's two values, if and when the charity wants it running. **Neither is
    a secret and neither is a Google credential** — the server has none. They are plain `vars` in
-   `wrangler.jsonc`, with **different values per environment**, so a test deployment cannot write
-   into the charity's real spreadsheet:
-   - `GOOGLE_SHEETS_SPREADSHEET_ID` — the spreadsheet to write into.
-   - `GOOGLE_CLIENT_ID` — the deployment's one public OAuth client. The browser requests Sheets
+   `wrangler.jsonc`:
+   - `GOOGLE_SHEETS_SPREADSHEET_ID` — the spreadsheet to write into. **A different value per
+     environment**, so a test deployment cannot write into the charity's real spreadsheet; this is
+     the only thing that separates them.
+   - `GOOGLE_CLIENT_ID` — the deployment's one public OAuth client. **Production shares UAT's
+     client** (Pete, 2026-09-29), so the production frontend's origin must be added to that
+     client's Authorised JavaScript origins once it exists. The browser requests Sheets
      consent against it, and it is also the client Google sign-in checks an ID token's `aud`
      against, so production needs it before `AUTH_MODE=google` too. It needs the Sheets API and
      scope and the frontend's origin as an authorised JavaScript origin; that setup is in the
@@ -288,8 +291,10 @@ configuration.**
      never the extract spreadsheet. It uses the same `GOOGLE_CLIENT_ID`, so publishing needs
      that set too.
 
-   Both are blank in the production block until somebody fills them in, and blank means unset: the
-   extract reports itself unconfigured and refuses rather than the Worker failing to boot.
+   Both are set in the production block (2026-09-29), so the extract reports itself configured
+   there; it will fail at Google's consent until the production origin is on the client. Blank
+   would mean unset: the extract reports itself unconfigured and refuses rather than the Worker
+   failing to boot.
 
    **Local dev has a third spreadsheet, layered on top of the test one via `.dev.vars`.** The
    top-level `GOOGLE_SHEETS_SPREADSHEET_ID` in `wrangler.jsonc` is what the deployed test system

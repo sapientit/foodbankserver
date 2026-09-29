@@ -144,14 +144,14 @@
         // boot with `dummy` while ENVIRONMENT is production.
         "AUTH_MODE": "google",
         "GIT_SHA": "",
-        // Deliberately DIFFERENT values from production, so a test
-        // deployment can never write into the charity's real spreadsheet.
+        // Deliberately DIFFERENT from production, so a test deployment can
+        // never write into the charity's real spreadsheet.
         "GOOGLE_SHEETS_SPREADSHEET_ID": "1yONyudUHy9wnpukqKHmgLO9BAIgJpivOdYzPnWxmCyc",
         // The one Google OAuth client — see the top-level block's comment.
         // Created 2026-09-21 for this test deployment's sign-in (Authorised
         // JavaScript origin referrals-test.guildfordfoodbank.workers.dev), and
         // now also the client the extract and workbook ask Sheets consent
-        // against.
+        // against. Shared with production since 2026-09-29.
         "GOOGLE_CLIENT_ID": "746866667590-us7ee47uheispedj0qtonpum27rpa2i4.apps.googleusercontent.com",
         // The charity's referral-form configuration workbook, read by an
         // administrator's browser to publish a release. Not a secret. The SAME
@@ -202,23 +202,26 @@
         // Intentional tripwire: config/env.ts refuses to boot on this
         // combination, so a production deploy fails loudly on every request
         // until real sign-in is ready. The Google provider itself is built
-        // now (2026-09-21, proven on the test deployment), but production
-        // still needs its own GOOGLE_CLIENT_ID below — a Google Cloud OAuth
-        // client scoped to the production origin, which does not exist yet.
-        // Change to "google" once that exists, never before.
+        // now (2026-09-21, proven on the test deployment), and
+        // GOOGLE_CLIENT_ID below is set, but that client does not yet list
+        // the production frontend as an Authorised JavaScript origin — the
+        // origin does not exist yet. Change to "google" once it is added,
+        // never before.
         "AUTH_MODE": "dummy",
         // Blank for the same reason as the top-level block: `npm run deploy`
         // stamps the real commit at deploy time via `--var`, so nothing here
         // needs editing per release.
         "GIT_SHA": "",
-        // The charity's real spreadsheet and OAuth client. Set both before
-        // the extract can run; until they are set the button reports itself
-        // unconfigured rather than failing at Google. GOOGLE_CLIENT_ID is
-        // also the sign-in client — see the top-level block's comment — so
-        // blank means AUTH_MODE cannot be "google" here; config/env.ts
-        // refuses to boot on that combination.
-        "GOOGLE_SHEETS_SPREADSHEET_ID": "",
-        "GOOGLE_CLIENT_ID": "",
+        // The charity's real spreadsheet (set 2026-09-29). Must differ from
+        // every test value — this, not the OAuth client, is what keeps a test
+        // deployment out of the real spreadsheet.
+        "GOOGLE_SHEETS_SPREADSHEET_ID": "1LwbTAMybhAjyEayfn_zeGaUtIRI83XOso19LGBWPeRo",
+        // The SAME OAuth client as UAT, deliberately (Pete, 2026-09-29): the
+        // client grants nothing on its own, and one client means one consent
+        // screen to verify. Its Authorised JavaScript origins must gain the
+        // production frontend once that exists, or neither sign-in nor the
+        // extract's Sheets consent will work here.
+        "GOOGLE_CLIENT_ID": "746866667590-us7ee47uheispedj0qtonpum27rpa2i4.apps.googleusercontent.com",
         // The charity's referral-form configuration workbook, read by an
         // administrator's browser to publish a release. Not a secret. The SAME
         // workbook in every environment, deliberately — unlike the extract
