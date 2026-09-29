@@ -2393,15 +2393,16 @@ reasonably ask for half a crate. Same snapshot rules as an item line: stored
 and returned exactly as sent, never revalidated against the live crate, so a
 deleted crate's line is not removed out from under you.
 
-**A stock item that is currently a crate member cannot be given a new
-individual target on a list saved from scratch** — the crate is what gets
-bought. Enforced server-side: an item-kind line naming a current crate member
-is refused with a `422`, whether on `POST` or on a `PATCH` that sends `lines`.
-This does not reach backwards: a `PATCH` that omits `lines` leaves whatever is
-stored untouched, so a target already on a list for an item before it became
-a crate member, or for a crate since deleted, stays on the list exactly as
-saved. Show such a line as needing administrator attention rather than
-hiding or auto-removing it.
+**A list may target a crate member individually, or its crate, but not
+both.** Enforced server-side: a `POST`, or a `PATCH` that sends `lines`,
+containing an item-kind line and a crate-kind line for a crate that item is
+currently a member of is refused with a `422`. An item in more than one crate
+is refused if any of them is on the list. The check covers everything sent,
+so a list stored with both before the item joined the crate cannot be saved
+again with both — the administrator must remove one. A `PATCH` that omits
+`lines` checks nothing and leaves the stored lines untouched. A line for a
+crate since deleted stays exactly as saved; show it as needing administrator
+attention rather than hiding or auto-removing it.
 
 ---
 

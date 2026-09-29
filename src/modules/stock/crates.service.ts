@@ -27,14 +27,26 @@ export function createCratesService({ repository, clock }: CratesServiceDeps) {
   }
 
   /**
-   * Every stock item id currently a member of any crate. `target-stock-
+   * For every stock item currently a member of any crate, the ids of the
+   * crates it belongs to — more than one only when the crate definitions are
+   * themselves in error, which `stock-validation.ts` reports. `target-stock-
    * lists.service.ts` calls this across the module boundary — through this
-   * service, never `crates.repository.ts` directly — to refuse a new
-   * individual target on an item the crate is what gets bought for instead.
+   * service, never `crates.repository.ts` directly — to refuse a list that
+   * targets both an item and a crate it is a member of.
    */
-  async function listMemberStockItemIds(): Promise<ReadonlySet<string>> {
+  async function listCrateIdsByMemberStockItemId(): Promise<
+    ReadonlyMap<string, readonly string[]>
+  > {
     const crates = await repository.listCratesWithMembers();
-    return new Set(crates.flatMap((entry) => entry.members.map((member) => member.stockItemId)));
+    const crateIdsByItem = new Map<string, string[]>();
+    for (const { crate, members } of crates) {
+      for (const { stockItemId } of members) {
+        const existing = crateIdsByItem.get(stockItemId);
+        if (existing === undefined) crateIdsByItem.set(stockItemId, [crate.id]);
+        else existing.push(crate.id);
+      }
+    }
+    return crateIdsByItem;
   }
 
   async function assertGroupingExists(groupingId: string): Promise<void> {
@@ -123,7 +135,7 @@ export function createCratesService({ repository, clock }: CratesServiceDeps) {
     await repository.deleteCrate(id); // Idempotent — deleting twice is not an error.
   }
 
-  return { listCrates, listMemberStockItemIds, createCrate, updateCrate, deleteCrate };
+  return { listCrates, listCrateIdsByMemberStockItemId, createCrate, updateCrate, deleteCrate };
 }
 
 export type CratesService = ReturnType<typeof createCratesService>;

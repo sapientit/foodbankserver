@@ -146,7 +146,7 @@
         "GIT_SHA": "",
         // Deliberately DIFFERENT values from production, so a test
         // deployment can never write into the charity's real spreadsheet.
-        "GOOGLE_SHEETS_SPREADSHEET_ID": "1gQK_ore1UOeHY_CwONpua307GUbh5J0_4zt90hlmcs8",
+        "GOOGLE_SHEETS_SPREADSHEET_ID": "1yONyudUHy9wnpukqKHmgLO9BAIgJpivOdYzPnWxmCyc",
         // The one Google OAuth client — see the top-level block's comment.
         // Created 2026-09-21 for this test deployment's sign-in (Authorised
         // JavaScript origin referrals-test.guildfordfoodbank.workers.dev), and

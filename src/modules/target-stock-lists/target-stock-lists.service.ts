@@ -37,7 +37,7 @@ export type TargetStockLine = ItemTargetStockLine | CrateTargetStockLine;
  * module-boundary rule.
  */
 export interface CrateMembershipLookup {
-  listMemberStockItemIds(): Promise<ReadonlySet<string>>;
+  listCrateIdsByMemberStockItemId(): Promise<ReadonlyMap<string, readonly string[]>>;
 }
 
 export interface TargetStockListsServiceDeps {
@@ -47,27 +47,36 @@ export interface TargetStockListsServiceDeps {
 }
 
 /**
- * A stock item that is currently a crate member is what the crate is bought
- * for, not itself — so a *newly saved* set of lines (a create, or a patch
- * that sends `lines`) may not give it its own individual target. This does
- * not reach backwards: a line already stored for an item before it became a
- * crate member is left exactly as it was — see `parseLines` and the "a patch
- * that omits lines leaves them untouched" behaviour below. Settled in the
- * crates/groupings handoff, section 4; `INITIAL_SPEC1.txt`,
- * `#Target stock lists and shopping`.
+ * A newly saved set of lines (a create, or a patch that sends `lines`) may
+ * give a crate member its own individual target, or give its crate one, but
+ * not both — the item would be bought twice over. An item in more than one
+ * crate is refused if any of them is on the list. This applies to every sent
+ * line, including a pair already stored together before the item joined the
+ * crate: a list with both cannot be saved again until the administrator
+ * removes one. A patch that omits `lines` checks nothing and leaves the
+ * stored lines untouched. `INITIAL_SPEC1.txt`, `#Target stock lists and
+ * shopping`.
+ *
+ * Membership is only read when the payload has both kinds of line — an
+ * item-only or crate-only list cannot contain the pair.
  */
-async function assertNoCrateMemberHasAnIndividualTarget(
+async function assertNoItemTargetedAlongsideItsCrate(
   crates: CrateMembershipLookup,
   lines: readonly TargetStockLine[],
 ): Promise<void> {
   const itemLines = lines.filter((line): line is ItemTargetStockLine => line.kind === 'item');
-  if (itemLines.length === 0) return;
+  const targetedCrateIds = new Set(
+    lines.filter((line) => line.kind === 'crate').map((line) => line.crateId),
+  );
+  if (itemLines.length === 0 || targetedCrateIds.size === 0) return;
 
-  const memberIds = await crates.listMemberStockItemIds();
-  const offending = itemLines.find((line) => memberIds.has(line.stockItemId));
+  const crateIdsByItem = await crates.listCrateIdsByMemberStockItemId();
+  const offending = itemLines.find((line) =>
+    (crateIdsByItem.get(line.stockItemId) ?? []).some((crateId) => targetedCrateIds.has(crateId)),
+  );
   if (offending !== undefined) {
     throw new UnprocessableError(
-      'A stock item that is currently a crate member cannot be given an individual target',
+      'A stock item cannot have an individual target on a list that also targets its crate',
     );
   }
 }
@@ -98,7 +107,7 @@ export function createTargetStockListsService({
     name: string;
     lines: TargetStockLine[];
   }): Promise<TargetStockListRow> {
-    await assertNoCrateMemberHasAnIndividualTarget(crates, input.lines);
+    await assertNoItemTargetedAlongsideItsCrate(crates, input.lines);
     const now = clock.nowIso();
 
     try {
@@ -124,7 +133,7 @@ export function createTargetStockListsService({
     patch: { name?: string | undefined; lines?: TargetStockLine[] | undefined },
   ): Promise<TargetStockListRow> {
     if (patch.lines !== undefined) {
-      await assertNoCrateMemberHasAnIndividualTarget(crates, patch.lines);
+      await assertNoItemTargetedAlongsideItsCrate(crates, patch.lines);
     }
 
     const next: Patch<NewTargetStockListRow> = { updatedAt: clock.nowIso() };
@@ -134,8 +143,7 @@ export function createTargetStockListsService({
     // window in which a list is half updated on a database with no
     // interactive transactions. Only a sent `lines` array is checked against
     // current crate membership above — a patch that omits `lines` leaves
-    // whatever is already stored untouched, including a line that predates a
-    // stock item becoming a crate member.
+    // whatever is already stored untouched.
     if (patch.lines !== undefined) next.linesJson = JSON.stringify(patch.lines);
 
     try {

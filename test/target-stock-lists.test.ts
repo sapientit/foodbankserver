@@ -357,81 +357,145 @@ describe('target stock lists', () => {
   });
 });
 
-describe('a crate member cannot be given an individual target', () => {
-  it('refuses an item-kind line naming a current crate member on create, with 422', async () => {
-    const { testApp, token } = await loginAs('admin');
-    const member = await createStockItem(testApp, token, 'Crate Item', 'C1');
-    const otherMember = await createStockItem(testApp, token, 'Crate Item Two', 'C1');
-    await createCrateOf(testApp, token, 'C1', [member, otherMember]);
-
-    const response = await create(testApp, token, {
-      name: 'Standard week',
-      lines: [{ kind: 'item', stockItemId: member, name: 'Crate Item', targetQuantity: 5 }],
+describe('an item may not be targeted alongside its crate', () => {
+  async function postLines(testApp: TestApp, token: string, lines: unknown[]): Promise<Response> {
+    return testApp.request('/api/v1/target-stock-lists', {
+      method: 'POST',
+      headers: json(token),
+      body: JSON.stringify({ name: 'Standard week', lines }),
     });
+  }
 
-    expect(response.status).toBe(422);
+  async function listedCount(testApp: TestApp, token: string): Promise<number> {
     const listed = await testApp.request('/api/v1/target-stock-lists', { headers: json(token) });
     const { targetStockLists: lists }: { targetStockLists: unknown[] } = await listed.json();
-    expect(lists).toEqual([]);
-  });
+    return lists.length;
+  }
 
-  it('refuses the same line on a patch that sends lines, with 422', async () => {
+  it('allows an individual target for a current crate member', async () => {
     const { testApp, token } = await loginAs('admin');
     const member = await createStockItem(testApp, token, 'Crate Item', 'C1');
     const otherMember = await createStockItem(testApp, token, 'Crate Item Two', 'C1');
     await createCrateOf(testApp, token, 'C1', [member, otherMember]);
 
-    const created = await create(testApp, token, { name: 'Standard week', lines: [] });
-    const { id }: { id: string } = await created.json();
-
-    const response = await patch(testApp, token, id, {
-      lines: [{ kind: 'item', stockItemId: member, name: 'Crate Item', targetQuantity: 5 }],
-    });
-
-    expect(response.status).toBe(422);
-  });
-
-  it('does not retroactively refuse a line already stored before the item became a crate member', async () => {
-    const { testApp, token } = await loginAs('admin');
-    const member = await createStockItem(testApp, token, 'Future Crate Item', 'C1');
-    const otherMember = await createStockItem(testApp, token, 'Future Crate Item Two', 'C1');
-
-    // The individual target is saved first, while the item is not yet a
-    // crate member.
-    const created = await create(testApp, token, {
-      name: 'Standard week',
-      lines: [{ kind: 'item', stockItemId: member, name: 'Future Crate Item', targetQuantity: 5 }],
-    });
-    expect(created.status).toBe(201);
-    const { id }: { id: string } = await created.json();
-
-    await createCrateOf(testApp, token, 'C1', [member, otherMember]);
-
-    // A patch that renames the list, without touching `lines`, must not be
-    // refused just because the stored line now names a crate member.
-    const renamed = await patch(testApp, token, id, { name: 'Standard week (renamed)' });
-    expect(renamed.status).toBe(200);
-    const body: { name: string; lines: unknown[] } = await renamed.json();
-    expect(body.lines).toEqual([
-      { kind: 'item', stockItemId: member, name: 'Future Crate Item', targetQuantity: 5 },
+    const response = await postLines(testApp, token, [
+      { kind: 'item', stockItemId: member, name: 'Crate Item', targetQuantity: 5 },
     ]);
+
+    expect(response.status).toBe(201);
   });
 
-  it('does not affect a crate-kind line naming the same crate', async () => {
+  it('allows a member target beside a crate it does not belong to', async () => {
+    const { testApp, token } = await loginAs('admin');
+    const member = await createStockItem(testApp, token, 'Crate Item', 'C1');
+    const otherMember = await createStockItem(testApp, token, 'Crate Item Two', 'C1');
+    const unrelatedA = await createStockItem(testApp, token, 'Other Item', 'C2');
+    const unrelatedB = await createStockItem(testApp, token, 'Other Item Two', 'C2');
+    await createCrateOf(testApp, token, 'C1', [member, otherMember]);
+    const otherCrate = await createCrateOf(testApp, token, 'C2', [unrelatedA, unrelatedB]);
+
+    const response = await postLines(testApp, token, [
+      { kind: 'item', stockItemId: member, name: 'Crate Item', targetQuantity: 5 },
+      { kind: 'crate', crateId: otherCrate, crateName: 'Mixed Crate', targetQuantity: 1 },
+    ]);
+
+    expect(response.status).toBe(201);
+  });
+
+  it('refuses an item target and its crate target on create, with 422, saving nothing', async () => {
     const { testApp, token } = await loginAs('admin');
     const member = await createStockItem(testApp, token, 'Crate Item', 'C1');
     const otherMember = await createStockItem(testApp, token, 'Crate Item Two', 'C1');
     const crateId = await createCrateOf(testApp, token, 'C1', [member, otherMember]);
 
-    const response = await testApp.request('/api/v1/target-stock-lists', {
-      method: 'POST',
-      headers: json(token),
-      body: JSON.stringify({
-        name: 'Standard week',
-        lines: [{ kind: 'crate', crateId, crateName: 'Mixed Crate', targetQuantity: 1 }],
-      }),
+    const response = await postLines(testApp, token, [
+      { kind: 'item', stockItemId: member, name: 'Crate Item', targetQuantity: 5 },
+      { kind: 'crate', crateId, crateName: 'Mixed Crate', targetQuantity: 1 },
+    ]);
+
+    expect(response.status).toBe(422);
+    expect(await listedCount(testApp, token)).toBe(0);
+  });
+
+  it('refuses the pair when the item is in more than one crate and either is targeted', async () => {
+    const { testApp, token } = await loginAs('admin');
+    const shared = await createStockItem(testApp, token, 'Shared Item', 'C1');
+    const firstOther = await createStockItem(testApp, token, 'First Other', 'C1');
+    const secondOther = await createStockItem(testApp, token, 'Second Other', 'C2');
+    await createCrateOf(testApp, token, 'C1', [shared, firstOther]);
+    const secondCrate = await createCrateOf(testApp, token, 'C2', [shared, secondOther]);
+
+    const response = await postLines(testApp, token, [
+      { kind: 'item', stockItemId: shared, name: 'Shared Item', targetQuantity: 5 },
+      { kind: 'crate', crateId: secondCrate, crateName: 'Mixed Crate', targetQuantity: 1 },
+    ]);
+
+    expect(response.status).toBe(422);
+  });
+
+  it('refuses the pair on a patch that sends lines, with 422, leaving the stored lines alone', async () => {
+    const { testApp, token } = await loginAs('admin');
+    const member = await createStockItem(testApp, token, 'Crate Item', 'C1');
+    const otherMember = await createStockItem(testApp, token, 'Crate Item Two', 'C1');
+    const crateId = await createCrateOf(testApp, token, 'C1', [member, otherMember]);
+
+    const created = await postLines(testApp, token, [
+      { kind: 'crate', crateId, crateName: 'Mixed Crate', targetQuantity: 1 },
+    ]);
+    const { id }: { id: string } = await created.json();
+
+    const response = await patch(testApp, token, id, {
+      lines: [
+        { kind: 'item', stockItemId: member, name: 'Crate Item', targetQuantity: 5 },
+        { kind: 'crate', crateId, crateName: 'Mixed Crate', targetQuantity: 1 },
+      ],
     });
 
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(422);
+    const listed = await testApp.request('/api/v1/target-stock-lists', { headers: json(token) });
+    const { targetStockLists: lists }: { targetStockLists: { lines: unknown[] }[] } =
+      await listed.json();
+    expect(lists[0]?.lines).toEqual([
+      { kind: 'crate', crateId, crateName: 'Mixed Crate', targetQuantity: 1 },
+    ]);
+  });
+
+  it('refuses re-saving a pair stored before the item joined the crate', async () => {
+    const { testApp, token } = await loginAs('admin');
+    const member = await createStockItem(testApp, token, 'Future Crate Item', 'C1');
+    const otherMember = await createStockItem(testApp, token, 'Crate Item Two', 'C1');
+    const thirdItem = await createStockItem(testApp, token, 'Crate Item Three', 'C1');
+    // The crate exists first without `member`, so both lines can be saved.
+    const crateId = await createCrateOf(testApp, token, 'C1', [otherMember, thirdItem]);
+    const lines = [
+      { kind: 'item', stockItemId: member, name: 'Future Crate Item', targetQuantity: 5 },
+      { kind: 'crate', crateId, crateName: 'Mixed Crate', targetQuantity: 1 },
+    ];
+    const created = await postLines(testApp, token, lines);
+    expect(created.status).toBe(201);
+    const { id }: { id: string } = await created.json();
+
+    const joined = await testApp.request(`/api/v1/stock/crates/${crateId}`, {
+      method: 'PATCH',
+      headers: json(token),
+      body: JSON.stringify({
+        members: [member, otherMember, thirdItem].map((stockItemId, index) => ({
+          stockItemId,
+          stockCompositionPercent: index === 0 ? 34 : 33,
+          shoppingCompositionPercent: index === 0 ? 34 : 33,
+        })),
+      }),
+    });
+    expect(joined.status).toBe(200);
+
+    // A rename that omits `lines` checks nothing and keeps the stored pair.
+    const renamed = await patch(testApp, token, id, { name: 'Standard week (renamed)' });
+    expect(renamed.status).toBe(200);
+    const body: { lines: unknown[] } = await renamed.json();
+    expect(body.lines).toEqual(lines);
+
+    // Sending the same pair back is refused, like any other newly sent pair.
+    const resent = await patch(testApp, token, id, { lines });
+    expect(resent.status).toBe(422);
   });
 });
