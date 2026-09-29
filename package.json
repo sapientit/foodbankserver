@@ -9,9 +9,10 @@
   },
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy --env production --var GIT_SHA:$(git rev-parse HEAD)",
-    "deploy:test": "wrangler deploy --env \"\" --var GIT_SHA:$(git rev-parse HEAD)",
-    "deploy:uat": "wrangler deploy --env uat --var GIT_SHA:$(git rev-parse HEAD)",
+    "deploy": "npm run -s require-clean-tree && wrangler deploy --env production --var GIT_SHA:$(git rev-parse HEAD)",
+    "deploy:test": "npm run -s require-clean-tree && wrangler deploy --env \"\" --var GIT_SHA:$(git rev-parse HEAD)",
+    "deploy:uat": "npm run -s require-clean-tree && wrangler deploy --env uat --var GIT_SHA:$(git rev-parse HEAD)",
+    "require-clean-tree": "test -z \"$(git status --porcelain)\" || { echo 'refusing to deploy: uncommitted changes would not be identified by GIT_SHA' >&2; exit 1; }",
     "cf-typegen": "wrangler types --strict-vars",
     "load:stock": "node scripts/load-stock-data.mjs",
     "db:generate": "drizzle-kit generate",

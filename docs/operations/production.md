@@ -56,7 +56,23 @@ something already running.
 
 `~/bin/foodbank-deploy-server` drives all three deployed tiers: test by default, `--uat` for the
 charity-account UAT system, and `--production` behind a typed confirmation that also reports the
-`AUTH_MODE` tripwire and any uncommitted work.
+`AUTH_MODE` tripwire.
+
+**Every deployment is a commit.** `/health` reports the deployed commit, so it has to be one git can
+find again. A test deploy (server or client) commits the working tree on the current branch first;
+UAT and production refuse a dirty tree; `npm run deploy*` refuse one too, so a direct run cannot
+stamp a `GIT_SHA` that does not describe what shipped. Every deploy is tagged
+`deploy/<tier>/<UTC time>` and the tag pushed, which keeps the commit reachable after an amend or
+rebase and gives each tier a history to roll back along.
+
+**Promotion deploys what a tier is running, not what is in the working tree.**
+`deploy_foodbank --uat --promote-from test` reads the server commit from test's `/health` and the
+client commit from its `client-version.json`, checks both out into temporary worktrees, and runs the
+normal check → migrate → deploy → verify there. This lets a fix proven in UAT go to production while
+other work carries on in test. Test → UAT is the rehearsal. UAT → production still needs a
+production tier in `deploy-foodbank-client` before `deploy_foodbank` can offer it. Promotion carries
+code and migrations only: a secret set on the source environment must be set on the target by hand
+first.
 
 **The databases are separate on purpose**, for exactly the reason the Google vars differ per tier: no
 deployment should be able to write into another's data. All are EU-jurisdiction, which is permanent.
