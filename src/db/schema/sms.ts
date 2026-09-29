@@ -71,7 +71,7 @@ export type SmsRecipientRole = (typeof SMS_RECIPIENT_ROLES)[number];
  * statistic underneath worth keeping. That is the charity's decision — see
  * `INITIAL_SPEC1.txt`, "SMS reminders and replies".
  *
- * ## A null `referralId` is a loose reply — or a referrer message
+ * ## A null `referralId` is a loose reply, a referrer message, or a reply to one of those
  *
  * Somebody texted a number the food bank holds no upcoming referral for. The
  * row is still written — a reply is never dropped — and only administrators
@@ -84,6 +84,13 @@ export type SmsRecipientRole = (typeof SMS_RECIPIENT_ROLES)[number];
  * that referrer's currently open candidates fresh whenever an administrator
  * reads the row, rather than fixing a set at insert time that would go stale
  * the moment one of those referrals closed.
+ *
+ * An admin's own `staff_reply` back to a loose number or a referrer (`POST
+ * /sms-messages/:id/replies`) is null here too, for the same reason as its
+ * anchor: there is either no referral to attach it to, or, for a referrer,
+ * more than one candidate. It carries `recipientRole: 'referrer'` when it
+ * answers a `referrer_reply`, same as a reminder or a `staff_reply` sent on a
+ * `referrer_collect` referral's own thread.
  *
  * ## `sessionId` is a snapshot, not a lookup
  *

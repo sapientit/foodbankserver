@@ -1527,6 +1527,8 @@ GET  /api/v1/sms-messages/attention-summary       admin only
 GET  /api/v1/sms-messages                         admin only → { messages: [...] }
 GET  /api/v1/sms-messages/unmatched               admin only (superseded, see below)
 POST /api/v1/sms-messages/{id}/read               admin only
+POST /api/v1/sms-messages/{id}/replies            admin only { body } → text a loose number or referrer back
+POST /api/v1/sms-messages/{id}/thread/read        admin only → clear that number's conversation
 ```
 
 ### Sending
@@ -1696,6 +1698,36 @@ a way around that; open and mark it read through the referral's own thread
 instead. It is idempotent and touches only the message named: it never marks
 another message and never clears a session's own `sms-summary` count.
 
+### Replying to a number, and clearing its conversation
+
+A loose reply and a referrer message have no referral thread to reply on, so
+the administrator screen replies **by message**, never by phone number:
+
+- `POST /sms-messages/{id}/replies` `{ body }` → `201` with an `SmsMessage`.
+  `{id}` is a loose `household_reply` (`location: "unmatched"`, no
+  `referralId`) or any `referrer_reply` from the number — the latest one in
+  the conversation is the natural choice. The server texts the number that
+  message came from; **never send a phone number to the API.** The reply is
+  stored as a `staff_reply` with `referralId: null` and the same `phone`, so
+  it turns up in `GET /sms-messages` in that number's conversation, and
+  whatever the number texts next joins it too. On a referrer,
+  `recipientRole` is `'referrer'`. `404` for any other kind of message,
+  including a reply on a referral's own thread — answer that one with `POST
+/referrals/{id}/sms-messages`. `422` if the number cannot be texted or
+  sending failed; nothing is recorded. No double-submit guard — disable the
+  button while the request is in flight if you want one.
+- `POST /sms-messages/{id}/thread/read` → `204`. The administrator's version
+  of expanding a household's line: marks read every unread message from the
+  same number as `{id}` that is an administrator's to read — loose replies,
+  referrer messages and `closed_session` replies. **`active_session` replies
+  stay unread**; they are the team leader's. `{id}` is any `household_reply`
+  or `referrer_reply` in the conversation. Idempotent. Use this when an
+  administrator opens a number's conversation; `POST /sms-messages/{id}/read`
+  remains for clearing one message.
+
+The same rule as every staff reply applies to what is typed: no name, and
+nothing that says whose number it is. Say so on the screen.
+
 ### Referrer collection and SMS
 
 When a referral's `collectionMethod` is `referrer_collect`, **every
@@ -1735,6 +1767,14 @@ the meantime drops off the list on its own. An administrator reads
 `candidateParcels` to work out by hand which household a reply was about;
 nothing here assigns one automatically, and there is no separate "assign"
 call — that judgement stays outside the API.
+
+**To answer a referrer, use `POST /sms-messages/{id}/replies` with the
+`referrer_reply`'s id** — see "Replying to a number" above. Do **not** answer
+through `POST /referrals/{candidateReferralId}/sms-messages`: it does reach
+the referrer's number, because the referral is `referrer_collect`, but it
+files the reply on that one household's thread, where a team leader running
+that session can see it, whichever household the referrer was actually
+asking about.
 
 ### Thirty days
 

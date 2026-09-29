@@ -325,6 +325,34 @@ export function createSmsService(deps: SmsServiceDeps) {
   }
 
   /**
+   * The send-or-refuse decision shared by every kind of outbound staff reply:
+   * try the provider when it is configured and the destination is live, fall
+   * back to the simulator, or refuse with the same two reasons an admin sees
+   * everywhere else in this module. Extracted so `sendStaffReply` and
+   * `sendNumberReply` cannot drift on what "sent" means.
+   */
+  async function deliver(
+    normalised: string,
+    body: string,
+  ): Promise<{ providerMessageId: string; simulated: boolean }> {
+    if (provider !== undefined && isLive(normalised)) {
+      const result = await sendSms(provider, normalised, body, logger);
+      if (!result.ok) {
+        throw new UnprocessableError('The reply could not be sent. Please try again.');
+      }
+      return { providerMessageId: result.providerMessageId, simulated: false };
+    }
+
+    if (simulate) {
+      return { providerMessageId: simulatedProviderMessageId(), simulated: true };
+    }
+
+    throw new UnprocessableError(
+      provider === undefined ? NOT_CONFIGURED_REASON : RESTRICTED_REASON,
+    );
+  }
+
+  /**
    * Staff texting a household back.
    *
    * Unlike a reminder, there is no `failure` kind for a staff reply — the
@@ -350,24 +378,7 @@ export function createSmsService(deps: SmsServiceDeps) {
       );
     }
 
-    let providerMessageId: string;
-    let simulated: boolean;
-
-    if (provider !== undefined && isLive(normalised)) {
-      const result = await sendSms(provider, normalised, body, logger);
-      if (!result.ok) {
-        throw new UnprocessableError('The reply could not be sent. Please try again.');
-      }
-      providerMessageId = result.providerMessageId;
-      simulated = false;
-    } else if (simulate) {
-      providerMessageId = simulatedProviderMessageId();
-      simulated = true;
-    } else {
-      throw new UnprocessableError(
-        provider === undefined ? NOT_CONFIGURED_REASON : RESTRICTED_REASON,
-      );
-    }
+    const { providerMessageId, simulated } = await deliver(normalised, body);
 
     const now = clock.nowIso();
     const message = await repository.insert({
@@ -388,6 +399,65 @@ export function createSmsService(deps: SmsServiceDeps) {
     });
 
     logger.info('staff sms reply sent', { referralId, userId: actor.userId });
+    return message;
+  }
+
+  /**
+   * Staff texting back a number that is not a household's own referral
+   * thread: a loose reply (`household_reply`, `referralId` and `sessionId`
+   * both null) or a referrer's own number (`referrer_reply`, which is always
+   * `referralId: null` — see `db/schema/sms.ts`). Written with the anchor
+   * message's own `phone` and `referralId: null`, so it lands in the same
+   * admin-inbox thread `GET /sms-messages` already groups by `phone` —
+   * `INITIAL_SPEC1.txt`, "SMS reminders and replies".
+   *
+   * Any other anchor kind or location — absent, a `reminder`, a `staff_reply`,
+   * a `failure`, or a `household_reply` that *is* tied to a referral — is not
+   * a number this route texts back, and reports the same `NotFoundError` an
+   * absent id would.
+   *
+   * No double-submit guard, deliberately — the charity's call, and the same
+   * as `sendStaffReply`: a second press sends a second text.
+   */
+  async function sendNumberReply(
+    messageId: string,
+    body: string,
+    actor: Actor,
+  ): Promise<SmsMessage> {
+    const anchor = await repository.findById(messageId);
+    const isLooseHouseholdReply =
+      anchor?.kind === 'household_reply' && anchor.referralId === null && anchor.sessionId === null;
+    const isReferrerReply = anchor?.kind === 'referrer_reply';
+    if (anchor === undefined || !(isLooseHouseholdReply || isReferrerReply)) {
+      throw new NotFoundError('Message not found');
+    }
+
+    const normalised = normalisePhone(anchor.phone);
+    if (normalised === null) {
+      throw new UnprocessableError('This number cannot be texted');
+    }
+
+    const { providerMessageId, simulated } = await deliver(normalised, body);
+
+    const now = clock.nowIso();
+    const message = await repository.insert({
+      id: crypto.randomUUID(),
+      referralId: null,
+      sessionId: null,
+      kind: 'staff_reply',
+      phone: normalised,
+      body,
+      providerMessageId,
+      occurredAt: now,
+      readAt: now, // Outbound — read on arrival, like a reminder or a failure.
+      sentByUserId: actor.userId,
+      recipientRole: isReferrerReply ? 'referrer' : null,
+      simulated,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    logger.info('number sms reply sent', { userId: actor.userId });
     return message;
   }
 
@@ -651,6 +721,31 @@ export function createSmsService(deps: SmsServiceDeps) {
     return updated;
   }
 
+  /**
+   * Clears a number's whole thread at once — every unread `household_reply`
+   * or `referrer_reply` row on that phone that is the admin's to read —
+   * rather than one message at a time. Deliberately excludes any row still on
+   * a session that has not closed: that one stays the team leader's, the same
+   * rule `isSessionClosed` (`sms.mapper.ts`) and `countUnreadByLocation`
+   * (`sms.repository.ts`) already apply, reused here via the repository's own
+   * `markPhoneThreadRead` rather than re-derived. Idempotent — a no-op when
+   * nothing on the number is unread.
+   */
+  async function markNumberThreadRead(messageId: string): Promise<void> {
+    const anchor = await repository.findById(messageId);
+    if (
+      anchor === undefined ||
+      (anchor.kind !== 'household_reply' && anchor.kind !== 'referrer_reply') ||
+      anchor.phone === ''
+    ) {
+      throw new NotFoundError('Message not found');
+    }
+
+    const now = clock.nowIso();
+    const today = instantToLondonWallClock(now).date;
+    await repository.markPhoneThreadRead(anchor.phone, today, now);
+  }
+
   async function requireReferral(referralId: string): Promise<Referral> {
     const referral = await repository.findReferralById(referralId);
     if (referral === undefined) {
@@ -665,9 +760,11 @@ export function createSmsService(deps: SmsServiceDeps) {
     getThread,
     markThreadRead,
     sendStaffReply,
+    sendNumberReply,
     receiveInbound,
     listUnmatched,
     markMessageRead,
+    markNumberThreadRead,
     attentionSummary,
     listInbox,
   };

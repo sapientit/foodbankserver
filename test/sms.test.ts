@@ -1,5 +1,5 @@
 import { env } from 'cloudflare:workers';
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { API_PREFIX } from '../src/app.ts';
 import { GOOGLE_JWKS_URL } from '../src/config/constants.ts';
@@ -11,7 +11,7 @@ import { auditEvents, referrals } from '../src/db/schema/referrals.ts';
 import { authorisedReferrers, referralReasons } from '../src/db/schema/referrers.ts';
 import { modelParcels, parcelGrid } from '../src/db/schema/rules.ts';
 import { recurringSessions, sessions } from '../src/db/schema/sessions.ts';
-import { smsMessages } from '../src/db/schema/sms.ts';
+import { smsMessages, type SmsMessage } from '../src/db/schema/sms.ts';
 import { stockItems, stockLedger } from '../src/db/schema/stock.ts';
 import { refreshTokens, users } from '../src/db/schema/users.ts';
 import { purgeSmsMessages } from '../src/modules/jobs/purge-sms.ts';
@@ -2381,6 +2381,571 @@ describe('referrer_reply: inbound texts from a referrer collecting a parcel', ()
       ...ZERO_ATTENTION_SUMMARY,
       referrerUnread: 1,
     });
+  });
+});
+
+describe('replying to a number with no referral', () => {
+  /**
+   * `postReply` always creates a fresh row; when nothing has been submitted
+   * for the number yet, the webhook match finds nothing and it lands loose.
+   */
+  async function findLooseHouseholdReply(): Promise<SmsMessage> {
+    const [row] = await db
+      .select()
+      .from(smsMessages)
+      .where(and(eq(smsMessages.kind, 'household_reply'), isNull(smsMessages.referralId)));
+    if (row === undefined) throw new Error('loose household_reply not found in test setup');
+    return row;
+  }
+
+  it('replies to a loose household_reply, writing a staff_reply with no referral on the same phone', async () => {
+    const testApp = buildSmsTestApp({ SMS_SIMULATE: 'true' });
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+
+    await postReply(testApp, '07700 900999', 'Who is this?');
+    const inbound = await findLooseHouseholdReply();
+    expect(inbound.readAt).toBeNull(); // sanity: it starts unread, same as any household_reply
+
+    const response = await testApp.request(`${API_PREFIX}/sms-messages/${inbound.id}/replies`, {
+      method: 'POST',
+      headers: json(accessToken),
+      body: JSON.stringify({ body: 'This is the food bank, how can we help?' }),
+    });
+
+    expect(response.status).toBe(201);
+    const body: {
+      kind: string;
+      referralId: string | null;
+      recipientRole: string | null;
+      phone: string;
+      readAt: string | null;
+      simulated: boolean;
+    } = await response.json();
+    expect(body).toMatchObject({
+      kind: 'staff_reply',
+      referralId: null,
+      recipientRole: null,
+      phone: inbound.phone, // the same, already-normalised number the inbound arrived on
+      simulated: true, // no provider configured live for this number — the simulator ran
+    });
+    expect(body.readAt).not.toBeNull();
+
+    const rows = await db.select().from(smsMessages).where(eq(smsMessages.phone, inbound.phone));
+    const persisted = rows.find((row) => row.kind === 'staff_reply');
+    expect(persisted).toMatchObject({
+      referralId: null,
+      recipientRole: null,
+      phone: inbound.phone,
+      body: 'This is the food bank, how can we help?',
+    });
+    expect(persisted?.readAt).not.toBeNull();
+  });
+
+  it('replies to a referrer_reply with recipientRole referrer, on the referrer number, never landing on the referral thread', async () => {
+    const testApp = buildSmsTestApp({ SMS_SIMULATE: 'true' });
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world = await setUpReferralWorld(testApp, accessToken);
+    const { id: referralId } = await submitReferral(testApp, world, {
+      collectionMethod: 'referrer_collect',
+      referrerPhone: '07700 900555',
+    });
+
+    await postReply(testApp, '07700 900555', 'On my way');
+    const [referrerReply] = await db
+      .select()
+      .from(smsMessages)
+      .where(eq(smsMessages.kind, 'referrer_reply'));
+    if (referrerReply === undefined) throw new Error('referrer_reply not found in test setup');
+
+    const response = await testApp.request(
+      `${API_PREFIX}/sms-messages/${referrerReply.id}/replies`,
+      {
+        method: 'POST',
+        headers: json(accessToken),
+        body: JSON.stringify({ body: 'Yes, come whenever suits' }),
+      },
+    );
+
+    expect(response.status).toBe(201);
+    const body: {
+      kind: string;
+      referralId: string | null;
+      recipientRole: string | null;
+      phone: string;
+    } = await response.json();
+    expect(body).toMatchObject({
+      kind: 'staff_reply',
+      referralId: null, // structurally never one — see sms.mapper.ts
+      recipientRole: 'referrer',
+      phone: '+447700900555', // the referrer's own number
+    });
+
+    const threadResponse = await testApp.request(
+      `${API_PREFIX}/referrals/${referralId}/sms-messages`,
+      { headers: authHeaders(accessToken) },
+    );
+    const thread: { messages: { body: string }[] } = await threadResponse.json();
+    expect(thread.messages.some((m) => m.body === 'Yes, come whenever suits')).toBe(false);
+  });
+
+  it('threads the loose inbound and the reply under one unmatched phone group, and keeps a further inbound in it', async () => {
+    const testApp = buildSmsTestApp({ SMS_SIMULATE: 'true' });
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+
+    await postReply(testApp, '07700 900999', 'Who is this?');
+    const inbound = await findLooseHouseholdReply();
+
+    const replyResponse = await testApp.request(
+      `${API_PREFIX}/sms-messages/${inbound.id}/replies`,
+      {
+        method: 'POST',
+        headers: json(accessToken),
+        body: JSON.stringify({ body: 'This is the food bank' }),
+      },
+    );
+    expect(replyResponse.status).toBe(201);
+
+    await postReply(testApp, '07700 900999', 'Oh I see, thanks');
+
+    const inboxResponse = await testApp.request(`${API_PREFIX}/sms-messages`, {
+      headers: authHeaders(accessToken),
+    });
+    const body: { messages: { phone: string | null; kind: string; location: string }[] } =
+      await inboxResponse.json();
+
+    const group = body.messages.filter((m) => m.phone === inbound.phone);
+    expect(group).toHaveLength(3); // two inbound, one staff reply
+    expect(group.map((m) => m.kind).sort()).toEqual(
+      ['household_reply', 'household_reply', 'staff_reply'].sort(),
+    );
+    expect(group.every((m) => m.location === 'unmatched')).toBe(true);
+  });
+
+  it('refuses an unknown id, a reminder, a failure, a staff_reply and a household_reply matched to a referral', async () => {
+    const testApp = buildSmsTestApp({ SMS_SIMULATE: 'true' });
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world = await setUpReferralWorld(testApp, accessToken);
+    const { id: referralId } = await submitReferral(testApp, world);
+    const { id: unphonedReferralId } = await submitReferral(testApp, world, {
+      refereePhone: undefined,
+    });
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(providerSuccess('prov-1'));
+    await testApp.request(`${API_PREFIX}/sessions/${world.sessionId}/sms-reminders`, {
+      method: 'POST',
+      headers: authHeaders(accessToken),
+    });
+    const staffReply = await testApp.request(`${API_PREFIX}/referrals/${referralId}/sms-messages`, {
+      method: 'POST',
+      headers: json(accessToken),
+      body: JSON.stringify({ body: 'Thanks for letting us know' }),
+    });
+    const staffReplyBody: { id: string } = await staffReply.json();
+
+    await postReply(testApp, '07700 900123'); // matches the referral above, not loose
+
+    const [reminder] = await db.select().from(smsMessages).where(eq(smsMessages.kind, 'reminder'));
+    const [failure] = await db
+      .select()
+      .from(smsMessages)
+      .where(and(eq(smsMessages.kind, 'failure'), eq(smsMessages.referralId, unphonedReferralId)));
+    const [matchedHouseholdReply] = await db
+      .select()
+      .from(smsMessages)
+      .where(and(eq(smsMessages.kind, 'household_reply'), eq(smsMessages.referralId, referralId)));
+
+    for (const id of [
+      reminder?.id ?? '',
+      failure?.id ?? '',
+      staffReplyBody.id,
+      matchedHouseholdReply?.id ?? '',
+      crypto.randomUUID(),
+    ]) {
+      const response = await testApp.request(`${API_PREFIX}/sms-messages/${id}/replies`, {
+        method: 'POST',
+        headers: json(accessToken),
+        body: JSON.stringify({ body: 'Nope' }),
+      });
+      expect(response.status, id).toBe(404);
+    }
+  });
+
+  it('refuses a team lead token', async () => {
+    const testApp = buildSmsTestApp({ SMS_SIMULATE: 'true' });
+    const { accessToken: leadToken } = await devLogin(testApp, {
+      email: 'lead@foodbank.org',
+      role: 'team_lead',
+    });
+
+    await postReply(testApp, '07700 900999', 'Who is this?');
+    const inbound = await findLooseHouseholdReply();
+
+    const response = await testApp.request(`${API_PREFIX}/sms-messages/${inbound.id}/replies`, {
+      method: 'POST',
+      headers: json(leadToken),
+      body: JSON.stringify({ body: 'Nope' }),
+    });
+    expect(response.status).toBe(403);
+  });
+
+  it('refuses to reply when no provider is configured and simulate is off, writing nothing', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const testApp = buildSmsTestApp({
+      SMS_API_KEY: undefined,
+      SMS_SENDER: undefined,
+      SMS_SIMULATE: '',
+    });
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+
+    await postReply(testApp, '07700 900999', 'Who is this?');
+    const inbound = await findLooseHouseholdReply();
+
+    const response = await testApp.request(`${API_PREFIX}/sms-messages/${inbound.id}/replies`, {
+      method: 'POST',
+      headers: json(accessToken),
+      body: JSON.stringify({ body: 'Nope' }),
+    });
+    expect(response.status).toBe(422);
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    const rows = await db.select().from(smsMessages).where(eq(smsMessages.phone, inbound.phone));
+    expect(rows).toHaveLength(1); // only the original inbound row — nothing written
+  });
+
+  it('refuses an empty body', async () => {
+    const testApp = buildSmsTestApp({ SMS_SIMULATE: 'true' });
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+
+    await postReply(testApp, '07700 900999', 'Who is this?');
+    const inbound = await findLooseHouseholdReply();
+
+    const response = await testApp.request(`${API_PREFIX}/sms-messages/${inbound.id}/replies`, {
+      method: 'POST',
+      headers: json(accessToken),
+      body: JSON.stringify({ body: '' }),
+    });
+    expect(response.status).toBe(400); // parseJsonBody's BadRequestError — see http/validate.ts
+
+    const rows = await db.select().from(smsMessages).where(eq(smsMessages.phone, inbound.phone));
+    expect(rows).toHaveLength(1);
+  });
+
+  it('does not change the attention summary counts when sending a reply', async () => {
+    const testApp = buildSmsTestApp({ SMS_SIMULATE: 'true' });
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+
+    await postReply(testApp, '07700 900999', 'Who is this?');
+    const inbound = await findLooseHouseholdReply();
+
+    expect(await attentionSummary(testApp, accessToken)).toEqual({
+      ...ZERO_ATTENTION_SUMMARY,
+      unmatchedUnread: 1,
+    });
+
+    const response = await testApp.request(`${API_PREFIX}/sms-messages/${inbound.id}/replies`, {
+      method: 'POST',
+      headers: json(accessToken),
+      body: JSON.stringify({ body: 'This is the food bank' }),
+    });
+    expect(response.status).toBe(201);
+
+    // The unread inbound row is untouched by sending an outbound reply, and
+    // the reply itself arrives already read — it is read on arrival, like
+    // every other outbound row — so it never adds to the count either.
+    expect(await attentionSummary(testApp, accessToken)).toEqual({
+      ...ZERO_ATTENTION_SUMMARY,
+      unmatchedUnread: 1,
+    });
+  });
+
+  it('excludes the outbound staff_reply from the loose-replies list', async () => {
+    const testApp = buildSmsTestApp({ SMS_SIMULATE: 'true' });
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+
+    await postReply(testApp, '07700 900999', 'Who is this?');
+    const inbound = await findLooseHouseholdReply();
+
+    await testApp.request(`${API_PREFIX}/sms-messages/${inbound.id}/replies`, {
+      method: 'POST',
+      headers: json(accessToken),
+      body: JSON.stringify({ body: 'This is the food bank' }),
+    });
+
+    const response = await testApp.request(`${API_PREFIX}/sms-messages/unmatched`, {
+      headers: authHeaders(accessToken),
+    });
+    const body: { messages: { kind: string }[] } = await response.json();
+    expect(body.messages.map((m) => m.kind)).toEqual(['household_reply']); // the staff_reply is outbound
+  });
+
+  it('hands the reply to the provider with the stored number when the destination is live', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(providerSuccess('prov-loose-1'));
+    const testApp = buildSmsTestApp({ SMS_LIVE_NUMBERS: '07700 900999' });
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+
+    await postReply(testApp, '07700 900999', 'Who is this?');
+    const inbound = await findLooseHouseholdReply();
+
+    const response = await testApp.request(`${API_PREFIX}/sms-messages/${inbound.id}/replies`, {
+      method: 'POST',
+      headers: json(accessToken),
+      body: JSON.stringify({ body: 'This is the food bank' }),
+    });
+    expect(response.status).toBe(201);
+
+    const call = fetchSpy.mock.calls.find(
+      (c) => c[0] === 'https://api.thesmsworks.co.uk/v1/message/send',
+    );
+    expect(call).toBeDefined();
+    expect(call?.[1]?.body).toContain('+447700900999');
+  });
+});
+
+describe("clearing a number's whole thread", () => {
+  async function looseHouseholdRepliesFor(phone: string): Promise<SmsMessage[]> {
+    return db
+      .select()
+      .from(smsMessages)
+      .where(and(eq(smsMessages.phone, phone), eq(smsMessages.kind, 'household_reply')));
+  }
+
+  it('marks two unread loose household_replies for one phone both read, anchored on the first', async () => {
+    const testApp = buildSmsTestApp();
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+
+    await postReply(testApp, '07700 900999', 'First message');
+    await postReply(testApp, '07700 900999', 'Second message');
+
+    const before = await looseHouseholdRepliesFor('+447700900999');
+    expect(before).toHaveLength(2);
+    expect(before.every((row) => row.readAt === null)).toBe(true); // sanity: both start unread
+
+    const anchor = before[0];
+    if (anchor === undefined) throw new Error('loose reply not found in test setup');
+    const response = await testApp.request(`${API_PREFIX}/sms-messages/${anchor.id}/thread/read`, {
+      method: 'POST',
+      headers: authHeaders(accessToken),
+    });
+    expect(response.status).toBe(204);
+
+    const after = await looseHouseholdRepliesFor('+447700900999');
+    expect(after.every((row) => row.readAt !== null)).toBe(true);
+  });
+
+  it('marks two unread loose household_replies for one phone both read, anchored on the other one', async () => {
+    const testApp = buildSmsTestApp();
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+
+    await postReply(testApp, '07700 900999', 'First message');
+    await postReply(testApp, '07700 900999', 'Second message');
+
+    const before = await looseHouseholdRepliesFor('+447700900999');
+    const anchor = before[1];
+    if (anchor === undefined) throw new Error('loose reply not found in test setup');
+
+    const response = await testApp.request(`${API_PREFIX}/sms-messages/${anchor.id}/thread/read`, {
+      method: 'POST',
+      headers: authHeaders(accessToken),
+    });
+    expect(response.status).toBe(204);
+
+    const after = await looseHouseholdRepliesFor('+447700900999');
+    expect(after.every((row) => row.readAt !== null)).toBe(true);
+  });
+
+  it('clears every unread reply for a phone across a closed session and a loose message, but leaves an active-session reply for the same number unread', async () => {
+    const testApp = buildSmsTestApp();
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const phone = '07700 900123';
+    const e164 = '+447700900123';
+
+    // A message from before any referral existed for this number — loose.
+    await postReply(testApp, phone, 'Who is this, first time');
+
+    // A referral whose session then closes underneath its reply.
+    const world = await setUpReferralWorld(testApp, accessToken);
+    await submitReferral(testApp, world, { refereePhone: phone });
+    await postReply(testApp, phone, 'On the closed session');
+    await confirmSession(testApp, accessToken, world.sessionId);
+
+    // A second, still-open session for the same phone — the next reply lands there.
+    const secondSessionId = await createSession(testApp, accessToken, {
+      sessionDate: '2026-08-18',
+    });
+    await submitReferral(
+      testApp,
+      { ...world, sessionId: secondSessionId },
+      { refereePhone: phone },
+    );
+    await postReply(testApp, phone, 'On the active session');
+
+    const before = await looseHouseholdRepliesFor(e164);
+    expect(before).toHaveLength(3);
+    expect(before.every((row) => row.readAt === null)).toBe(true);
+
+    expect(await attentionSummary(testApp, accessToken)).toEqual({
+      ...ZERO_ATTENTION_SUMMARY,
+      unmatchedUnread: 1,
+      closedSessionUnread: 1,
+      activeSessionUnread: 1,
+    });
+
+    const looseAnchor = before.find((row) => row.sessionId === null);
+    if (looseAnchor === undefined) throw new Error('loose reply not found in test setup');
+
+    const response = await testApp.request(
+      `${API_PREFIX}/sms-messages/${looseAnchor.id}/thread/read`,
+      { method: 'POST', headers: authHeaders(accessToken) },
+    );
+    expect(response.status).toBe(204);
+
+    const after = await looseHouseholdRepliesFor(e164);
+    const byBody = new Map(after.map((row) => [row.body, row]));
+    expect(byBody.get('Who is this, first time')?.readAt).not.toBeNull();
+    expect(byBody.get('On the closed session')?.readAt).not.toBeNull();
+    expect(byBody.get('On the active session')?.readAt).toBeNull(); // an active session stays the team lead's
+
+    expect(await attentionSummary(testApp, accessToken)).toEqual({
+      ...ZERO_ATTENTION_SUMMARY,
+      activeSessionUnread: 1,
+    });
+  });
+
+  it("does not touch another phone's unread messages", async () => {
+    const testApp = buildSmsTestApp();
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+
+    await postReply(testApp, '07700 900111', 'Phone A');
+    await postReply(testApp, '07700 900222', 'Phone B');
+
+    const anchorA = (await looseHouseholdRepliesFor('+447700900111'))[0];
+    if (anchorA === undefined) throw new Error('loose reply not found in test setup');
+
+    const response = await testApp.request(`${API_PREFIX}/sms-messages/${anchorA.id}/thread/read`, {
+      method: 'POST',
+      headers: authHeaders(accessToken),
+    });
+    expect(response.status).toBe(204);
+
+    const [untouched] = await looseHouseholdRepliesFor('+447700900222');
+    expect(untouched?.readAt).toBeNull();
+  });
+
+  it('is idempotent: a second call still returns 204 and changes nothing further', async () => {
+    const testApp = buildSmsTestApp();
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+
+    await postReply(testApp, '07700 900999', 'Who is this?');
+    const anchor = (await looseHouseholdRepliesFor('+447700900999'))[0];
+    if (anchor === undefined) throw new Error('loose reply not found in test setup');
+
+    const first = await testApp.request(`${API_PREFIX}/sms-messages/${anchor.id}/thread/read`, {
+      method: 'POST',
+      headers: authHeaders(accessToken),
+    });
+    expect(first.status).toBe(204);
+    const [afterFirst] = await looseHouseholdRepliesFor('+447700900999');
+
+    const second = await testApp.request(`${API_PREFIX}/sms-messages/${anchor.id}/thread/read`, {
+      method: 'POST',
+      headers: authHeaders(accessToken),
+    });
+    expect(second.status).toBe(204);
+    const [afterSecond] = await looseHouseholdRepliesFor('+447700900999');
+
+    expect(afterSecond?.readAt).not.toBeNull();
+    expect(afterSecond?.readAt).toBe(afterFirst?.readAt); // unchanged by the second call
+  });
+
+  it('refuses an unknown id, a reminder, a staff_reply and a failure as the anchor', async () => {
+    const testApp = buildSmsTestApp();
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world = await setUpReferralWorld(testApp, accessToken);
+    const { id: referralId } = await submitReferral(testApp, world);
+    const { id: unphonedReferralId } = await submitReferral(testApp, world, {
+      refereePhone: undefined,
+    });
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(providerSuccess('prov-1'));
+    await testApp.request(`${API_PREFIX}/sessions/${world.sessionId}/sms-reminders`, {
+      method: 'POST',
+      headers: authHeaders(accessToken),
+    });
+    const staffReply = await testApp.request(`${API_PREFIX}/referrals/${referralId}/sms-messages`, {
+      method: 'POST',
+      headers: json(accessToken),
+      body: JSON.stringify({ body: 'Thanks for letting us know' }),
+    });
+    const staffReplyBody: { id: string } = await staffReply.json();
+
+    const [reminder] = await db.select().from(smsMessages).where(eq(smsMessages.kind, 'reminder'));
+    const [failure] = await db
+      .select()
+      .from(smsMessages)
+      .where(and(eq(smsMessages.kind, 'failure'), eq(smsMessages.referralId, unphonedReferralId)));
+
+    for (const id of [
+      reminder?.id ?? '',
+      staffReplyBody.id,
+      failure?.id ?? '',
+      crypto.randomUUID(),
+    ]) {
+      const response = await testApp.request(`${API_PREFIX}/sms-messages/${id}/thread/read`, {
+        method: 'POST',
+        headers: authHeaders(accessToken),
+      });
+      expect(response.status, id).toBe(404);
+    }
+  });
+
+  it('refuses a team lead token', async () => {
+    const testApp = buildSmsTestApp();
+    const { accessToken: leadToken } = await devLogin(testApp, {
+      email: 'lead@foodbank.org',
+      role: 'team_lead',
+    });
+
+    await postReply(testApp, '07700 900999', 'Who is this?');
+    const anchor = (await looseHouseholdRepliesFor('+447700900999'))[0];
+    if (anchor === undefined) throw new Error('loose reply not found in test setup');
+
+    const response = await testApp.request(`${API_PREFIX}/sms-messages/${anchor.id}/thread/read`, {
+      method: 'POST',
+      headers: authHeaders(leadToken),
+    });
+    expect(response.status).toBe(403);
+  });
+
+  it('accepts a referrer_reply as a valid anchor and marks it read', async () => {
+    const testApp = buildSmsTestApp();
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world = await setUpReferralWorld(testApp, accessToken);
+    await submitReferral(testApp, world, {
+      collectionMethod: 'referrer_collect',
+      referrerPhone: '07700 900555',
+    });
+
+    await postReply(testApp, '07700 900555', 'On my way');
+    const [referrerReply] = await db
+      .select()
+      .from(smsMessages)
+      .where(eq(smsMessages.kind, 'referrer_reply'));
+    if (referrerReply === undefined) throw new Error('referrer_reply not found in test setup');
+    expect(referrerReply.readAt).toBeNull();
+
+    const response = await testApp.request(
+      `${API_PREFIX}/sms-messages/${referrerReply.id}/thread/read`,
+      { method: 'POST', headers: authHeaders(accessToken) },
+    );
+    expect(response.status).toBe(204);
+
+    const [updated] = await db
+      .select()
+      .from(smsMessages)
+      .where(eq(smsMessages.id, referrerReply.id));
+    expect(updated?.readAt).not.toBeNull();
   });
 });
 

@@ -23,6 +23,12 @@ import { staffReplySchema } from './sms.schema.ts';
  * "a team lead does not see the reason for referral" — see
  * `INITIAL_SPEC1.txt`, "SMS reminders and replies". Loose replies stay
  * admin-only, because they carry no session for a team lead to be running.
+ *
+ * Two more admin-only routes text back, or clear, a number rather than a
+ * referral: `POST /sms-messages/:id/replies` (`:id` is a loose
+ * `household_reply` or a `referrer_reply` from that number, so the client
+ * never sends a phone number) and `POST /sms-messages/:id/thread/read`, which clears that whole
+ * thread at once rather than one row at a time.
  */
 export function smsRoutes(): Hono<AppEnv> {
   const routes = new Hono<AppEnv>();
@@ -71,6 +77,18 @@ export function smsRoutes(): Hono<AppEnv> {
   routes.post('/sms-messages/:id/read', ...admins, async (c) => {
     const message = await serviceFor(c).markMessageRead(c.req.param('id'));
     return c.json(toSmsMessageResponse(message));
+  });
+
+  routes.post('/sms-messages/:id/replies', ...admins, async (c) => {
+    const { body } = await parseJsonBody(c, staffReplySchema);
+    const message = await serviceFor(c).sendNumberReply(c.req.param('id'), body, actorOf(c));
+
+    return c.json(toSmsMessageResponse(message), 201);
+  });
+
+  routes.post('/sms-messages/:id/thread/read', ...admins, async (c) => {
+    await serviceFor(c).markNumberThreadRead(c.req.param('id'));
+    return c.body(null, 204);
   });
 
   routes.get('/sms-messages/attention-summary', ...admins, async (c) => {

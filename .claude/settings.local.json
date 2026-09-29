@@ -25,7 +25,11 @@
       "Bash(npx wrangler *)",
       "Bash(textutil -convert txt -stdout \"/Users/petebennett/foodbankclient/For Jessica.rtf\")",
       "Bash(grep -n -i -B6 -A10 \"Generate the pick list\\\\|pick-list$\")",
-      "Bash(git merge *)"
+      "Bash(git merge *)",
+      "Bash(sqlite3 -header -column work.db ' *)",
+      "Bash(sqlite3 work.db \"pragma table_info\\(authorised_referrers\\)\")",
+      "Bash(sqlite3 work.db \"pragma table_info\\(referral_reasons\\)\")",
+      "Bash(sqlite3 *)"
     ]
   }
 }

@@ -17,11 +17,14 @@ import type { Session, SessionStatus } from '../../db/schema/sessions.ts';
  * mapper for one. So once a caller is allowed to see a message at all, they
  * may see the whole of it.
  *
- * **A `referrer_reply` reaches only the admin routes above, structurally.**
- * It always has `referralId: null` — see `db/schema/sms.ts` — and the team
- * lead-reachable routes (`GET /referrals/:id/sms-messages`, `POST
- * /referrals/:id/sms-messages`) are queries scoped to one `referralId`, so a
- * `referrer_reply` row cannot be returned by them whatever this mapper does.
+ * **A `referrer_reply` reaches only the admin routes above, structurally** —
+ * plus the two more admin-only routes that text back or clear a number
+ * (`POST /sms-messages/:id/replies`, `POST /sms-messages/:id/thread/read`).
+ * A `referrer_reply` always has `referralId: null` — see `db/schema/sms.ts` —
+ * and the team lead-reachable routes (`GET /referrals/:id/sms-messages`,
+ * `POST /referrals/:id/sms-messages`) are queries scoped to one `referralId`,
+ * so neither a `referrer_reply` row nor the `staff_reply` rows the two new
+ * routes write can be returned by them whatever this mapper does.
  * `toSmsMessageResponse`, which those routes use, therefore carries no
  * `candidateParcels` field at all — there is nothing that role split needs to
  * hide.
@@ -37,10 +40,11 @@ export interface SmsMessageResponse {
   readonly readAt: string | null;
   /**
    * Whose number `phone` actually is. `null` on a genuinely loose reply —
-   * nothing to derive it from. A `referrer_reply` can never reach this
-   * mapper: it always has `referralId: null`, and every route this mapper
-   * serves is scoped to one referral's own thread. See `sms.mapper.ts`'s
-   * module comment and `SmsCandidateParcel`.
+   * nothing to derive it from — or `'referrer'` on a `referrer_reply` itself,
+   * or on a `staff_reply` an admin sent back to a referrer's number via
+   * `POST /sms-messages/:id/replies`. Either way this mapper never attaches
+   * `candidateParcels` — see `SmsCandidateParcel` and this file's module
+   * comment for where that does live.
    */
   readonly recipientRole: SmsRecipientRole | null;
   /**

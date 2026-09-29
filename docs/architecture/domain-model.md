@@ -161,6 +161,15 @@ as one) are what an administrator is actually told needs doing; `activeSessionUn
 `household_reply` on a session that is not closed) stays the team leader's responsibility — an
 administrator may view it, but it is broken out separately so it never reads as their own job.
 
+**A number with no referral thread is answered, and cleared, by message id, never by phone.** `POST
+/sms-messages/:id/replies` texts back the number of a loose `household_reply` or a `referrer_reply`
+and writes a `staff_reply` with `referral_id` and `session_id` null and the same `phone`, so the
+inbox's grouping by phone is the thread — there is no thread table. `POST
+/sms-messages/:id/thread/read` marks read every unread inbound row on that phone that is sessionless
+or on a closed session, by the same closed rule below; a reply on an active session stays the team
+leader's. Both are admin-only, and neither row can reach a team lead, whose routes are all scoped to
+one `referral_id`.
+
 **A session is closed for this purpose — `SmsMessageLocation` and every count above — once it is
 `confirmed` or `cancelled`, or once its own calendar date has passed, whichever comes first.**
 `sms.mapper.ts`'s `isSessionClosed` is the single definition; `sms.repository.ts`'s

@@ -101,12 +101,24 @@ export function createSmsRepository(db: Database) {
       return counts;
     },
 
-    /** Loose replies — no referral — oldest first, for the admin-only screen. */
+    /**
+     * Loose replies — no referral — oldest first, for the admin-only screen.
+     * Kind-filtered to `household_reply` and `referrer_reply`: a `staff_reply`
+     * an admin sends to a loose number or a referrer (`POST
+     * /sms-messages/:id/replies`) also has `referralId: null`, and this
+     * endpoint's contract does not change to start showing outbound replies
+     * alongside the inbound ones it was built for.
+     */
     async listUnmatched(): Promise<SmsMessage[]> {
       return db
         .select()
         .from(smsMessages)
-        .where(isNull(smsMessages.referralId))
+        .where(
+          and(
+            isNull(smsMessages.referralId),
+            inArray(smsMessages.kind, ['household_reply', 'referrer_reply']),
+          ),
+        )
         .orderBy(asc(smsMessages.occurredAt));
     },
 
@@ -254,6 +266,42 @@ export function createSmsRepository(db: Database) {
       // Already read (or absent): report current state rather than nothing.
       const existing = await db.select().from(smsMessages).where(eq(smsMessages.id, id)).limit(1);
       return expectAtMostOne(existing);
+    },
+
+    /**
+     * Clears a number's whole thread at once — every unread `household_reply`
+     * or `referrer_reply` row on that phone — in the ONE update the action
+     * needs, excluding a row still on a session that has not closed: that one
+     * stays the team leader's, cleared only through the referral's own
+     * thread. "Closed" is the identical rule `isSessionClosed`
+     * (`sms.mapper.ts`) and `countUnreadByLocation` above apply — reusing the
+     * same `CLOSED_SESSION_STATUSES` — kept in sync by hand across the three,
+     * since a query can't call the mapper's function. A session-less row
+     * (`session_id IS NULL`) always clears; a session-linked row only clears
+     * once its own session's status or date says so.
+     */
+    async markPhoneThreadRead(phone: string, today: string, at: string): Promise<void> {
+      const closedSessionIds = db
+        .select({ id: sessions.id })
+        .from(sessions)
+        .where(
+          or(
+            inArray(sessions.status, [...CLOSED_SESSION_STATUSES]),
+            lt(sessions.sessionDate, today),
+          ),
+        );
+
+      await db
+        .update(smsMessages)
+        .set({ readAt: at, updatedAt: at })
+        .where(
+          and(
+            eq(smsMessages.phone, phone),
+            isNull(smsMessages.readAt),
+            inArray(smsMessages.kind, ['household_reply', 'referrer_reply']),
+            or(isNull(smsMessages.sessionId), inArray(smsMessages.sessionId, closedSessionIds)),
+          ),
+        );
     },
 
     async insert(value: NewSmsMessage): Promise<SmsMessage> {

@@ -2347,9 +2347,9 @@ paths:
               type: object
               required: [body]
               properties:
-                body: { type: string, minLength: 1, maxLength: 480 }
+                body: { type: string, minLength: 1, maxLength: 918 }
       responses:
-        '200':
+        '201':
           description: Sent
           content:
             application/json:
@@ -2378,6 +2378,88 @@ paths:
 
         Idempotent. Only inbound messages are ever unread, so this never touches
         what the food bank sent.
+      responses:
+        '204': { description: Marked. No body. }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/sms-messages/{id}/replies:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    post:
+      tags: [SMS]
+      summary: Text a loose number or a referrer back
+      description: >
+        **Admin only.** The way to answer a number that has no referral thread
+        of its own: a loose reply (`household_reply` with no `referralId` and
+        no `session`), or a `referrer_reply`. `{id}` is the id of that inbound
+        message — any one of them from the number; the latest is the natural
+        choice. The server texts the number the message came from. **The
+        client never sends a phone number.**
+
+        The reply is recorded as a `staff_reply` with `referralId: null` and
+        the same `phone` as the message it answers, so it appears in `GET
+        /api/v1/sms-messages` in that number's conversation (`location:
+        unmatched`), and anything the number texts afterwards joins the same
+        conversation. On a referrer, `recipientRole` is `referrer` and the
+        reply is **not** filed against any of `candidateParcels`.
+
+        **Do not answer a `referrer_reply` through `POST
+        /api/v1/referrals/{id}/sms-messages` on one of its candidate
+        referrals.** That does reach the referrer's number, but it files the
+        reply on that one household's thread, where a team leader can see it,
+        whichever household the referrer was actually asking about.
+
+        Same rules as any staff reply: no name and nothing that says whose
+        number it is — say so on the screen. It changes no count. No
+        double-submit guard; a second press sends a second text.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body: { type: string, minLength: 1, maxLength: 918 }
+      responses:
+        '201':
+          description: Sent
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SmsMessage' }
+        '404':
+          description: >-
+            No such message, or it is not a loose household reply or a
+            referrer message — a reminder, a failure, a staff reply, or a
+            reply on a referral's own thread (answer that one through the
+            referral instead). Also what a message deleted by the thirty-day
+            purge returns.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422':
+          description: >-
+            The number cannot be texted, sending is not configured, or the
+            provider would not take it. **Nothing is recorded.**
+
+  /api/v1/sms-messages/{id}/thread/read:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    post:
+      tags: [SMS]
+      summary: Clear a number's whole conversation
+      description: >
+        **Admin only.** The administrator screen's equivalent of opening a
+        household's messages: marks read, in one go, everything unread from
+        the same number as `{id}` that is an administrator's to read — loose
+        replies, referrer messages, and replies on sessions that have closed
+        (`location: closed_session`).
+
+        **A reply on an `active_session` is left unread.** It stays the team
+        leader's until that session closes, as with `POST
+        /api/v1/sms-messages/{id}/read`.
+
+        `{id}` is any `household_reply` or `referrer_reply` in the
+        conversation. Idempotent; only inbound messages are ever unread, so
+        nothing the food bank sent is touched.
       responses:
         '204': { description: Marked. No body. }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -5269,8 +5351,10 @@ components:
           format: uuid
           description: >-
             Null on a loose reply — a text with no upcoming referral behind
-            it. A `referrer_reply` never reaches this response at all — see
-            `kind`.
+            it — and on a `staff_reply` an administrator sent to a loose
+            number or a referrer through `POST
+            /api/v1/sms-messages/{id}/replies`. A `referrer_reply` itself
+            never reaches this response — see `kind`.
         kind:
           type: string
           enum: [reminder, staff_reply, household_reply, referrer_reply, failure]
@@ -5280,7 +5364,9 @@ components:
             `household_reply` — what the household texted back. **The only kind
             that is ever unread**, along with `referrer_reply`.
 
-            `staff_reply` — a person answering from the session screen.
+            `staff_reply` — a person answering from the session screen, or an
+            administrator answering a loose number or a referrer from the
+            administrator screen (then `referralId` is null).
 
             `referrer_reply` — a text from a referrer currently collecting one
             or more open `referrer_collect` parcels. **Cannot appear here** —
@@ -5303,7 +5389,9 @@ components:
           description: >-
             Whose number `phone` is. `referrer` when this referral's
             collection method is `referrer_collect`; `referee` otherwise.
-            Null only on a loose reply with nothing to derive it from.
+            `referrer` too on an administrator's reply to a referrer. Null
+            on a loose reply, and on an administrator's reply to one, with
+            nothing to derive it from.
         simulated:
           type: boolean
           description: >-
