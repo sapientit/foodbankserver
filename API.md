@@ -1742,9 +1742,9 @@ referral's current `collectionMethod` (which can itself be corrected later).
 their own first name**, never the household's, and gives the date, time and
 place, worded for a referrer collecting a client's parcel rather than their
 own — it is never a variant of the ordinary collection/delivery text. It does
-not yet distinguish between households when the same referrer is currently
-collecting for more than one at once — see `OPEN-QUESTIONS.md` in the server
-repo, Q45. A staff reply is unaffected — staff still type their own words,
+not distinguish between households when the same referrer is currently
+collecting for more than one at once, and is not going to: settled 2026-09-29,
+rare enough to sort out if the referrer asks. A staff reply is unaffected — staff still type their own words,
 only the recipient changes.
 
 **Inbound texts from a referrer are a new, distinct kind: `referrer_reply`.**
@@ -2650,16 +2650,16 @@ yet configured, not yet run, or a run was missed — rather than a day known to
 be clear. Both `from` and `to` are required.
 
 `cap` is one of Cloudflare's own published free-plan limits — a fact.
-`threshold` is the level the build currently treats as worth flagging, and
-**that number is a guess, not a settled requirement** for the measures that
-still carry `x-assumed` on `CappedMeasure` in `openapi.yaml` — see Q44 in
-`OPEN-QUESTIONS.md`. `workerRequestsAccountWide` is every Worker on the
+`threshold` is the level the charity treats as worth flagging: 80% of `cap`
+for every `CappedMeasure` (settled 2026-09-29, as a starting point).
+`workerRequestsAccountWide` is every Worker on the
 account, not just this one, because the 100,000/day cap is shared with the
 unrelated `losttemple-api` Worker. `workerSubrequestsAvgPerInvocation` is an
 average standing in for a true per-invocation maximum, which Cloudflare's
-daily aggregates cannot give — also part of Q44.
+daily aggregates cannot give; its `threshold` is 40, 80% of the
+50-per-invocation cap.
 
-Two measures are settled, not guessed: `workerErrorsThisApp` is a raw count,
+Two measures work differently: `workerErrorsThisApp` is a raw count,
 not a rate, and `exceeded` is `value > 0` — a single Worker error is worrying
 on its own. `workerCpuTimeP99Us` carries a `cap` for reference but no
 `threshold` or `exceeded` at all (`CapReferenceMeasure`, not `CappedMeasure`)

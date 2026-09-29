@@ -1,9 +1,8 @@
 import type { PlatformDailyStats } from '../../db/schema/platform-stats.ts';
 
 /**
- * Cloudflare's published free-plan caps. Facts, not guesses — see
- * `INITIAL_SPEC1.txt`, `#Platform usage monitoring`, and Q44 in
- * `OPEN-QUESTIONS.md` for where the guessing actually starts.
+ * Cloudflare's published free-plan caps. Facts, not the charity's choice —
+ * see `INITIAL_SPEC1.txt`, `#Platform usage monitoring`.
  *
  * `workerRequests` is account-wide: it is shared with the unrelated
  * `losttemple-api` Worker on the same account, and exceeding it returns
@@ -19,21 +18,20 @@ export const CLOUDFLARE_FREE_PLAN_CAPS = {
 } as const;
 
 /**
- * The assumed margin of a Cloudflare cap that counts as "worrying" — Q44 in
- * `OPEN-QUESTIONS.md`, `x-assumed` in `openapi.yaml`. Pete has not settled
- * this; until they do, one flat 80% stands in for every cap-based measure.
+ * The margin of a Cloudflare cap that counts as "worrying": one flat 80% for
+ * every cap-based measure. Pete settled this 2026-09-29 as a starting point,
+ * to be revisited once real usage has been seen.
  */
-export const ASSUMED_WARNING_FRACTION_OF_CAP = 0.8;
+export const WARNING_FRACTION_OF_CAP = 0.8;
 
 /**
- * The one remaining measure with no Cloudflare cap to take a fraction of at
- * all, so there is no cap-derived number to fall back on even provisionally.
- * Still Q44 — the food bank has never been asked what average subrequest
- * count should count as worrying, since it stands in for a true
- * per-invocation maximum Cloudflare's daily aggregates cannot give.
+ * An average of 40 subrequests per invocation — the same 80% of the
+ * 50-per-invocation cap, applied to an average that stands in for the true
+ * per-invocation maximum Cloudflare's daily aggregates cannot give. Settled
+ * with the flat margin above, 2026-09-29.
  */
-const ASSUMED_WORRYING_AVG_SUBREQUESTS =
-  CLOUDFLARE_FREE_PLAN_CAPS.workerSubrequestsPerInvocation * ASSUMED_WARNING_FRACTION_OF_CAP;
+const WORRYING_AVG_SUBREQUESTS =
+  CLOUDFLARE_FREE_PLAN_CAPS.workerSubrequestsPerInvocation * WARNING_FRACTION_OF_CAP;
 
 /** A measure with a Cloudflare cap to compare against. */
 export interface CappedMeasure {
@@ -43,7 +41,7 @@ export interface CappedMeasure {
   readonly exceeded: boolean;
 }
 
-/** A measure with an assumed worrying level but no Cloudflare cap behind it. */
+/** A measure with a worrying level but no Cloudflare cap behind it. */
 export interface UncappedMeasure {
   readonly value: number;
   readonly threshold: number;
@@ -83,20 +81,18 @@ export interface PlatformStatsDay {
 }
 
 function capped(value: number, cap: number): CappedMeasure {
-  const threshold = cap * ASSUMED_WARNING_FRACTION_OF_CAP;
+  const threshold = cap * WARNING_FRACTION_OF_CAP;
   return { value, cap, threshold, exceeded: value >= threshold };
 }
 
 /**
  * Turns one day's raw counts into the figures the report and the alert
- * actually read. Pure and I/O-free on purpose — this is where Q44's assumed
- * margin actually gets applied, and it is the single place that changes
- * once Pete answers the rest of it.
+ * actually read. Pure and I/O-free on purpose — this is where the margin
+ * gets applied, and the single place that changes if the charity revisits it.
  *
  * The subrequests measure is an average per invocation
  * (`sum / requests`, or 0 on a day with no requests), standing in for a true
- * per-invocation maximum that Cloudflare's daily aggregates cannot give —
- * see Q44.
+ * per-invocation maximum that Cloudflare's daily aggregates cannot give.
  *
  * Processing time (`workerCpuTimeP99Us`) is shown against Cloudflare's cap
  * for reference only — see `CapReferenceMeasure`. The Worker error count is
@@ -126,8 +122,8 @@ export function evaluateDay(row: PlatformDailyStats): PlatformStatsDay {
     workerSubrequestsAvgPerInvocation: {
       value: avgSubrequests,
       cap: CLOUDFLARE_FREE_PLAN_CAPS.workerSubrequestsPerInvocation,
-      threshold: ASSUMED_WORRYING_AVG_SUBREQUESTS,
-      exceeded: avgSubrequests >= ASSUMED_WORRYING_AVG_SUBREQUESTS,
+      threshold: WORRYING_AVG_SUBREQUESTS,
+      exceeded: avgSubrequests >= WORRYING_AVG_SUBREQUESTS,
     },
     workerWallTimeP99Ms: { value: row.workerWallTimeP99Ms },
     d1RowsRead: capped(row.d1RowsRead, CLOUDFLARE_FREE_PLAN_CAPS.d1RowsReadPerDay),

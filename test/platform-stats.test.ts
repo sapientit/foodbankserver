@@ -250,7 +250,7 @@ describe('GET /platform-stats/usage/alert-summary', () => {
     });
     await repository.upsert({
       date: '2026-09-06',
-      workerRequestsAccountWide: 95_000, // over the 80,000 assumed margin
+      workerRequestsAccountWide: 95_000, // over the 80,000 margin
       workerRequestsThisApp: 100,
       workerErrorsThisApp: 0,
       workerCpuTimeP99Us: 100,

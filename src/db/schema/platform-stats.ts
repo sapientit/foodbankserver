@@ -14,8 +14,7 @@ import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
  *
  * Raw counts only — no cap, threshold or "exceeded" flag is stored. Those are
  * computed at read time in `thresholds.ts` from constants, so changing the
- * assumed margin (Q44 in OPEN-QUESTIONS.md) never needs a backfill and can
- * never drift row to row.
+ * margin never needs a backfill and can never drift row to row.
  */
 export const platformDailyStats = sqliteTable('platform_daily_stats', {
   date: text('date').primaryKey(),

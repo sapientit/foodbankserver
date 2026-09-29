@@ -2225,12 +2225,10 @@ paths:
         A `referrer_collect` referral is reminded on `referrerPhone` instead
         of `refereePhone`, with its own third wording that greets the
         referrer by their own first name rather than the household's and
-        never reuses the collection or delivery text.
-      x-assumed: >-
-        The `referrer_collect` wording does not yet distinguish between
-        households when the same referrer is currently collecting for more
-        than one at once — the charity has not said whether it needs to.
-        Tracked as Q45 in `OPEN-QUESTIONS.md`; only Pete closes it.
+        never reuses the collection or delivery text. That wording is the
+        same whichever household it is for, even when one referrer is
+        collecting for several at once — settled 2026-09-29: rare enough to
+        sort out if the referrer asks.
       responses:
         '200':
           description: What happened
@@ -7417,13 +7415,12 @@ components:
       type: object
       description: >-
         A measure Cloudflare puts a free-plan cap on. `cap` is that published
-        limit, a fact; `threshold` is the assumed level for "worrying" —
-        `x-assumed`, see below — and `exceeded` is `value >= threshold`.
+        limit, a fact; `threshold` is the level the charity treats as
+        "worrying" and `exceeded` is `value >= threshold`. `threshold` is 80%
+        of `cap` for every capped measure; for
+        `workerSubrequestsAvgPerInvocation` that is an average of 40 against
+        the 50-per-invocation cap (settled 2026-09-29).
       required: [value, cap, threshold, exceeded]
-      x-assumed: >-
-        `threshold` is a flat 80% of `cap`, Pete's decision to make, not
-        Cloudflare's or the build's. Tracked as Q44 in `OPEN-QUESTIONS.md`;
-        only Pete may close it.
       properties:
         value: { type: number }
         cap: { type: number }
@@ -7521,8 +7518,8 @@ components:
             - description: >-
                 Average subrequests per invocation that day, standing in for
                 the true 50-per-invocation cap: Cloudflare's daily aggregates
-                give no per-invocation maximum to compare directly. Part of
-                Q44 in `OPEN-QUESTIONS.md`.
+                give no per-invocation maximum to compare directly.
+                `threshold` is 40.
         workerWallTimeP99Ms:
           allOf:
             - $ref: '#/components/schemas/InformationalMeasure'

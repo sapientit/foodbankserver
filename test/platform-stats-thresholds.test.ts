@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { PlatformDailyStats } from '../src/db/schema/platform-stats.ts';
 import {
-  ASSUMED_WARNING_FRACTION_OF_CAP,
+  WARNING_FRACTION_OF_CAP,
   CLOUDFLARE_FREE_PLAN_CAPS,
   evaluateDay,
   hasAnyExceeded,
@@ -26,9 +26,9 @@ function quietDay(overrides: Partial<PlatformDailyStats> = {}): PlatformDailySta
 }
 
 describe('evaluateDay', () => {
-  it('marks a capped measure exceeded once it reaches the assumed 80% margin, not before', () => {
+  it('marks a capped measure exceeded once it reaches the 80% margin, not before', () => {
     const cap = CLOUDFLARE_FREE_PLAN_CAPS.workerRequestsPerDay;
-    const threshold = cap * ASSUMED_WARNING_FRACTION_OF_CAP;
+    const threshold = cap * WARNING_FRACTION_OF_CAP;
 
     const justBelow = evaluateDay(
       quietDay({ workerRequestsAccountWide: threshold - 1 }),
