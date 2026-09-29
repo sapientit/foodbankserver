@@ -491,7 +491,7 @@ This is an administrator's report.  A team leader does not see it: it is about p
 #Session maintenance
 After the session, each referee's pick list is reviewed before an attendance outcome can be recorded. Each referee is then marked as attended or did not show.  A delivery is marked the same way - delivered counts as attended and not in counts as did not show, because they are the same two outcomes under the names the round uses.  If they attended, the stock is updated.  Otherwise the parcel will be unpacked.
 
-An outcome can be taken back while the session is still open.  Marking a household as not having shown up, after marking them as attended, puts the parcel's stock back: nothing left the building, so nothing should have come off the shelves.  There is no hand correction to put a mis-tap right with any more, so being able to say "no, they did not come after all" is the only way to fix one, and a team leader must not be made to live with a wrong figure until the next count.  Marking the same outcome again is not a change and is always accepted, because a team leader will tap twice and the stock must still only move once.
+An outcome can be taken back while the session is still open.  Marking a household as not having shown up, after marking them as attended, puts the parcel's stock back: nothing left the building, so nothing should have come off the shelves.  Marking the same outcome again is not a change and is always accepted, because a team leader will tap twice and the stock must still only move once.
 
 Confirming the session is the end of it.  Once a session is confirmed no outcome on it can be changed, because a session that has been signed off must not have its figures move underneath it afterwards.
 

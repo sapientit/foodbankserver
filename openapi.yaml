@@ -4306,8 +4306,7 @@ paths:
         takes it again. Flip as often as needed; the level is always the sum of
         what is actually there.
 
-        This is the only way to fix a mis-tap: the hand correction that used to
-        do it went with the stock simplification.
+        This is how to fix a mis-tap.
 
         **Confirming the session ends it.** After `POST /sessions/{id}/confirm`
         an outcome can no longer be changed and this returns `409`, because a

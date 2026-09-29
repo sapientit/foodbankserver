@@ -1209,8 +1209,8 @@ though doing so is kinder.
 
 **An outcome can be taken back while the session is open.** Submitting the
 _other_ value puts the parcel's stock back and marks the household the other
-way, and you can flip as often as needed. This is the only way to fix a mis-tap,
-so offer it plainly — no confirmation dialogue is warranted for a tap that is
+way, and you can flip as often as needed. This is how to fix a mis-tap, so offer
+it plainly — no confirmation dialogue is warranted for a tap that is
 reversible.
 
 **Confirming the session ends that.** After `POST /sessions/{sessionId}/confirm`
@@ -1890,8 +1890,7 @@ that parcel's stock movements** and puts the goods back; marking them attended
 again takes it again. Flip as often as needed — the level is always the sum of
 what is actually on the shelf.
 
-This is now the **only** way to fix a mis-tap, because the hand correction that
-used to do it has been removed. So the UI should offer it: an outcome on an open
+This is how to fix a mis-tap, so the UI should offer it: an outcome on an open
 session is not a commitment.
 
 `POST /sessions/{id}/confirm` is the point of no return. After it, changing an

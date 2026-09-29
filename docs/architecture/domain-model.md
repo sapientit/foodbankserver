@@ -209,9 +209,8 @@ service catches that specific violation and treats it as success. Use
 — naming every column matters, for reasons in [`../engineering/d1-constraints.md`](../engineering/d1-constraints.md).
 
 **A recorded outcome can be taken back until the session is confirmed.** Marking a household a
-no-show after marking them attended deletes that parcel's movements and puts the goods back. It is
-the only way to fix a mis-tap, because the hand correction that used to do it is gone. Confirming
-the session ends it: after that the outcome is a `ConflictError`.
+no-show after marking them attended deletes that parcel's movements and puts the goods back.
+Confirming the session ends it: after that the outcome is a `ConflictError`.
 
 **Stock moves three ways now**: `opening_balance`, written by the weekly count; `parcel_issued`,
 written by attendance; and `correction`, a team lead's hand fix to one item's level between one
