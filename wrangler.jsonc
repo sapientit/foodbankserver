@@ -26,22 +26,23 @@
     // last said. Blank in local dev and CI's dry run, where nothing is
     // actually being deployed. Read `GET /health` to see it.
     "GIT_SHA": "",
-    // The spreadsheet extract. Neither is a secret: the OAuth client id is
-    // public by design, and a spreadsheet id is useless without access to the
-    // spreadsheet. Deliberately DIFFERENT values from production, so a test
-    // deployment can never write into the charity's real spreadsheet.
+    // The spreadsheet extract. Not a secret: a spreadsheet id is useless
+    // without access to the spreadsheet. Deliberately DIFFERENT from
+    // production, so a test deployment can never write into the charity's
+    // real spreadsheet.
     "GOOGLE_SHEETS_SPREADSHEET_ID": "1gQK_ore1UOeHY_CwONpua307GUbh5J0_4zt90hlmcs8",
-    "GOOGLE_OAUTH_CLIENT_ID": "643990075975-48flcohql0sc2cekh3940uscrqflrbnn.apps.googleusercontent.com",
+    // The deployment's one Google OAuth client: Google sign-in checks an ID
+    // token's `aud` against it, and the browser asks for Sheets consent
+    // against it for the extract and the configuration workbook. Public by
+    // design, not a secret. Its Authorised JavaScript origins must include
+    // this deployment's frontend, and its project needs the Sheets API.
+    "GOOGLE_CLIENT_ID": "643990075975-48flcohql0sc2cekh3940uscrqflrbnn.apps.googleusercontent.com",
     // The charity's referral-form configuration workbook, read by an
     // administrator's browser to publish a release. Not a secret. The SAME
     // workbook in every environment, deliberately — unlike the extract
     // spreadsheet above, which must differ. Blank would make the
     // publish screen report itself unconfigured.
     "CONFIGURATION_SPREADSHEET_ID": "1n2DFIwbFtWy3QeiOE9akSViMNz-Jc6qAg8iETyov5xI",
-    // No sign-in client here: this deployment runs AUTH_MODE=dummy, and the
-    // Google sign-in client set up 2026-09-21 is scoped to the uat
-    // environment's own origin below, not this one's.
-    "GOOGLE_AUTH_CLIENT_ID": "",
     // Every SMS send in this environment is a fake success rather than a
     // `failure` row, since this environment has no TheSMSWorks account
     // configured either. config/env.ts refuses to boot with this set while
@@ -146,20 +147,18 @@
         // Deliberately DIFFERENT values from production, so a test
         // deployment can never write into the charity's real spreadsheet.
         "GOOGLE_SHEETS_SPREADSHEET_ID": "1gQK_ore1UOeHY_CwONpua307GUbh5J0_4zt90hlmcs8",
-        "GOOGLE_OAUTH_CLIENT_ID": "643990075975-48flcohql0sc2cekh3940uscrqflrbnn.apps.googleusercontent.com",
+        // The one Google OAuth client — see the top-level block's comment.
+        // Created 2026-09-21 for this test deployment's sign-in (Authorised
+        // JavaScript origin referrals-test.guildfordfoodbank.workers.dev), and
+        // now also the client the extract and workbook ask Sheets consent
+        // against.
+        "GOOGLE_CLIENT_ID": "746866667590-us7ee47uheispedj0qtonpum27rpa2i4.apps.googleusercontent.com",
         // The charity's referral-form configuration workbook, read by an
         // administrator's browser to publish a release. Not a secret. The SAME
         // workbook in every environment, deliberately — unlike the extract
         // spreadsheet above, which must differ. Blank would make the
         // publish screen report itself unconfigured.
         "CONFIGURATION_SPREADSHEET_ID": "1n2DFIwbFtWy3QeiOE9akSViMNz-Jc6qAg8iETyov5xI",
-        // The sign-in client — a SEPARATE Google Cloud OAuth client from the
-        // one above, created 2026-09-21 for this test deployment specifically
-        // (its Authorised JavaScript origin is
-        // referrals-test.guildfordfoodbank.workers.dev, not any other host).
-        // Not a secret: an audience value an ID token's `aud` is checked
-        // against, not a key.
-        "GOOGLE_AUTH_CLIENT_ID": "746866667590-us7ee47uheispedj0qtonpum27rpa2i4.apps.googleusercontent.com",
         "SMS_SIMULATE": "true",
         "CF_ACCOUNT_ID": "deb0c45ee0e89fad81d6b1227d7c439a",
         "CF_D1_DATABASE_ID": "7060fbc4-1b30-4d9d-b6ee-6c932c11a098",
@@ -204,30 +203,28 @@
         // combination, so a production deploy fails loudly on every request
         // until real sign-in is ready. The Google provider itself is built
         // now (2026-09-21, proven on the test deployment), but production
-        // still needs its own GOOGLE_AUTH_CLIENT_ID below — a separate Google
-        // Cloud OAuth client scoped to the production origin, which does not
-        // exist yet. Change to "google" once that exists, never before.
+        // still needs its own GOOGLE_CLIENT_ID below — a Google Cloud OAuth
+        // client scoped to the production origin, which does not exist yet.
+        // Change to "google" once that exists, never before.
         "AUTH_MODE": "dummy",
         // Blank for the same reason as the top-level block: `npm run deploy`
         // stamps the real commit at deploy time via `--var`, so nothing here
         // needs editing per release.
         "GIT_SHA": "",
-        // The charity's real spreadsheet and OAuth client. Set these before
+        // The charity's real spreadsheet and OAuth client. Set both before
         // the extract can run; until they are set the button reports itself
-        // unconfigured rather than failing at Google.
+        // unconfigured rather than failing at Google. GOOGLE_CLIENT_ID is
+        // also the sign-in client — see the top-level block's comment — so
+        // blank means AUTH_MODE cannot be "google" here; config/env.ts
+        // refuses to boot on that combination.
         "GOOGLE_SHEETS_SPREADSHEET_ID": "",
-        "GOOGLE_OAUTH_CLIENT_ID": "",
+        "GOOGLE_CLIENT_ID": "",
         // The charity's referral-form configuration workbook, read by an
         // administrator's browser to publish a release. Not a secret. The SAME
         // workbook in every environment, deliberately — unlike the extract
         // spreadsheet above, which must differ. Blank would make the
         // publish screen report itself unconfigured.
         "CONFIGURATION_SPREADSHEET_ID": "1n2DFIwbFtWy3QeiOE9akSViMNz-Jc6qAg8iETyov5xI",
-        // The sign-in client — see the top-level block's comment. A separate
-        // Google Cloud OAuth client from the one above, scoped to production's
-        // own origin once it has one. Blank means AUTH_MODE cannot be "google"
-        // here; config/env.ts refuses to boot on that combination.
-        "GOOGLE_AUTH_CLIENT_ID": "",
         // Must stay "" — config/env.ts refuses to boot otherwise. Declared
         // here (rather than omitted) only so `wrangler types --strict-vars`
         // keeps the key honest across every environment.

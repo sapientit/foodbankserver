@@ -278,12 +278,14 @@ configuration.**
    `wrangler.jsonc`, with **different values per environment**, so a test deployment cannot write
    into the charity's real spreadsheet:
    - `GOOGLE_SHEETS_SPREADSHEET_ID` — the spreadsheet to write into.
-   - `GOOGLE_OAUTH_CLIENT_ID` — the public OAuth client the browser requests Sheets consent
-     against. It needs the Sheets scope and the frontend's origin as an authorised JavaScript
-     origin; that setup is in the Google Cloud console, not here.
+   - `GOOGLE_CLIENT_ID` — the deployment's one public OAuth client. The browser requests Sheets
+     consent against it, and it is also the client Google sign-in checks an ID token's `aud`
+     against, so production needs it before `AUTH_MODE=google` too. It needs the Sheets API and
+     scope and the frontend's origin as an authorised JavaScript origin; that setup is in the
+     Google Cloud console, not here.
    - `CONFIGURATION_SPREADSHEET_ID` — the charity's configuration workbook, which the publish
      screen reads to publish a referral form release. **The same value in every environment**, and
-     never the extract spreadsheet. It uses the same `GOOGLE_OAUTH_CLIENT_ID`, so publishing needs
+     never the extract spreadsheet. It uses the same `GOOGLE_CLIENT_ID`, so publishing needs
      that set too.
 
    Both are blank in the production block until somebody fills them in, and blank means unset: the

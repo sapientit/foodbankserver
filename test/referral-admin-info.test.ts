@@ -547,7 +547,7 @@ describe('absent from every list, export and print-oriented payload', () => {
       clock: fixedClock(NOW),
       bindings: {
         GOOGLE_SHEETS_SPREADSHEET_ID: 'sheet-admin-info-test',
-        GOOGLE_OAUTH_CLIENT_ID: 'test-client-id.apps.googleusercontent.com',
+        GOOGLE_CLIENT_ID: 'test-client-id.apps.googleusercontent.com',
       },
       clientIp: 'test-extract-admin-info',
     });

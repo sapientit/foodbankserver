@@ -703,7 +703,7 @@ describe('GET /configuration-releases/config', () => {
   it('hands an administrator the configuration workbook and the OAuth client the extract uses', async () => {
     const response = await configRequest({
       CONFIGURATION_SPREADSHEET_ID: WORKBOOK_ID,
-      GOOGLE_OAUTH_CLIENT_ID: OAUTH_CLIENT_ID,
+      GOOGLE_CLIENT_ID: OAUTH_CLIENT_ID,
     });
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
@@ -716,7 +716,7 @@ describe('GET /configuration-releases/config', () => {
   it('reports itself unconfigured, with neither value, when the workbook is not set', async () => {
     const response = await configRequest({
       CONFIGURATION_SPREADSHEET_ID: '',
-      GOOGLE_OAUTH_CLIENT_ID: OAUTH_CLIENT_ID,
+      GOOGLE_CLIENT_ID: OAUTH_CLIENT_ID,
     });
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ configured: false });
@@ -725,7 +725,7 @@ describe('GET /configuration-releases/config', () => {
   it('reports itself unconfigured when the OAuth client is not set', async () => {
     const response = await configRequest({
       CONFIGURATION_SPREADSHEET_ID: WORKBOOK_ID,
-      GOOGLE_OAUTH_CLIENT_ID: '',
+      GOOGLE_CLIENT_ID: '',
     });
     expect(await response.json()).toEqual({ configured: false });
   });
@@ -734,14 +734,14 @@ describe('GET /configuration-releases/config', () => {
     const response = await configRequest({
       CONFIGURATION_SPREADSHEET_ID: '',
       GOOGLE_SHEETS_SPREADSHEET_ID: 'extract-sheet-xyz',
-      GOOGLE_OAUTH_CLIENT_ID: OAUTH_CLIENT_ID,
+      GOOGLE_CLIENT_ID: OAUTH_CLIENT_ID,
     });
     expect(await response.json()).toEqual({ configured: false });
   });
 
   it('is refused to a team leader', async () => {
     const response = await configRequest(
-      { CONFIGURATION_SPREADSHEET_ID: WORKBOOK_ID, GOOGLE_OAUTH_CLIENT_ID: OAUTH_CLIENT_ID },
+      { CONFIGURATION_SPREADSHEET_ID: WORKBOOK_ID, GOOGLE_CLIENT_ID: OAUTH_CLIENT_ID },
       'team_lead',
     );
     expect(response.status).toBe(403);

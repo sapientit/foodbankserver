@@ -40,7 +40,7 @@ const SPREADSHEET_ID = 'sheet-test-abc123';
 const OAUTH_CLIENT_ID = 'test-client-id.apps.googleusercontent.com';
 const GOOGLE_BINDINGS = {
   GOOGLE_SHEETS_SPREADSHEET_ID: SPREADSHEET_ID,
-  GOOGLE_OAUTH_CLIENT_ID: OAUTH_CLIENT_ID,
+  GOOGLE_CLIENT_ID: OAUTH_CLIENT_ID,
 };
 
 /**
@@ -51,7 +51,7 @@ const GOOGLE_BINDINGS = {
  * override would silently inherit the deployment placeholder and configure
  * the app by accident.
  */
-const UNCONFIGURED_BINDINGS = { GOOGLE_SHEETS_SPREADSHEET_ID: '', GOOGLE_OAUTH_CLIENT_ID: '' };
+const UNCONFIGURED_BINDINGS = { GOOGLE_SHEETS_SPREADSHEET_ID: '', GOOGLE_CLIENT_ID: '' };
 
 /** An app with both deployment values set, so the extract routes are open. */
 function configuredApp(clock: Clock = fixedClock(NOW)): TestApp {
@@ -369,7 +369,7 @@ describe('the spreadsheet extract', () => {
     it('treats a spreadsheet id with no OAuth client id as not configured — all-or-nothing', async () => {
       const testApp = buildTestApp({
         clock: fixedClock(NOW),
-        bindings: { GOOGLE_SHEETS_SPREADSHEET_ID: SPREADSHEET_ID, GOOGLE_OAUTH_CLIENT_ID: '' },
+        bindings: { GOOGLE_SHEETS_SPREADSHEET_ID: SPREADSHEET_ID, GOOGLE_CLIENT_ID: '' },
       });
       const { accessToken: token } = await devLogin(testApp, { email: 'admin@foodbank.org' });
 

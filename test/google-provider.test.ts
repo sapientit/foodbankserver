@@ -29,7 +29,7 @@ const CLOCK = fixedClock('2026-08-04T09:00:00.000Z');
 function configWithClientId(clientId: string | undefined): AppConfig {
   return clientId === undefined
     ? loadConfig({ AUTH_JWT_SECRET: SECRET })
-    : loadConfig({ AUTH_JWT_SECRET: SECRET, AUTH_MODE: 'google', GOOGLE_AUTH_CLIENT_ID: clientId });
+    : loadConfig({ AUTH_JWT_SECRET: SECRET, AUTH_MODE: 'google', GOOGLE_CLIENT_ID: clientId });
 }
 
 function provider(clock: Clock, clientId: string = GOOGLE_TEST_CLIENT_ID) {

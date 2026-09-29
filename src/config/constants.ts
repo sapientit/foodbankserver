@@ -63,7 +63,7 @@ export const JWT_AUDIENCE = 'foodbank-web';
  * even when the email matches an account the food bank has created — so this
  * is checked against the ID token's `hd` claim, not trusted from the email
  * address alone. Policy, not configuration: it is the same in every
- * environment, unlike `GOOGLE_AUTH_CLIENT_ID`, which is a different Google
+ * environment, unlike `GOOGLE_CLIENT_ID`, which is a different Google
  * Cloud OAuth client per environment.
  */
 export const GOOGLE_WORKSPACE_DOMAIN = 'guildfordfoodbank.org';

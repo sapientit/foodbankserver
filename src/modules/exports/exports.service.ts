@@ -121,11 +121,11 @@ export interface CompleteResponse extends ExtractProgress {
  */
 export function extractConfig(config: {
   readonly googleSpreadsheetId: string | undefined;
-  readonly googleOauthClientId: string | undefined;
+  readonly googleClientId: string | undefined;
 }): ExtractConfig | undefined {
-  const { googleSpreadsheetId, googleOauthClientId } = config;
-  if (googleSpreadsheetId === undefined || googleOauthClientId === undefined) return undefined;
-  return { spreadsheetId: googleSpreadsheetId, googleClientId: googleOauthClientId };
+  const { googleSpreadsheetId, googleClientId } = config;
+  if (googleSpreadsheetId === undefined || googleClientId === undefined) return undefined;
+  return { spreadsheetId: googleSpreadsheetId, googleClientId: googleClientId };
 }
 
 export function createExportsService(deps: ExportServiceDeps) {

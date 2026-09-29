@@ -12,7 +12,7 @@ import { encodeBase64Url, encodeBase64UrlText } from '../../src/core/base64url.t
 /** The `kid` a default signed token and its matching JWKS entry both use. */
 export const GOOGLE_TEST_KID = 'test-key';
 
-/** A plausible `GOOGLE_AUTH_CLIENT_ID` value for tests to configure and assert `aud` against. */
+/** A plausible `GOOGLE_CLIENT_ID` value for tests to configure and assert `aud` against. */
 export const GOOGLE_TEST_CLIENT_ID = 'test-client-id.apps.googleusercontent.com';
 
 /** Matches `GOOGLE_WORKSPACE_DOMAIN` in `config/constants.ts` — deliberately not imported, so a

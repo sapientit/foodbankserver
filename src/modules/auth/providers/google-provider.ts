@@ -24,16 +24,16 @@ import type { IdentityClaim, IdentityProvider } from '../identity-provider.ts';
  *
  * **No client secret is used, and none is needed.** This only ever proves
  * identity from a token the browser already holds; it never exchanges a code
- * with Google or calls a Google API on the user's behalf. That is what the
- * separate `GOOGLE_OAUTH_CLIENT_ID` (the spreadsheet extract's client, which
- * does need a user's consent for the Sheets scope) is for.
+ * with Google or calls a Google API on the user's behalf. The same
+ * `GOOGLE_CLIENT_ID` is used by the browser, not the server, to ask for Sheets
+ * consent for the spreadsheet extract.
  */
 export function createGoogleProvider(config: AppConfig, clock: Clock): IdentityProvider {
   return {
     name: 'google',
     async authenticate(input: unknown): Promise<IdentityClaim> {
       const { idToken } = parseOrThrow(googleLoginSchema, input);
-      const claims = await verifyIdToken(idToken, config.googleAuthClientId, clock);
+      const claims = await verifyIdToken(idToken, config.googleClientId, clock);
 
       return {
         provider: 'google',

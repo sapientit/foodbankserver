@@ -2534,7 +2534,7 @@ the same way (`configured: false` with neither value when the deployment has
 not set both). The workbook is the **same in every environment** and is never
 the extract spreadsheet. The server never reads it. It is set in every
 environment; production still answers `configured: false` until its
-`GOOGLE_OAUTH_CLIENT_ID` is set.
+`GOOGLE_CLIENT_ID` is set.
 
 **Upload** takes `questionnaire` and `rules` as **strings** — the generated
 JSON text, not a parsed object — plus the manifest: `questionnaireHash`,

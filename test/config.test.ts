@@ -44,7 +44,7 @@ describe('loadConfig', () => {
     // open a hole, but it is a mode nobody could actually use — worth refusing
     // to start over, the same as a missing signing secret.
     expect(() => loadConfig({ AUTH_JWT_SECRET: SECRET, AUTH_MODE: 'google' })).toThrow(
-      /GOOGLE_AUTH_CLIENT_ID is required when AUTH_MODE=google/,
+      /GOOGLE_CLIENT_ID is required when AUTH_MODE=google/,
     );
   });
 
@@ -53,7 +53,7 @@ describe('loadConfig', () => {
       AUTH_JWT_SECRET: SECRET,
       ENVIRONMENT: 'production',
       AUTH_MODE: 'google',
-      GOOGLE_AUTH_CLIENT_ID: 'client-id.apps.googleusercontent.com',
+      GOOGLE_CLIENT_ID: 'client-id.apps.googleusercontent.com',
       // Production also refuses to start without a bot check on the open
       // referral endpoint — see hardening.test.ts.
       TURNSTILE_SECRET_KEY: 'turnstile-secret',
@@ -155,7 +155,7 @@ describe('loadConfig', () => {
       AUTH_JWT_SECRET: SECRET,
       ENVIRONMENT: 'production',
       AUTH_MODE: 'google',
-      GOOGLE_AUTH_CLIENT_ID: 'client-id.apps.googleusercontent.com',
+      GOOGLE_CLIENT_ID: 'client-id.apps.googleusercontent.com',
       TURNSTILE_SECRET_KEY: 'turnstile-secret',
       SMS_WEBHOOK_SECRET: 'sms-webhook-secret-long-enough',
     });

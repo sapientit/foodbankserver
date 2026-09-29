@@ -405,7 +405,7 @@ describe('production genuinely hands a reminder to the provider', () => {
       bindings: {
         ENVIRONMENT: 'production',
         AUTH_MODE: 'google',
-        GOOGLE_AUTH_CLIENT_ID: GOOGLE_TEST_CLIENT_ID,
+        GOOGLE_CLIENT_ID: GOOGLE_TEST_CLIENT_ID,
         TURNSTILE_SECRET_KEY: 'turnstile-secret',
         SMS_WEBHOOK_SECRET: 'sms-webhook-secret-long-enough',
         // Refused in production, and the ambient dev env sets it — see the

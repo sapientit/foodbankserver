@@ -21,15 +21,15 @@ export interface WorkbookConfigResponse extends Partial<WorkbookConfig> {
  */
 export function toWorkbookConfigResponse(config: {
   readonly configurationSpreadsheetId: string | undefined;
-  readonly googleOauthClientId: string | undefined;
+  readonly googleClientId: string | undefined;
 }): WorkbookConfigResponse {
-  const { configurationSpreadsheetId, googleOauthClientId } = config;
-  if (configurationSpreadsheetId === undefined || googleOauthClientId === undefined) {
+  const { configurationSpreadsheetId, googleClientId } = config;
+  if (configurationSpreadsheetId === undefined || googleClientId === undefined) {
     return { configured: false };
   }
   return {
     configured: true,
     spreadsheetId: configurationSpreadsheetId,
-    googleClientId: googleOauthClientId,
+    googleClientId: googleClientId,
   };
 }
