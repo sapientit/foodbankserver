@@ -138,7 +138,12 @@ one returns **401**, refresh once and retry:
 POST /api/v1/auth/refresh        (no body — the cookie carries it)
   → 200 { accessToken, expiresAt, user }   retry the original request
   → 401                                     sign the user out
+  → 429                                     wait a few seconds, then refresh again
 ```
+
+The four `/auth` routes share a rate limit of 60 requests a minute per address.
+A whole warehouse on one connection stays well inside it. A `429` from refresh
+does **not** mean the sign-in has ended, so never sign the user out on it.
 
 Do this in one place — an interceptor or fetch wrapper — not per call site.
 

@@ -57,6 +57,15 @@ const configSchema = z
     TURNSTILE_SECRET_KEY: z.string().min(1).optional(),
 
     /**
+     * Comma-separated hostnames the referral form is served from — the same
+     * list the Turnstile widget is scoped to in the Cloudflare dashboard. A
+     * token solved anywhere else is refused. A var, not a secret: hostnames
+     * are public. **Required in production**, for the same reason as the
+     * secret.
+     */
+    TURNSTILE_HOSTNAMES: z.string().default(''),
+
+    /**
      * Comma-separated origins the browser app is served from. Empty means
      * same-origin only, which is the safest default and correct if the
      * frontend ships as Workers static assets.
@@ -209,6 +218,15 @@ const configSchema = z
       });
     }
 
+    // Without it a token solved on any page the widget allows would pass.
+    if (value.ENVIRONMENT === 'production' && splitList(value.TURNSTILE_HOSTNAMES).length === 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['TURNSTILE_HOSTNAMES'],
+        message: 'TURNSTILE_HOSTNAMES is required in production.',
+      });
+    }
+
     // Google sign-in verifies an ID token's `aud` claim against this. Without
     // it configured, every Google sign-in attempt would fail closed rather
     // than open — safe, but a mode nobody could actually use, so refuse to
@@ -259,7 +277,7 @@ const configSchema = z
     // only) must refuse to boot for the same reason: it is a typo, and it
     // would silently mean nobody is live when somebody plainly meant to be.
     if (value.SMS_LIVE_NUMBERS !== undefined) {
-      const numbers = splitLiveNumbers(value.SMS_LIVE_NUMBERS);
+      const numbers = splitList(value.SMS_LIVE_NUMBERS);
       if (numbers.length === 0 || numbers.some((number) => normalisePhone(number) === null)) {
         ctx.addIssue({
           code: 'custom',
@@ -270,12 +288,15 @@ const configSchema = z
     }
   });
 
-/** Shared by the validator and `loadConfig` so the split happens exactly one way. */
-function splitLiveNumbers(raw: string): string[] {
+/**
+ * A comma-separated var as a list, ignoring blanks and stray spaces. Shared by
+ * the validator and `loadConfig` so the split happens exactly one way.
+ */
+function splitList(raw: string): string[] {
   return raw
     .split(',')
-    .map((number) => number.trim())
-    .filter((number) => number !== '');
+    .map((item) => item.trim())
+    .filter((item) => item !== '');
 }
 
 type RawConfig = z.infer<typeof configSchema>;
@@ -287,6 +308,7 @@ export interface AppConfig {
   readonly gitSha: string | undefined;
   readonly jwtSecret: string;
   readonly turnstileSecret: string | undefined;
+  readonly turnstileHostnames: readonly string[];
   readonly allowedOrigins: readonly string[];
   readonly piiRetentionDays: number | undefined;
   readonly smsApiKey: string | undefined;
@@ -335,9 +357,8 @@ export function loadConfig(bindings: object): AppConfig {
     gitSha: result.data.GIT_SHA,
     jwtSecret: result.data.AUTH_JWT_SECRET,
     turnstileSecret: result.data.TURNSTILE_SECRET_KEY,
-    allowedOrigins: result.data.ALLOWED_ORIGINS.split(',')
-      .map((origin) => origin.trim())
-      .filter((origin) => origin !== ''),
+    turnstileHostnames: splitList(result.data.TURNSTILE_HOSTNAMES),
+    allowedOrigins: splitList(result.data.ALLOWED_ORIGINS),
     piiRetentionDays: result.data.PII_RETENTION_DAYS,
     smsApiKey: result.data.SMS_API_KEY,
     smsSender: result.data.SMS_SENDER,
@@ -350,7 +371,7 @@ export function loadConfig(bindings: object): AppConfig {
         ? 'everyone'
         : result.data.SMS_LIVE_NUMBERS === undefined
           ? []
-          : splitLiveNumbers(result.data.SMS_LIVE_NUMBERS),
+          : splitList(result.data.SMS_LIVE_NUMBERS),
     googleSpreadsheetId: result.data.GOOGLE_SHEETS_SPREADSHEET_ID,
     configurationSpreadsheetId: result.data.CONFIGURATION_SPREADSHEET_ID,
     googleClientId: result.data.GOOGLE_CLIENT_ID,

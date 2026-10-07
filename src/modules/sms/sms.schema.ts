@@ -1,4 +1,9 @@
 import { z } from 'zod';
+import {
+  SMS_WEBHOOK_BODY_MAX_LENGTH,
+  SMS_WEBHOOK_PHONE_MAX_LENGTH,
+  SMS_WEBHOOK_PROVIDER_MESSAGE_ID_MAX_LENGTH,
+} from '../../config/constants.ts';
 
 /**
  * A staff reply is free text typed by a person, bound by the same rule as the
@@ -33,6 +38,12 @@ export interface WebhookInboundMessage {
  * Returns `null` when the payload does not carry a recognisable number and
  * body — the route logs that it happened (a count, not the payload) and
  * refuses with a 400 rather than writing a message with no number to reply to.
+ *
+ * The same `null` covers a field that is a string but absurdly long for what
+ * it claims to be: a phone number, a message body or a provider id past
+ * `SMS_WEBHOOK_*_MAX_LENGTH` is not a real text message, so the whole payload
+ * is unrecognisable rather than truncated down to size — truncating would
+ * store a mangled number or a cut-off message as if it were the real one.
  */
 export function parseWebhookPayload(raw: unknown): WebhookInboundMessage | null {
   const result = webhookRawSchema.safeParse(raw);
@@ -42,12 +53,18 @@ export function parseWebhookPayload(raw: unknown): WebhookInboundMessage | null 
   const phone = firstString(record, ['source', 'from', 'sender', 'originator', 'mobile']);
   const body = firstString(record, ['content', 'body', 'message', 'text']);
   if (phone === null || body === null) return null;
+  if (phone.length > SMS_WEBHOOK_PHONE_MAX_LENGTH) return null;
+  if (body.length > SMS_WEBHOOK_BODY_MAX_LENGTH) return null;
 
-  return {
-    phone,
-    body,
-    providerMessageId: firstString(record, ['messageid', 'messageId', 'id', 'message_id']),
-  };
+  const providerMessageId = firstString(record, ['messageid', 'messageId', 'id', 'message_id']);
+  if (
+    providerMessageId !== null &&
+    providerMessageId.length > SMS_WEBHOOK_PROVIDER_MESSAGE_ID_MAX_LENGTH
+  ) {
+    return null;
+  }
+
+  return { phone, body, providerMessageId };
 }
 
 function firstString(record: Record<string, unknown>, keys: readonly string[]): string | null {

@@ -1,8 +1,8 @@
 /**
  * Secret minting and hashing.
  *
- * Used for referral edit keys, refresh tokens and stock-take volunteer codes.
- * All follow the same rule: the plaintext is returned to the client exactly
+ * Used for refresh tokens and stock-take volunteer codes. Both follow the
+ * same rule: the plaintext is returned to the client exactly
  * once and never stored — only its SHA-256 hash goes in the database, so a
  * database dump yields nothing usable.
  *

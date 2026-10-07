@@ -2,7 +2,12 @@ import { env } from 'cloudflare:workers';
 import { and, eq, isNull } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { API_PREFIX } from '../src/app.ts';
-import { GOOGLE_JWKS_URL } from '../src/config/constants.ts';
+import {
+  GOOGLE_JWKS_URL,
+  SMS_WEBHOOK_BODY_MAX_LENGTH,
+  SMS_WEBHOOK_PHONE_MAX_LENGTH,
+  SMS_WEBHOOK_PROVIDER_MESSAGE_ID_MAX_LENGTH,
+} from '../src/config/constants.ts';
 import { fixedClock } from '../src/core/clock.ts';
 import { createLogger } from '../src/core/log.ts';
 import { createDatabase } from '../src/db/client.ts';
@@ -389,9 +394,16 @@ describe('production genuinely hands a reminder to the provider', () => {
       }
       if (url === 'https://challenges.cloudflare.com/turnstile/v0/siteverify') {
         return Promise.resolve(
-          new Response(JSON.stringify({ success: true, 'error-codes': [] }), {
-            headers: { 'content-type': 'application/json' },
-          }),
+          new Response(
+            JSON.stringify({
+              success: true,
+              'error-codes': [],
+              hostname: 'referrals.foodbank.test',
+            }),
+            {
+              headers: { 'content-type': 'application/json' },
+            },
+          ),
         );
       }
       if (url === 'https://api.thesmsworks.co.uk/v1/message/send') {
@@ -407,6 +419,7 @@ describe('production genuinely hands a reminder to the provider', () => {
         AUTH_MODE: 'google',
         GOOGLE_CLIENT_ID: GOOGLE_TEST_CLIENT_ID,
         TURNSTILE_SECRET_KEY: 'turnstile-secret',
+        TURNSTILE_HOSTNAMES: 'referrals.foodbank.test',
         SMS_WEBHOOK_SECRET: 'sms-webhook-secret-long-enough',
         // Refused in production, and the ambient dev env sets it — see the
         // dev/test simulator tests' own comment on the same override.
@@ -1341,6 +1354,62 @@ describe('the inbound webhook', () => {
 
     const response = await postWebhook(testApp, { source: '07700 900222', content: 'hi' }, {});
     expect(response.status).toBe(200);
+  });
+
+  it('accepts a body at exactly the length ceiling', async () => {
+    const testApp = buildSmsTestApp({ SMS_WEBHOOK_SECRET: WEBHOOK_SECRET });
+
+    const response = await postWebhook(testApp, {
+      source: '07700 900222',
+      content: 'a'.repeat(SMS_WEBHOOK_BODY_MAX_LENGTH),
+      messageid: 'at-limit-body-1',
+    });
+
+    expect(response.status).toBe(200);
+    const rows = await db
+      .select()
+      .from(smsMessages)
+      .where(eq(smsMessages.providerMessageId, 'at-limit-body-1'));
+    expect(rows).toHaveLength(1);
+  });
+
+  it('refuses a body one character over the length ceiling, and writes nothing', async () => {
+    const testApp = buildSmsTestApp({ SMS_WEBHOOK_SECRET: WEBHOOK_SECRET });
+
+    const response = await postWebhook(testApp, {
+      source: '07700 900222',
+      content: 'a'.repeat(SMS_WEBHOOK_BODY_MAX_LENGTH + 1),
+      messageid: 'over-limit-body-1',
+    });
+
+    expect(response.status).toBe(400);
+    expect(await db.select().from(smsMessages)).toHaveLength(0);
+  });
+
+  it('refuses an over-long sender phone, and writes nothing', async () => {
+    const testApp = buildSmsTestApp({ SMS_WEBHOOK_SECRET: WEBHOOK_SECRET });
+
+    const response = await postWebhook(testApp, {
+      source: '0'.repeat(SMS_WEBHOOK_PHONE_MAX_LENGTH + 1),
+      content: 'hi',
+      messageid: 'over-limit-phone-1',
+    });
+
+    expect(response.status).toBe(400);
+    expect(await db.select().from(smsMessages)).toHaveLength(0);
+  });
+
+  it('refuses an over-long provider message id, and writes nothing', async () => {
+    const testApp = buildSmsTestApp({ SMS_WEBHOOK_SECRET: WEBHOOK_SECRET });
+
+    const response = await postWebhook(testApp, {
+      source: '07700 900123',
+      content: 'hi',
+      messageid: 'x'.repeat(SMS_WEBHOOK_PROVIDER_MESSAGE_ID_MAX_LENGTH + 1),
+    });
+
+    expect(response.status).toBe(400);
+    expect(await db.select().from(smsMessages)).toHaveLength(0);
   });
 });
 

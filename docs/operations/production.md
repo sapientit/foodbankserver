@@ -283,6 +283,9 @@ configuration.**
    empty `api` Worker into existence — `wrangler secret put` creates the Worker if it is absent.
    Rotate it rather than assume it needs creating.
 2. Create a Turnstile widget, then `wrangler secret put TURNSTILE_SECRET_KEY --env production`.
+   Put the widget's hostnames (not `localhost`) in `TURNSTILE_HOSTNAMES` in the production `vars`
+   block. It is required there, and a token solved on any other page is refused, so a
+   hostname missing from that list breaks the referral form.
 3. Set `ALLOWED_ORIGINS` if the frontend is on a different origin. **Never a wildcard** — this API
    sends a refresh cookie, and `*` cannot carry credentials, so the "fix" would be reflecting
    whatever `Origin` arrives, which is no policy at all. Empty means same-origin only, which is
@@ -447,8 +450,8 @@ cold or warm — has returned `outcome: "ok"`.
 
 ## Scheduled work
 
-One cron trigger, `17 2 * * *`, runs everything: session materialisation (six weeks ahead), expiry
-of referral edit keys, and the PII purge. One trigger rather than three because the free plan allows
+One cron trigger, `17 2 * * *`, runs everything: session materialisation (six weeks ahead), the PII
+purge, and the thirty-day text message purge. One trigger rather than three because the free plan allows
 only five per account and there is no reason to spend more.
 
 `runScheduledJobs` is shared by the cron handler and the admin trigger route, so the thing that runs

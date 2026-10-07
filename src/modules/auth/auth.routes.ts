@@ -4,6 +4,7 @@ import type { AppConfig } from '../../config/env.ts';
 import { REFRESH_COOKIE_NAME, REFRESH_COOKIE_PATH } from '../../config/constants.ts';
 import { UnauthorizedError } from '../../core/errors.ts';
 import type { AppEnv } from '../../http/types.ts';
+import { rateLimit } from '../../http/middleware/rate-limit.ts';
 import { requireAuth } from '../../http/middleware/require-auth.ts';
 import { createAuthRepository } from './auth.repository.ts';
 import { createAuthService, type IssuedTokens } from './auth.service.ts';
@@ -15,12 +16,15 @@ import { createGoogleProvider } from './providers/google-provider.ts';
  * Routes are built against a config so the dev-login route can be omitted
  * entirely rather than guarded. An unregistered route cannot be reached by a
  * middleware-ordering mistake; a guarded one can.
+ *
+ * Every unauthenticated route here is rate limited per address. `/me` is not:
+ * it already needs a valid access token.
  */
 export function authRoutes(config: AppConfig): Hono<AppEnv> {
   const routes = new Hono<AppEnv>();
 
   if (config.authMode === 'dummy') {
-    routes.post('/dev-login', async (c) => {
+    routes.post('/dev-login', rateLimit('AUTH_LIMITER'), async (c) => {
       const service = serviceFor(c);
       const tokens = await service.login(await c.req.json(), createDummyProvider());
 
@@ -30,7 +34,7 @@ export function authRoutes(config: AppConfig): Hono<AppEnv> {
   }
 
   if (config.authMode === 'google') {
-    routes.post('/google-login', async (c) => {
+    routes.post('/google-login', rateLimit('AUTH_LIMITER'), async (c) => {
       const service = serviceFor(c);
       const provider = createGoogleProvider(config, c.get('clock'));
       const tokens = await service.login(await c.req.json(), provider);
@@ -40,7 +44,7 @@ export function authRoutes(config: AppConfig): Hono<AppEnv> {
     });
   }
 
-  routes.post('/refresh', async (c) => {
+  routes.post('/refresh', rateLimit('AUTH_LIMITER'), async (c) => {
     const presented = getCookie(c, REFRESH_COOKIE_NAME);
     if (presented === undefined) {
       throw new UnauthorizedError('Invalid refresh token');
@@ -49,7 +53,7 @@ export function authRoutes(config: AppConfig): Hono<AppEnv> {
     return respondWithTokens(c, await serviceFor(c).rotate(presented));
   });
 
-  routes.post('/logout', async (c) => {
+  routes.post('/logout', rateLimit('AUTH_LIMITER'), async (c) => {
     const presented = getCookie(c, REFRESH_COOKIE_NAME);
     if (presented !== undefined) {
       await serviceFor(c).logout(presented);

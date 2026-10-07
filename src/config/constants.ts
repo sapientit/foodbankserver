@@ -171,6 +171,26 @@ export const SMS_MESSAGE_RETENTION_DAYS = 30;
 export const SMS_SEND_CONCURRENCY = 5;
 
 /**
+ * Length ceilings on the inbound SMS webhook's three fields: the sender's
+ * phone number, the message body, and the provider's message id.
+ *
+ * The webhook is a public route — gated by a shared secret rather than a
+ * sign-in — writing straight into the most sensitive table there is. Without a ceiling, a malformed or malicious
+ * call turns it into an open blob store the same way an unbounded referral
+ * field would (see `MAX_ANSWERS_BYTES`).
+ *
+ * Each number sits far above anything a genuine text produces, deliberately:
+ * ten concatenated GSM-7 segments is only around 1530 characters, and a real
+ * phone number or provider id is a fraction of these. So the ceiling never
+ * refuses a real text message — it only refuses a payload that could not be
+ * one, which `parseWebhookPayload` then treats the same as a missing field:
+ * the payload is unrecognisable, not truncated.
+ */
+export const SMS_WEBHOOK_BODY_MAX_LENGTH = 4000;
+export const SMS_WEBHOOK_PHONE_MAX_LENGTH = 32;
+export const SMS_WEBHOOK_PROVIDER_MESSAGE_ID_MAX_LENGTH = 128;
+
+/**
  * How far back the fuel help list reaches, counted from today in London.
  *
  * Fourteen **dates**, today included — so `today - 13` is the earliest session

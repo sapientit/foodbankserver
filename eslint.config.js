@@ -52,6 +52,29 @@ export default tseslint.config(
           selector: 'TSModuleDeclaration[kind="namespace"]',
           message: 'Namespaces are not erasable syntax. Use ES modules.',
         },
+        // Values reach D1 as bound parameters, never as SQL text. Drizzle's
+        // `sql` template already binds every `${}`; these close the routes
+        // that would splice a value into the text instead.
+        {
+          selector: 'MemberExpression[object.name="sql"][property.name="raw"]',
+          message:
+            '`sql.raw` puts text straight into the query. Interpolate into `sql` so it is bound.',
+        },
+        {
+          selector:
+            'CallExpression[callee.property.name="prepare"] > TemplateLiteral > .expressions',
+          message:
+            'SQL passed to `prepare()` must be constant text. Use `?` placeholders and `.bind()`.',
+        },
+        {
+          selector: 'CallExpression[callee.property.name="prepare"] > BinaryExpression',
+          message:
+            'SQL passed to `prepare()` must be constant text. Use `?` placeholders and `.bind()`.',
+        },
+        {
+          selector: 'MemberExpression[object.property.name="$client"][property.name="exec"]',
+          message: '`D1Database.exec()` cannot bind parameters. Use `prepare().bind()`.',
+        },
       ],
     },
   },

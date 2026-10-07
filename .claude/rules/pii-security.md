@@ -46,7 +46,8 @@ allowlist, so a column added to `referrals` cannot widen what an administrator i
 - **Return only the fields a role needs**, enforced in the `toXxxResponse()` mapper — not by hoping
   a query forgets to select something. `reasonId` is admin-only; a pick list needs household size,
   not the reason.
-- Referral edit keys and refresh tokens are returned once and stored **only as a SHA-256 hash**.
+- Refresh tokens and stock-take volunteer codes are returned once and stored **only as a SHA-256
+  hash**.
 - Secrets live in Worker secrets, validated in `config/env.ts`. Never commit a `.env`, never
   hardcode a credential, never log one.
 - Do not add a third-party service that would receive request bodies without asking first.

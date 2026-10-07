@@ -8,6 +8,8 @@ export const TURNSTILE_HEADER = 'cf-turnstile-response';
 export interface TurnstileResult {
   readonly ok: boolean;
   readonly errorCodes: string[];
+  /** The page the widget was solved on, as Cloudflare reports it. */
+  readonly hostname: string | undefined;
 }
 
 /**
@@ -44,20 +46,24 @@ export async function verifyTurnstile(
   });
 
   if (!response.ok) {
-    return { ok: false, errorCodes: ['siteverify-unavailable'] };
+    return { ok: false, errorCodes: ['siteverify-unavailable'], hostname: undefined };
   }
 
   const parsed: unknown = await response.json();
   if (typeof parsed !== 'object' || parsed === null) {
-    return { ok: false, errorCodes: ['siteverify-malformed'] };
+    return { ok: false, errorCodes: ['siteverify-malformed'], hostname: undefined };
   }
 
-  const result = parsed as { success?: unknown; 'error-codes'?: unknown };
+  const result = parsed as { success?: unknown; 'error-codes'?: unknown; hostname?: unknown };
   const errorCodes = Array.isArray(result['error-codes'])
     ? result['error-codes'].filter((code): code is string => typeof code === 'string')
     : [];
 
-  return { ok: result.success === true, errorCodes };
+  return {
+    ok: result.success === true,
+    errorCodes,
+    hostname: typeof result.hostname === 'string' ? result.hostname : undefined,
+  };
 }
 
 /**
@@ -65,9 +71,16 @@ export async function verifyTurnstile(
  *
  * Skipping is safe because `config/env.ts` refuses to start in production
  * without the secret — so "not configured" can only mean development.
+ *
+ * A token is also refused unless it was solved on one of `hostnames`.
+ * Cloudflare's `success` only says the token is genuine for this widget; a
+ * widget can be allowed on several hostnames, and the hostname check is what
+ * pins a token to the referral form's own page. An empty list skips that part
+ * of the check, which `config/env.ts` likewise allows only outside production.
  */
 export async function requireTurnstile(input: {
   readonly secret: string | undefined;
+  readonly hostnames: readonly string[];
   readonly token: string | undefined;
   readonly remoteIp: string | undefined;
   readonly requestId: string;
@@ -84,15 +97,27 @@ export async function requireTurnstile(input: {
     idempotencyKey: input.requestId,
   });
 
-  if (!result.ok) {
+  const reasons = result.ok ? hostnameReasons(result.hostname, input.hostnames) : result.errorCodes;
+
+  if (!result.ok || reasons.length > 0) {
     // Error codes are Cloudflare's own vocabulary and carry no personal data,
     // so they are safe to log and genuinely useful when a referrer is stuck.
-    input.logger.warn('turnstile verification failed', { reason: result.errorCodes.join(',') });
+    input.logger.warn('turnstile verification failed', { reason: reasons.join(',') });
 
     throw new BadRequestError(
-      result.errorCodes.includes('timeout-or-duplicate')
+      reasons.includes('timeout-or-duplicate')
         ? 'That bot check has expired. Please refresh the page and try again.'
         : 'The bot check could not be verified. Please try again.',
     );
   }
+}
+
+/**
+ * Reasons in the same shape as Cloudflare's own error codes, so a refusal for
+ * the wrong page logs like any other refusal. A hostname is not personal data.
+ */
+function hostnameReasons(hostname: string | undefined, allowed: readonly string[]): string[] {
+  if (allowed.length === 0) return [];
+  if (hostname === undefined) return ['hostname-missing'];
+  return allowed.includes(hostname) ? [] : ['hostname-mismatch'];
 }

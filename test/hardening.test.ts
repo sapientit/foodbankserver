@@ -53,6 +53,20 @@ describe('production refuses to start unsafely', () => {
     ).toThrow(/TURNSTILE_SECRET_KEY is required in production/);
   });
 
+  it('requires the referral form hostnames in production', () => {
+    // Without them a token solved on any page the widget allows would pass.
+    expect(() =>
+      loadConfig({
+        AUTH_JWT_SECRET: SECRET,
+        ENVIRONMENT: 'production',
+        AUTH_MODE: 'google',
+        GOOGLE_CLIENT_ID: 'client-id.apps.googleusercontent.com',
+        TURNSTILE_SECRET_KEY: 'turnstile-secret',
+        SMS_WEBHOOK_SECRET: 'sms-webhook-secret-long-enough',
+      }),
+    ).toThrow(/TURNSTILE_HOSTNAMES is required in production/);
+  });
+
   it('requires a secret on the SMS webhook in production', () => {
     // The other unauthenticated write. It lands in `sms_messages`, which holds
     // a household's own words, so an unguarded one is worse than an open form.
@@ -62,6 +76,7 @@ describe('production refuses to start unsafely', () => {
         ENVIRONMENT: 'production',
         AUTH_MODE: 'google',
         TURNSTILE_SECRET_KEY: 'turnstile-secret',
+        TURNSTILE_HOSTNAMES: 'referrals.foodbank.test',
       }),
     ).toThrow(/SMS_WEBHOOK_SECRET is required in production/);
   });
@@ -73,6 +88,7 @@ describe('production refuses to start unsafely', () => {
       AUTH_MODE: 'google',
       GOOGLE_CLIENT_ID: 'client-id.apps.googleusercontent.com',
       TURNSTILE_SECRET_KEY: 'turnstile-secret',
+      TURNSTILE_HOSTNAMES: 'referrals.foodbank.test',
       SMS_WEBHOOK_SECRET: 'sms-webhook-secret-long-enough',
       ALLOWED_ORIGINS: 'https://foodbank.example.org',
     });
@@ -105,17 +121,18 @@ describe('the bot check on referral submission', () => {
   });
 
   it('accepts a submission whose token Cloudflare confirms', async () => {
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ success: true, 'error-codes': [] }), {
-        headers: { 'content-type': 'application/json' },
-      }),
-    );
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(siteverifySays('referrals.foodbank.test'));
 
     // A fixed clock ahead of `setUpReferralWorld`'s hardcoded 2026-08-11
     // session so the submission below lands inside the public booking
     // cutoff, not after the session has already been and gone.
     const testApp = buildTestApp({
-      bindings: { TURNSTILE_SECRET_KEY: 'test-secret' },
+      bindings: {
+        TURNSTILE_SECRET_KEY: 'test-secret',
+        TURNSTILE_HOSTNAMES: 'referrals.foodbank.test',
+      },
       clock: fixedClock('2026-08-04T09:00:00.000Z'),
     });
     const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
@@ -133,6 +150,56 @@ describe('the bot check on referral submission', () => {
     const call = fetchSpy.mock.calls[0];
     expect(call?.[0]).toBe('https://challenges.cloudflare.com/turnstile/v0/siteverify');
     expect(call?.[1]?.body).toContain('test-secret');
+  });
+
+  it('refuses a genuine token solved on a page other than the referral form', async () => {
+    // Cloudflare's `success` only says the token is real for this widget. A
+    // widget can be allowed on several hostnames; this pins it to the form.
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(siteverifySays('elsewhere.example'));
+
+    const testApp = buildTestApp({
+      bindings: {
+        TURNSTILE_SECRET_KEY: 'test-secret',
+        TURNSTILE_HOSTNAMES: 'referrals.foodbank.test',
+      },
+      clock: fixedClock('2026-08-04T09:00:00.000Z'),
+    });
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world = await setUpReferralWorld(testApp, accessToken);
+
+    const response = await testApp.request('/api/v1/public/referrals', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'cf-turnstile-response': 'a-token' },
+      body: JSON.stringify(submission(world)),
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.text()).toContain('bot check');
+    expect(await db.select().from(referrals)).toHaveLength(0);
+  });
+
+  it('refuses a token when Cloudflare does not say where it was solved', async () => {
+    // Fails closed: an answer without a hostname cannot be pinned to the form.
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(siteverifySays(undefined));
+
+    const testApp = buildTestApp({
+      bindings: {
+        TURNSTILE_SECRET_KEY: 'test-secret',
+        TURNSTILE_HOSTNAMES: 'referrals.foodbank.test',
+      },
+      clock: fixedClock('2026-08-04T09:00:00.000Z'),
+    });
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world = await setUpReferralWorld(testApp, accessToken);
+
+    const response = await testApp.request('/api/v1/public/referrals', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'cf-turnstile-response': 'a-token' },
+      body: JSON.stringify(submission(world)),
+    });
+
+    expect(response.status).toBe(400);
+    expect(await db.select().from(referrals)).toHaveLength(0);
   });
 
   it('explains an expired or replayed token rather than failing opaquely', async () => {
@@ -381,6 +448,7 @@ describe('security headers', () => {
         AUTH_MODE: 'google',
         GOOGLE_CLIENT_ID: GOOGLE_TEST_CLIENT_ID,
         TURNSTILE_SECRET_KEY: 'secret',
+        TURNSTILE_HOSTNAMES: 'referrals.foodbank.test',
         SMS_WEBHOOK_SECRET: 'sms-webhook-secret-long-enough',
         // The ambient env carries wrangler.jsonc's dev-only SMS_SIMULATE=true;
         // clear it so this production config passes its own tripwire.
@@ -455,4 +523,43 @@ describe('rate limiting the open endpoints', () => {
 
     expect(response.status).toBe(429);
   });
+
+  it('cuts off a flood of sign-in attempts from one address', async () => {
+    // 60 a minute. Unknown addresses, so every attempt is a 401 until the
+    // limiter takes over — refusal counts against the bucket just the same.
+    const flooder = buildTestApp({ clientIp: '203.0.113.13' });
+    const attempt = (testApp: typeof flooder) =>
+      testApp.request('/api/v1/auth/dev-login', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: 'nobody@foodbank.org' }),
+      });
+
+    const statuses: number[] = [];
+    for (let i = 0; i < 70; i++) statuses.push((await attempt(flooder)).status);
+
+    expect(statuses.slice(0, 10).every((status) => status === 401)).toBe(true);
+    expect(statuses).toContain(429);
+
+    // Refresh shares the bucket: a flooder cannot switch routes to reset it.
+    const refresh = await flooder.request('/api/v1/auth/refresh', { method: 'POST' });
+    expect(refresh.status).toBe(429);
+
+    // Another address, same moment, still signs in.
+    await expect(
+      devLogin(buildTestApp({ clientIp: '203.0.113.14' }), { email: 'admin@foodbank.org' }),
+    ).resolves.toMatchObject({ accessToken: expect.any(String) });
+  });
 });
+
+/** A successful siteverify answer, reporting the hostname the token was solved on. */
+function siteverifySays(hostname: string | undefined): Response {
+  return new Response(
+    JSON.stringify({
+      success: true,
+      'error-codes': [],
+      ...(hostname === undefined ? {} : { hostname }),
+    }),
+    { headers: { 'content-type': 'application/json' } },
+  );
+}

@@ -37,6 +37,12 @@
     // design, not a secret. Its Authorised JavaScript origins must include
     // this deployment's frontend, and its project needs the Sheets API.
     "GOOGLE_CLIENT_ID": "643990075975-48flcohql0sc2cekh3940uscrqflrbnn.apps.googleusercontent.com",
+    // Where the referral form is served from: a Turnstile token solved on
+    // any other page is refused. Must match the hostnames the widget is
+    // scoped to in the Cloudflare dashboard (see STATUS.md), less localhost —
+    // local dev has no secret, so the check never runs there. Required in
+    // production.
+    "TURNSTILE_HOSTNAMES": "foodbank-client.losttemple.workers.dev",
     // The charity's referral-form configuration workbook, read by an
     // administrator's browser to publish a release. Not a secret. The SAME
     // workbook in every environment, deliberately — unlike the extract
@@ -115,6 +121,19 @@
       "namespace_id": "1003",
       "simple": { "limit": 120, "period": 60 },
     },
+    /*
+     * Sign-in, refresh and logout. Generous because a whole warehouse shares
+     * one address and refreshes every fifteen minutes per open tab, often
+     * retrying over a poor connection — a throttled refresh signs a volunteer
+     * out mid-session. It exists to bound the cost of a flood, not to slow a
+     * guesser: every Google sign-in attempt fetches Google's keys, and there is
+     * nothing guessable behind these routes.
+     */
+    {
+      "name": "AUTH_LIMITER",
+      "namespace_id": "1004",
+      "simple": { "limit": 60, "period": 60 },
+    },
   ],
 
   // 02:17 daily. Materialises 6 weeks of sessions, deletes text messages over
@@ -162,6 +181,9 @@
         // now also the client the extract and workbook ask Sheets consent
         // against. Shared with production since 2026-09-29.
         "GOOGLE_CLIENT_ID": "746866667590-us7ee47uheispedj0qtonpum27rpa2i4.apps.googleusercontent.com",
+        // The referral form's hostnames — see the top-level block's comment.
+        // The `referrals-test` widget's own list, less localhost.
+        "TURNSTILE_HOSTNAMES": "referrals-test.guildfordfoodbank.org,referrals-test.guildfordfoodbank.workers.dev",
         // The charity's referral-form configuration workbook, read by an
         // administrator's browser to publish a release. Not a secret. The SAME
         // workbook in every environment, deliberately — unlike the extract
@@ -200,6 +222,11 @@
           "name": "SMS_WEBHOOK_LIMITER",
           "namespace_id": "1003",
           "simple": { "limit": 120, "period": 60 },
+        },
+        {
+          "name": "AUTH_LIMITER",
+          "namespace_id": "1004",
+          "simple": { "limit": 60, "period": 60 },
         },
       ],
       "triggers": {
@@ -281,6 +308,11 @@
           "name": "SMS_WEBHOOK_LIMITER",
           "namespace_id": "1003",
           "simple": { "limit": 120, "period": 60 },
+        },
+        {
+          "name": "AUTH_LIMITER",
+          "namespace_id": "1004",
+          "simple": { "limit": 60, "period": 60 },
         },
       ],
       "triggers": {

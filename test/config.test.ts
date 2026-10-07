@@ -11,6 +11,7 @@ describe('loadConfig', () => {
       authMode: 'dummy',
       jwtSecret: SECRET,
       turnstileSecret: undefined,
+      turnstileHostnames: [],
       allowedOrigins: [],
       piiRetentionDays: undefined,
       smsSimulate: false,
@@ -57,6 +58,7 @@ describe('loadConfig', () => {
       // Production also refuses to start without a bot check on the open
       // referral endpoint — see hardening.test.ts.
       TURNSTILE_SECRET_KEY: 'turnstile-secret',
+      TURNSTILE_HOSTNAMES: 'referrals.foodbank.test',
       SMS_WEBHOOK_SECRET: 'sms-webhook-secret-long-enough',
     });
 
@@ -74,6 +76,7 @@ describe('loadConfig', () => {
         ENVIRONMENT: 'production',
         AUTH_MODE: 'google',
         TURNSTILE_SECRET_KEY: 'turnstile-secret',
+        TURNSTILE_HOSTNAMES: 'referrals.foodbank.test',
       }),
     ).toThrow(/SMS_WEBHOOK_SECRET is required in production/);
   });
@@ -86,6 +89,7 @@ describe('loadConfig', () => {
         ENVIRONMENT: 'production',
         AUTH_MODE: 'google',
         TURNSTILE_SECRET_KEY: 'turnstile-secret',
+        TURNSTILE_HOSTNAMES: 'referrals.foodbank.test',
         SMS_WEBHOOK_SECRET: 'sms-webhook-secret-long-enough',
         SMS_SIMULATE: 'true',
       }),
@@ -101,6 +105,7 @@ describe('loadConfig', () => {
         ENVIRONMENT: 'production',
         AUTH_MODE: 'google',
         TURNSTILE_SECRET_KEY: 'turnstile-secret',
+        TURNSTILE_HOSTNAMES: 'referrals.foodbank.test',
         SMS_WEBHOOK_SECRET: 'sms-webhook-secret-long-enough',
         SMS_LIVE_NUMBERS: '07700 900123',
       }),
@@ -157,6 +162,7 @@ describe('loadConfig', () => {
       AUTH_MODE: 'google',
       GOOGLE_CLIENT_ID: 'client-id.apps.googleusercontent.com',
       TURNSTILE_SECRET_KEY: 'turnstile-secret',
+      TURNSTILE_HOSTNAMES: 'referrals.foodbank.test',
       SMS_WEBHOOK_SECRET: 'sms-webhook-secret-long-enough',
     });
 

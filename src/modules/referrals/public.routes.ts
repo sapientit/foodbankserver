@@ -36,6 +36,7 @@ export function publicReferralRoutes(): Hono<AppEnv> {
     // endpoint in the system: an open write that stores names and addresses.
     await requireTurnstile({
       secret: c.get('config').turnstileSecret,
+      hostnames: c.get('config').turnstileHostnames,
       token: c.req.header(TURNSTILE_HEADER),
       remoteIp: c.req.header('cf-connecting-ip'),
       requestId: c.get('requestId'),

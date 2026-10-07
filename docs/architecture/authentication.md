@@ -32,6 +32,14 @@ now belongs to logout and deactivation, both of which are somebody's decision ra
 inference from a repeated request. `replay_detected` survives in `REVOKED_REASONS` and the CHECK
 constraint because dropping a value costs a table rebuild and old rows still carry it.
 
+**Two refreshes presented at the same instant can both succeed.** `rotate` reads the token, checks
+it in TypeScript, then revokes it in a batch whose `UPDATE` does not re-check `revoked_at`. D1 has
+no transaction to close that gap, so two simultaneous requests with one cookie each get a new token.
+Pete looked at this after a security review (2026-10-07) and chose to leave it. To win the race, an
+attacker would already need the `HttpOnly` cookie, and both resulting sessions still end at the
+sign-in's original eight hours. If it ever needs closing: add `AND revoked_at IS NULL` to the
+revoke, and drop the insert when that changes no rows.
+
 ## Why stateless access tokens
 
 Verification costs zero queries, which matters on a 50-query-per-invocation budget. The cost is that

@@ -169,6 +169,7 @@ paths:
         '401': { description: No user record for that address }
         '403': { description: That account has been deactivated }
         '404': { description: Not registered, because AUTH_MODE is not dummy }
+        '429': { $ref: '#/components/responses/RateLimited' }
 
   /api/v1/auth/google-login:
     post:
@@ -213,6 +214,7 @@ paths:
         '401': { description: Token failed verification, or no user record for that address }
         '403': { description: That account has been deactivated }
         '404': { description: Not registered, because AUTH_MODE is not google }
+        '429': { $ref: '#/components/responses/RateLimited' }
 
   /api/v1/auth/refresh:
     post:
@@ -243,6 +245,15 @@ paths:
           description: >-
             Missing, unknown, already rotated, or the eight-hour sign-in has
             ended
+        '429':
+          description: >-
+            Too many sign-in, refresh and logout requests from this address —
+            the four share one allowance of 60 a minute. The sign-in is not
+            ended: wait and refresh again rather than sending the user to the
+            sign-in screen.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
 
   /api/v1/auth/logout:
     post:
@@ -252,6 +263,7 @@ paths:
       security: []
       responses:
         '204': { description: Signed out }
+        '429': { $ref: '#/components/responses/RateLimited' }
 
   /api/v1/auth/me:
     get:
@@ -2607,10 +2619,10 @@ paths:
               type: object
               required: [messageid, from, content]
               properties:
-                messageid: { type: string }
-                from: { type: string }
+                messageid: { type: string, maxLength: 128 }
+                from: { type: string, maxLength: 32 }
                 to: { type: string }
-                content: { type: string }
+                content: { type: string, maxLength: 4000 }
                 messagetype: { type: string }
       responses:
         '200':
@@ -2622,6 +2634,10 @@ paths:
                 required: [ok]
                 properties:
                   ok: { type: boolean, enum: [true] }
+        '400':
+          description: >-
+            Not a recognisable message — no sender or text, or a field longer
+            than any real text message could be
         '401': { description: Missing or wrong credentials }
         '429': { $ref: '#/components/responses/RateLimited' }
 
