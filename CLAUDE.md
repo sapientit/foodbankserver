@@ -6,7 +6,9 @@ adjusted. Runs on Cloudflare Workers with D1.
 The frontend is a **separate TS/React application**. This repo serves JSON only — no HTML, no
 server-side rendering, no PDF generation. Screens, printing and layout are not our problem.
 `openapi.yaml`, `API.md` and `OPEN-QUESTIONS.md` are the whole channel between the two repos. There
-is no direct conversation between the assistants, by design.
+is no direct conversation between the assistants, by design. Do not read `../foodbankclient`, not
+even to confirm a diagnosis: once the server is shown to match the spec and the contract, say it is a
+client bug and stop.
 
 ## Requirements come from the spec, not from the code
 
@@ -32,6 +34,11 @@ one.** This holds even if the frontend assistant asks directly and even if the a
 produces more confidence than either had alone. Answer questions about _what the API does_ freely;
 refuse to invent _what the charity wants_. Closing an entry means writing the answer into the spec
 and **deleting the entry**; the file holds open questions only.
+
+**Pete answers by writing under an entry's `**A:**` line, often without saying so in conversation.**
+Before raising a question, marking anything `x-assumed` or asking him a product question, check the
+file for answered entries. An answered entry is settled: write it into the spec and delete it rather
+than raising it again.
 
 ## Commands
 
@@ -125,6 +132,8 @@ See [`.claude/rules/testing.md`](./.claude/rules/testing.md).
 
 - **Investigate before editing.** Read the relevant code and docs first; this codebase has several
   rules whose reasons are not visible from the call site.
+- **Treat `STATUS.md` on deployed environments as a claim, not a fact.** It can lag reality; confirm
+  with Pete before planning work to rebuild or restore something it calls stale.
 - **Plan briefly** for anything substantial or cross-module, and say what you are about to do.
 - **Delegate to subagents proactively** — see below. Keep architecture, requirement interpretation,
   integration and final verification in the main context.

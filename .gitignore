@@ -21,3 +21,6 @@ coverage/
 
 # The charity's stock item list, kept locally for reference
 stockitems.csv
+
+# Per-user Claude Code permissions
+.claude/settings.local.json
