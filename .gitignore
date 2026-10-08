@@ -24,3 +24,6 @@ stockitems.csv
 
 # Per-user Claude Code permissions
 .claude/settings.local.json
+
+# Marks the charity's secondary machine; created by the project directory's bootstrap.
+secondary.local

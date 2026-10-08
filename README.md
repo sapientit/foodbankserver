@@ -29,6 +29,18 @@ curl http://127.0.0.1:8787/health
 curl http://127.0.0.1:8787/ready
 ```
 
+A freshly migrated database holds one admin, `pete@x.com`, and nothing else. To start from a
+deployed system's data instead, restore a `wrangler d1 export` of it in place of the migrate step
+(stop `npm run dev` first):
+
+```bash
+npm run db:restore:local -- path/to/export.sql
+```
+
+It moves the current local database aside rather than deleting it, applies any migrations newer
+than the snapshot, and makes `pete@x.com` an active admin so the dummy sign-in works. The header of
+`scripts/restore-local-db.mjs` says why it cannot simply execute the export.
+
 ## First-time Cloudflare setup
 
 There are three deployments and **three separate databases** — `foodbank-test` on the personal
@@ -58,19 +70,22 @@ free-plan limits and the go-live sequence.
 
 ## Scripts
 
-| Command                         | Description                                                       |
-| ------------------------------- | ----------------------------------------------------------------- |
-| `npm run dev`                   | Run locally with wrangler                                         |
-| `npm run check`                 | Typegen, typecheck, lint, format, tests, deploy dry-run           |
-| `npm test`                      | Run the test suite inside workerd                                 |
-| `npm run db:generate`           | Generate a migration from the Drizzle schema                      |
-| `npm run db:migrate:local`      | Apply migrations to the local D1                                  |
-| `npm run db:migrate:test`       | Apply migrations to the remote `foodbank-test` (personal account) |
-| `npm run db:migrate:uat`        | Apply migrations to the remote `foodbank-test` (charity account)  |
-| `npm run db:migrate:production` | Apply migrations to the remote `foodbank`                         |
-| `npm run deploy:test`           | Deploy the test environment (personal account)                    |
-| `npm run deploy:uat`            | Deploy the UAT environment (charity account)                      |
-| `npm run deploy`                | Deploy the production environment                                 |
+| Command                            | Description                                                            |
+| ---------------------------------- | ---------------------------------------------------------------------- |
+| `npm run dev`                      | Run locally with wrangler                                              |
+| `npm run check`                    | Typegen, typecheck, lint, format, tests, deploy dry-run                |
+| `npm test`                         | Run the test suite inside workerd                                      |
+| `npm run db:generate`              | Generate a migration from the Drizzle schema                           |
+| `npm run db:migrate:local`         | Apply migrations to the local D1                                       |
+| `npm run db:restore:local`         | Replace the local D1 with a `wrangler d1 export` snapshot              |
+| `npm run db:migrate:test`          | Apply migrations to the remote `foodbank-test` (personal account)      |
+| `npm run db:migrate:uat`           | Apply migrations to the remote `foodbank-test` (charity account)       |
+| `npm run db:migrate:production`    | Apply migrations to the remote `foodbank`                              |
+| `npm run deploy:test`              | Deploy the test environment (personal account)                         |
+| `npm run deploy:uat`               | Deploy the UAT environment (charity account)                           |
+| `npm run deploy`                   | Deploy the production environment                                      |
+| `npm run build:<test\|uat>`        | Build for the emergency route, recording the commit                    |
+| `npm run deploy:<test\|uat>:built` | Deploy that build unchanged; see `docs/operations/release-pipeline.md` |
 
 Run `npm run check` before committing. CI runs the same command on every push and pull request
 (`.github/workflows/check.yml`), so a missed local run is caught rather than merged.

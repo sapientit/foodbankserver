@@ -54,6 +54,7 @@ than raising it again.
 | Load stock data     | `npm run load:stock -- --email <admin>`    |
 | Generate migration  | `npm run db:generate`                      |
 | Apply migrations    | `npm run db:migrate:local` / `:remote`     |
+| Restore local DB    | `npm run db:restore:local -- <export.sql>` |
 | Regenerate bindings | `npm run cf-typegen`                       |
 | Deploy              | `npm run deploy`                           |
 
@@ -130,6 +131,9 @@ See [`.claude/rules/testing.md`](./.claude/rules/testing.md).
 
 ## How to work here
 
+- **If `secondary.local` exists in this repository's root, read
+  [`docs/operations/secondary-machine.md`](./docs/operations/secondary-machine.md) before anything
+  else and follow it.** This is then the charity's secondary machine.
 - **Investigate before editing.** Read the relevant code and docs first; this codebase has several
   rules whose reasons are not visible from the call site.
 - **Treat `STATUS.md` on deployed environments as a claim, not a fact.** It can lag reality; confirm
@@ -184,4 +188,5 @@ or `OPEN-QUESTIONS.md`, architecture, cross-module integration, and the final `n
 | D1 limits, migrations, error traps            | [`docs/engineering/d1-constraints.md`](./docs/engineering/d1-constraints.md)       |
 | PII, residency, the purge                     | [`docs/engineering/personal-data.md`](./docs/engineering/personal-data.md)         |
 | Go-live sequence and tripwires                | [`docs/operations/production.md`](./docs/operations/production.md)                 |
+| The emergency deploy route, server side       | [`docs/operations/release-pipeline.md`](./docs/operations/release-pipeline.md)     |
 | The client-facing API                         | `openapi.yaml`, `API.md`                                                           |
