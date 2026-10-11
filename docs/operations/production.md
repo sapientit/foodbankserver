@@ -12,16 +12,16 @@ reverted — the charity-account system it had built kept running underneath it*
 own Wrangler environment (`new-test` at the time, renamed `uat` on 2026-09-24 once it was formally
 reinstated as a third, standing tier alongside test — additive, not a replacement for it).
 
-|                      | Test (live)                                      | UAT                                              | Production                       |
-| -------------------- | ------------------------------------------------ | ------------------------------------------------ | -------------------------------- |
-| Account              | Personal                                         | Charity's own                                    | Charity's own                    |
-| Worker               | `foodbank-server`                                | `api-test`                                       | `api`                            |
-| Wrangler environment | top-level (no `--env`)                           | `--env uat`                                      | `--env production`               |
-| Deploy with          | `npm run deploy:test`                            | `npm run deploy:uat`                             | `npm run deploy`                 |
-| Migrate with         | `npm run db:migrate:test`                        | `npm run db:migrate:uat`                         | `npm run db:migrate:production`  |
-| D1 database          | `foodbank-test` (EU, personal account)           | `foodbank-test` (EU, charity account)            | `foodbank` (EU)                  |
-| Auth                 | `AUTH_MODE=dummy`                                | `AUTH_MODE=google`                               | `AUTH_MODE=google` (once set up) |
-| URL                  | `https://foodbank-server.losttemple.workers.dev` | `https://api-test.guildfordfoodbank.workers.dev` | no application deployed          |
+|                      | Test (live)                                      | UAT                                              | Production                                  |
+| -------------------- | ------------------------------------------------ | ------------------------------------------------ | ------------------------------------------- |
+| Account              | Personal                                         | Charity's own                                    | Charity's own                               |
+| Worker               | `foodbank-server`                                | `api-test`                                       | `api`                                       |
+| Wrangler environment | top-level (no `--env`)                           | `--env uat`                                      | `--env production`                          |
+| Deploy with          | `npm run deploy:test`                            | `npm run deploy:uat`                             | `npm run deploy`                            |
+| Migrate with         | `npm run db:migrate:test`                        | `npm run db:migrate:uat`                         | `npm run db:migrate:production`             |
+| D1 database          | `foodbank-test` (EU, personal account)           | `foodbank-test` (EU, charity account)            | `foodbank` (EU)                             |
+| Auth                 | `AUTH_MODE=dummy`                                | `AUTH_MODE=google`                               | `AUTH_MODE=google`                          |
+| URL                  | `https://foodbank-server.losttemple.workers.dev` | `https://api-test.guildfordfoodbank.workers.dev` | `https://api.guildfordfoodbank.workers.dev` |
 
 UAT signs in with real Google identities rather than dummy auth — deliberately, so Google sign-in is
 proved on a live deployment before production depends on it. That also means the admin CLI tooling
@@ -49,26 +49,29 @@ Workers `ratelimits` binding (that's provisioned as part of the script deploy it
 Scripts); don't confuse it with the unrelated Zone WAF / Account Rulesets permissions, which are for
 Cloudflare's WAF Rate Limiting Rules product, not this binding.
 
-`api` **does exist on the charity account**, but only as the empty shell that `wrangler secret put
---env production` created on 2026-09-21 — no application code, no route, and it answers `404`. Its
-`foodbank` database exists (EU jurisdiction) but is unmigrated. Treat production as unbuilt, not as
-something already running.
+Production is **part-built** (2026-10-11): `api` is deployed and its `foodbank` database is migrated
+and seeded with UAT's configuration, but nobody can sign in to it and it has no frontend yet. See
+"Standing production up" below for what is done and what waits on the charity.
 
 `~/bin/foodbank-deploy-server` drives all three deployed tiers: test by default, `--uat` for the
 charity-account UAT system, and `--production` behind a typed confirmation that also reports the
 `AUTH_MODE` tripwire.
 
 **Every deployment is a commit.** `/health` reports the deployed commit, so it has to be one git can
-find again. A test deploy (server or client) commits the working tree on the current branch first;
-UAT and production refuse a dirty tree; `npm run deploy*` refuse one too, so a direct run cannot
-stamp a `GIT_SHA` that does not describe what shipped. Every deploy is tagged
+find again — on any machine, since more than one person now works on the repositories. Every
+deploy, test included, refuses uncommitted changes, a commit not pushed to GitHub, or a branch behind
+GitHub (`~/bin/foodbank-require-pushed`); commit and push first. `npm run deploy`, `deploy:test`
+and `deploy:uat` refuse the same (`scripts/require-pushed.mjs`), so a direct run cannot stamp a
+`GIT_SHA` that does not describe what shipped or that nobody else can find. Every deploy is tagged
 `deploy/<tier>/<UTC time>` and the tag pushed, which keeps the commit reachable after an amend or
 rebase and gives each tier a history to roll back along.
 
 **Promotion deploys what a tier is running, not what is in the working tree.**
 `deploy_foodbank --uat --promote-from test` reads the server commit from test's `/health` and the
 client commit from its `client-version.json`, checks both out into temporary worktrees, and runs the
-normal check → migrate → deploy → verify there. This lets a fix proven in UAT go to production while
+normal check → migrate → deploy → verify there. It refuses if the target already runs a server or
+client commit that the promoted one does not contain, so a promotion never takes a tier backwards;
+an unreadable live version refuses too. This lets a fix proven in UAT go to production while
 other work carries on in test. Test → UAT is the rehearsal. UAT → production still needs a
 production tier in `deploy-foodbank-client` before `deploy_foodbank` can offer it. Promotion carries
 code and migrations only: a secret set on the source environment must be set on the target by hand
@@ -189,11 +192,9 @@ that `uat` is a real, documented tier rather than something pending rebuild.
 
 - [x] **[Claude]** Ran migrations against the new test database (`foodbank-test`) — all 40 applied
       cleanly, `referrals`/`stock_ledger`/`users` verified present.
-- [ ] **[Claude]** Production migration (`foodbank`) is still blocked — it needs a genuine, separate
-      approval each time (the auto-mode safety classifier treats it as a production action and a
-      chat "go ahead" doesn't clear it). **[Pete]** run `npm run db:migrate:production` yourself, or
-      change your Bash permission settings if you want me able to run it. Low-stakes either way: the
-      new `foodbank` database is still empty, so there's nothing to lose even if it went wrong.
+- [x] **[Claude, 2026-10-11]** Production migration (`foodbank`): all 41 applied with Pete's explicit
+      approval, and `referrals`/`stock_ledger`/`users` verified present. Seeded from UAT the same day —
+      see "Seeding production from UAT".
 - [x] **[Pete]** Decided: copy the old test system's data across rather than starting clean.
 - [x] **[Claude]** Exported the old test database (`wrangler d1 export`, data only), reordered it by
       foreign-key dependency (the export isn't topologically sorted, which fails on D1's remote
@@ -225,6 +226,84 @@ Not part of this migration at all: the domain (needed later for the same-site co
 OAuth verification, see below) and the Google OAuth client for the spreadsheet extract — neither is
 a Cloudflare account resource, so neither needs touching just because the Cloudflare account
 changed.
+
+## Standing production up
+
+Split in two because the production frontend has two names: `referrals.guildfordfoodbank.workers.dev`,
+which is Cloudflare's and settled, and a friendly `guildfordfoodbank.org` name, which is **the
+charity's to choose and not chosen yet**. Nothing in part 1 guesses that name.
+
+### Part 1 — done 2026-10-11, on the Cloudflare address only
+
+- `foodbank` migrated and seeded from UAT (next section).
+- Turnstile widget `referrals` (charity account, sitekey `0x4AAAAAAFT8AhS7mvcP_1W-`, managed, domain
+  `referrals.guildfordfoodbank.workers.dev` only — no `localhost` in production). Its secret was
+  piped from the widget's creation straight into `TURNSTILE_SECRET_KEY` on `api` and never shown.
+  `TURNSTILE_HOSTNAMES` in `env.production.vars` lists the same one address.
+- `AUTH_MODE=google` from the first deploy, with no dummy stage (Pete, 2026-10-11). **Sign-in fails
+  closed until part 2**, because the shared `GOOGLE_CLIENT_ID` does not yet list either production
+  address as an Authorised JavaScript origin. That is expected, not a fault.
+- `api` deployed and checked through `/health` and `/ready`, the only checks that need no sign-in.
+  Dated sessions come from the 02:17 cron; the manual materialisation route needs an admin.
+- SMS is live in production from the first deploy (`SMS_API_KEY` and `SMS_SENDER` are both set), as
+  designed. Nothing is sent while there are no referrals.
+- The client's production Worker, `referrals`, is the client repository's to build: a production
+  environment with a service binding to `api` and the sitekey above.
+
+**Nothing that needs a person signed in can be tested until part 2's DNS and Google steps are done.**
+`PII_RETENTION_DAYS` stays unset and the referral form is not advertised.
+
+### Part 2 — waits on the charity choosing the friendly name
+
+- DNS: the friendly name as a custom domain on the `referrals` client Worker.
+- Add that name to the `referrals` Turnstile widget's domains and to `TURNSTILE_HOSTNAMES`, then
+  redeploy `api`. A token solved on a hostname missing from that list is refused.
+- **Google credentials for both addresses — a charity activity:** add the workers.dev address and the
+  friendly name to the shared Google client's Authorised JavaScript origins.
+- Then the first real test: an admin signs in, a referral is submitted, a pick list is generated and
+  an attendance recorded.
+- Google consent-screen verification for the Sheets scope, which needs a domain the charity can prove
+  (see "The spreadsheet extract needs a domain before go-live").
+- Go-live itself: `PII_RETENTION_DAYS=456`, a stock take before the first session (every level starts
+  at **0**), and the paid-plan decision.
+
+## Seeding production from UAT
+
+Done 2026-10-11, the same way test seeded UAT on 2026-09-29 — but with the foreign-key failure that
+rehearsal hit fixed up front. Production holds UAT's configuration and nothing that happened on UAT.
+
+1. `foodbank-charity-wrangler d1 export foodbank-test --remote --env uat --output <scratch>/uat.sql`
+   — a full export, schema included. It holds whatever personal data UAT had: keep it, and
+   everything built from it, out of the repository.
+2. `node scripts/ops/build-seed.mjs <scratch>/uat.sql <scratch>/out` loads the export into memory,
+   runs `scripts/ops/prune-to-config.sql` with foreign keys enforced, and writes `seed.sql` (rows
+   only, parents first, in an order computed from the schema), `wipe-seeded-rows.sql` and
+   `counts.json`. It refuses to write anything unless the seed loads into an empty schema with
+   foreign keys on and nothing deferred, the way remote D1 loads it.
+3. Dress-rehearse in a throwaway local state, not the dev database: `d1 migrations apply`, then
+   `d1 execute --file` the wipe and the seed, all with `--local --env production --persist-to
+<scratch>/wr`. `PRAGMA foreign_key_check` must be empty and counts must match `counts.json`.
+4. Production: note a Time Travel bookmark, migrate, confirm only the three migration-seeded rows
+   exist, then the wipe, then the seed. Compare counts, `foreign_key_check`, and the release JSON
+   against the export.
+
+**What the prune keeps**: weekly session templates still running, stock items **including retired
+ones** and their crate memberships, crates and groupings, **every referral-form release** (superseded
+and draft included) and its publication history, active referral reasons and authorised referrers,
+model parcels, the household grid, target stock lists and voucher configuration, and users — retired
+ones only where a kept release names them. Retired stock and every release are kept deliberately
+(Pete, 2026-10-11): the configuration workbook is the same in every environment, so changing the form
+must meet the same data in production as it did in UAT. **Everything else goes**: referrals, parcels,
+pick lists, the stock ledger (so every level reads 0), texts, audit events, dated sessions, sign-ins,
+volunteer codes, retired referral reasons and referrers, and the source account's job and usage rows.
+
+**Why the wipe exists**: migrations seed three rows into any new database — `0007`'s `pete@x.com`
+stand-in admin, `0034`'s grouping and `0040`'s baseline release. UAT carries its own copies of the
+last two, so they would collide, and the stand-in admin must not survive into production.
+
+The authorised referrers were copied as UAT had them (Pete, 2026-10-11), including
+`surrey.co.uk`, `nhs.gov.uk` and `sara@nhs.gov.uk`, which look like test entries — an admin can
+correct them once sign-in works.
 
 ## The refresh cookie requires the frontend to be same-site
 

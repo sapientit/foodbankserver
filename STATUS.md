@@ -217,9 +217,10 @@ Tracked so it is not mistaken for finished work.
   account has been available to confirm them against. The tests pin our own behaviour, not theirs.
   **Verify both against a real account before go-live**, and simplify the parsing once they are
   known.
-- **No production Google identity provider.** The provider itself is built and live on the test
-  deployment (see "1 — auth" above); production still runs `AUTH_MODE=dummy` until the production
-  origin is added to the shared UAT `GOOGLE_CLIENT_ID` it now uses — see [`docs/architecture/authentication.md`](./docs/architecture/authentication.md).
+- **Nobody can sign in to production yet.** It runs `AUTH_MODE=google` (2026-10-11), but neither
+  production frontend address is an Authorised JavaScript origin on the shared `GOOGLE_CLIENT_ID`
+  yet — a charity task waiting on its choice of friendly name. See "Standing production up" in
+  [`docs/operations/production.md`](./docs/operations/production.md).
 - **Deactivating a user does not revoke their access token.** They lose access at the next refresh,
   so within fifteen minutes. Immediate lockout would need a query per request — the thing stateless
   JWTs exist here to avoid — or a revocation list. Neither is worth it until someone asks.
