@@ -289,8 +289,8 @@ Production goes live on the **free plan** (Pete, 2026-10-12). Before it does
 - [ ] Google consent-screen verification for the Sheets scope (see "The spreadsheet extract needs a
       domain before go-live").
 - [ ] A stock take before the first session (every level starts at **0**).
-- [ ] Platform usage monitoring on production: an Account Analytics: Read token on the charity
-      account set as `CF_ANALYTICS_API_TOKEN` on `api` (only test has one today), and R2 usage added
+- [x] Platform usage monitoring on production (2026-10-12): an Account Analytics: Read **and D1: Read** token on the charity
+      account set as `CF_ANALYTICS_API_TOKEN` on `api`, and R2 usage added
       to the report (`INITIAL_SPEC1.txt`, `#Platform usage monitoring`), so a charge for going over
       the free allowance cannot arrive unnoticed.
 
