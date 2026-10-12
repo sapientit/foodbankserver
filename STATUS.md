@@ -217,9 +217,9 @@ Tracked so it is not mistaken for finished work.
   account has been available to confirm them against. The tests pin our own behaviour, not theirs.
   **Verify both against a real account before go-live**, and simplify the parsing once they are
   known.
-- **Nobody can sign in to production yet.** It runs `AUTH_MODE=google` (2026-10-11), but neither
-  production frontend address is an Authorised JavaScript origin on the shared `GOOGLE_CLIENT_ID`
-  yet — a charity task waiting on its choice of friendly name. See "Standing production up" in
+- **Production is built but not live.** Google sign-in is configured for both frontend addresses
+  (2026-10-12) but not yet proved by an admin signing in. Go-live (`PII_RETENTION_DAYS`, a stock take,
+  the paid plan) is still to do. See "Standing production up" in
   [`docs/operations/production.md`](./docs/operations/production.md).
 - **Deactivating a user does not revoke their access token.** They lose access at the next refresh,
   so within fifteen minutes. Immediate lockout would need a query per request — the thing stateless

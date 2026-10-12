@@ -240,12 +240,10 @@
         "ENVIRONMENT": "production",
         "LOG_LEVEL": "info",
         // Google from the first deploy, with no dummy stage (Pete,
-        // 2026-10-11). Knowingly unusable until the charity adds both
-        // production frontend addresses — the workers.dev one and the
-        // guildfordfoodbank.org name it has still to choose — to
-        // GOOGLE_CLIENT_ID's Authorised JavaScript origins. Until then every
-        // sign-in fails closed. That is part 2 of standing production up
-        // (docs/operations/production.md), not a fault to fix here.
+        // 2026-10-11). Both production frontend addresses —
+        // referrals.guildfordfoodbank.workers.dev and
+        // referrals.guildfordfoodbank.org — are Authorised JavaScript origins
+        // on GOOGLE_CLIENT_ID (the charity, 2026-10-12).
         "AUTH_MODE": "google",
         // Blank for the same reason as the top-level block: `npm run deploy`
         // stamps the real commit at deploy time via `--var`, so nothing here
@@ -279,10 +277,8 @@
         "CF_D1_DATABASE_ID": "cd9d1e7a-170d-4e89-854f-f1ab02a549c0",
         "CF_WORKER_SCRIPT_NAME": "api",
         // The referral form's hostnames — see the top-level block's comment.
-        // The `referrals` widget's own list. The workers.dev address only for
-        // now: the friendly guildfordfoodbank.org name is the charity's to
-        // choose, and is added here and to the widget when it is.
-        "TURNSTILE_HOSTNAMES": "referrals.guildfordfoodbank.workers.dev",
+        // The `referrals` widget's own list.
+        "TURNSTILE_HOSTNAMES": "referrals.guildfordfoodbank.org,referrals.guildfordfoodbank.workers.dev",
       },
       // Not inherited; see the top-level "secrets".
       "secrets": {

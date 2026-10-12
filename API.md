@@ -14,11 +14,15 @@ rendering and no PDF — printing and layout are the client's.
 | Local      | `http://127.0.0.1:8787`                          |
 | Test       | `https://foodbank-server.losttemple.workers.dev` |
 | UAT        | `https://api-test.guildfordfoodbank.workers.dev` |
-| Production | not yet deployed                                 |
+| Production | `https://api.guildfordfoodbank.workers.dev`      |
 
 Test runs dummy authentication (anyone knowing a seeded address is an admin). UAT runs real Google
 sign-in instead — proved live there before production depends on it. Neither ever holds real
 personal data.
+
+Production runs Google sign-in only, for its two frontend addresses,
+`referrals.guildfordfoodbank.org` and `referrals.guildfordfoodbank.workers.dev` (2026-10-12). What
+the production frontend Worker needs is in `docs/handoffs/production-client-worker.md`.
 
 `/health` and `/ready` sit at the **root**, not under `/api/v1`. Everything else
 is under the base path.

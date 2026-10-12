@@ -22,6 +22,7 @@ reinstated as a third, standing tier alongside test — additive, not a replacem
 | D1 database          | `foodbank-test` (EU, personal account)           | `foodbank-test` (EU, charity account)            | `foodbank` (EU)                             |
 | Auth                 | `AUTH_MODE=dummy`                                | `AUTH_MODE=google`                               | `AUTH_MODE=google`                          |
 | URL                  | `https://foodbank-server.losttemple.workers.dev` | `https://api-test.guildfordfoodbank.workers.dev` | `https://api.guildfordfoodbank.workers.dev` |
+| Frontend             | `https://foodbank-client.losttemple.workers.dev` | `https://referrals-test.guildfordfoodbank.org`   | `https://referrals.guildfordfoodbank.org`   |
 
 UAT signs in with real Google identities rather than dummy auth — deliberately, so Google sign-in is
 proved on a live deployment before production depends on it. That also means the admin CLI tooling
@@ -49,9 +50,10 @@ Workers `ratelimits` binding (that's provisioned as part of the script deploy it
 Scripts); don't confuse it with the unrelated Zone WAF / Account Rulesets permissions, which are for
 Cloudflare's WAF Rate Limiting Rules product, not this binding.
 
-Production is **part-built** (2026-10-11): `api` is deployed and its `foodbank` database is migrated
-and seeded with UAT's configuration, but nobody can sign in to it and it has no frontend yet. See
-"Standing production up" below for what is done and what waits on the charity.
+Production is **built but not live** (2026-10-12): `api` is deployed, its `foodbank` database holds
+UAT's configuration, the frontend answers at `referrals.guildfordfoodbank.org`, and Google sign-in is
+configured for both frontend addresses. Go-live itself is still to do. See "Standing production up"
+below.
 
 `~/bin/foodbank-deploy-server` drives all three deployed tiers: test by default, `--uat` for the
 charity-account UAT system, and `--production` behind a typed confirmation that also reports the
@@ -230,42 +232,43 @@ changed.
 ## Standing production up
 
 Split in two because the production frontend has two names: `referrals.guildfordfoodbank.workers.dev`,
-which is Cloudflare's and settled, and a friendly `guildfordfoodbank.org` name, which is **the
-charity's to choose and not chosen yet**. Nothing in part 1 guesses that name.
+which is Cloudflare's, and the friendly `referrals.guildfordfoodbank.org`, which was the charity's to
+choose. Part 1 needed only the first; part 2 waited on the second.
 
 ### Part 1 — done 2026-10-11, on the Cloudflare address only
 
 - `foodbank` migrated and seeded from UAT (next section).
-- Turnstile widget `referrals` (charity account, sitekey `0x4AAAAAAFT8AhS7mvcP_1W-`, managed, domain
-  `referrals.guildfordfoodbank.workers.dev` only — no `localhost` in production). Its secret was
-  piped from the widget's creation straight into `TURNSTILE_SECRET_KEY` on `api` and never shown.
-  `TURNSTILE_HOSTNAMES` in `env.production.vars` lists the same one address.
-- `AUTH_MODE=google` from the first deploy, with no dummy stage (Pete, 2026-10-11). **Sign-in fails
-  closed until part 2**, because the shared `GOOGLE_CLIENT_ID` does not yet list either production
-  address as an Authorised JavaScript origin. That is expected, not a fault.
+- Turnstile widget `referrals` (charity account, sitekey `0x4AAAAAAFT8AhS7mvcP_1W-`, managed, no
+  `localhost` in production). Its secret was piped from the widget's creation straight into
+  `TURNSTILE_SECRET_KEY` on `api` and never shown.
+- `AUTH_MODE=google` from the first deploy, with no dummy stage (Pete, 2026-10-11). Sign-in failed
+  closed until part 2 added the Google origins.
 - `api` deployed and checked through `/health` and `/ready`, the only checks that need no sign-in.
-  Dated sessions come from the 02:17 cron; the manual materialisation route needs an admin.
+  Dated sessions came from the 02:17 cron: 18 created on 2026-10-12, covering 13 Oct to 20 Nov.
 - SMS is live in production from the first deploy (`SMS_API_KEY` and `SMS_SENDER` are both set), as
   designed. Nothing is sent while there are no referrals.
-- The client's production Worker, `referrals`, is the client repository's to build: a production
-  environment with a service binding to `api` and the sitekey above.
+- The client's production Worker, `referrals`, built by the client repository from
+  [`../handoffs/production-client-worker.md`](../handoffs/production-client-worker.md).
 
-**Nothing that needs a person signed in can be tested until part 2's DNS and Google steps are done.**
-`PII_RETENTION_DAYS` stays unset and the referral form is not advertised.
+### Part 2 — the friendly name, done 2026-10-12
 
-### Part 2 — waits on the charity choosing the friendly name
+- [x] **[Charity]** DNS: `referrals.guildfordfoodbank.org` is a custom domain on the `referrals`
+      client Worker. It serves the client and proxies to `api`.
+- [x] **[Charity]** Google credentials: both frontend addresses are Authorised JavaScript origins on
+      the shared Google client.
+- [x] **[Claude]** The `referrals` Turnstile widget's domains and `TURNSTILE_HOSTNAMES` hold both
+      addresses, and `api` is redeployed with them. A token solved on a hostname missing from that
+      list is refused.
+- [ ] **[Pete]** The first real test: an admin signs in with Google at
+      `referrals.guildfordfoodbank.org`. Do not run a referral round trip with made-up households on
+      production: SMS is live there.
 
-- DNS: the friendly name as a custom domain on the `referrals` client Worker.
-- Add that name to the `referrals` Turnstile widget's domains and to `TURNSTILE_HOSTNAMES`, then
-  redeploy `api`. A token solved on a hostname missing from that list is refused.
-- **Google credentials for both addresses — a charity activity:** add the workers.dev address and the
-  friendly name to the shared Google client's Authorised JavaScript origins.
-- Then the first real test: an admin signs in, a referral is submitted, a pick list is generated and
-  an attendance recorded.
-- Google consent-screen verification for the Sheets scope, which needs a domain the charity can prove
-  (see "The spreadsheet extract needs a domain before go-live").
-- Go-live itself: `PII_RETENTION_DAYS=456`, a stock take before the first session (every level starts
-  at **0**), and the paid-plan decision.
+### Still to do before go-live
+
+- Google consent-screen verification for the Sheets scope, which needs the domain proved (see "The
+  spreadsheet extract needs a domain before go-live").
+- `PII_RETENTION_DAYS=456`, a stock take before the first session (every level starts at **0**), and
+  the paid-plan decision.
 
 ## Seeding production from UAT
 
