@@ -860,7 +860,7 @@ describe('preferences on the pick-list maintenance screen', () => {
     }
   });
 
-  it('gives an empty map once the referral has been purged', async () => {
+  it('gives an empty map when the referral has no answers stored', async () => {
     const { testApp, token, world: w } = await world();
     await submitReferral(testApp, w, { adults: 1, children: 0, answers: { Dietary: 'no pork' } });
     const { id } = await generatePickList(testApp, token, w.sessionId);

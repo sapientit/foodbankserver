@@ -1470,7 +1470,6 @@ describe('the collectionMethod backfill fallback', () => {
       refereePostcodeNormalised: null,
       refereePhoneNormalised: null,
       answersJson: null,
-      piiPurgedAt: null,
       createdByUserId: null,
       createdAt: NOW,
       updatedAt: NOW,

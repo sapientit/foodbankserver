@@ -276,6 +276,12 @@
         "CF_ACCOUNT_ID": "deb0c45ee0e89fad81d6b1227d7c439a",
         "CF_D1_DATABASE_ID": "cd9d1e7a-170d-4e89-854f-f1ab02a549c0",
         "CF_WORKER_SCRIPT_NAME": "api",
+        // Fifteen months (INITIAL_SPEC1.txt, #Forgetting a referral): the
+        // nightly purge deletes referrals made longer ago than this. Set
+        // 2026-10-12 while production held no referrals (Pete), so nothing is
+        // due until January 2028. Unset everywhere else, so test and UAT
+        // never delete their data on a timer.
+        "PII_RETENTION_DAYS": "456",
         // The referral form's hostnames — see the top-level block's comment.
         // The `referrals` widget's own list.
         "TURNSTILE_HOSTNAMES": "referrals.guildfordfoodbank.org,referrals.guildfordfoodbank.workers.dev",

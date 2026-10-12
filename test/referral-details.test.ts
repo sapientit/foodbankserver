@@ -1,8 +1,6 @@
 import { env } from 'cloudflare:workers';
-import { eq } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { fixedClock } from '../src/core/clock.ts';
-import { createLogger } from '../src/core/log.ts';
 import { createDatabase } from '../src/db/client.ts';
 import { parcelLines, parcels, pickLists } from '../src/db/schema/pick-lists.ts';
 import { auditEvents, referrals } from '../src/db/schema/referrals.ts';
@@ -11,7 +9,6 @@ import { modelParcels, parcelGrid } from '../src/db/schema/rules.ts';
 import { recurringSessions, sessions } from '../src/db/schema/sessions.ts';
 import { stockItems, stockLedger } from '../src/db/schema/stock.ts';
 import { refreshTokens, users } from '../src/db/schema/users.ts';
-import { purgeReferralPii } from '../src/modules/jobs/purge-pii.ts';
 import { authHeaders, buildTestApp, devLogin, type TestApp } from './helpers/app.ts';
 import {
   setUpReferralWorld,
@@ -385,39 +382,6 @@ describe('pickNumber', () => {
     );
     expect(byId.get(early.id)).toEqual(expect.any(Number));
     expect(byId.get(late.id)).toBeNull();
-  });
-});
-
-describe('a purged household', () => {
-  it('still appears, with nulls rather than being dropped, and keeps the referrer organisation', async () => {
-    const { testApp, token, world } = await adminWorld();
-    const { id } = await submitReferral(testApp, world, {}, { clientIp: nextClientIp() });
-
-    await db
-      .update(referrals)
-      .set({ referredAt: '2020-01-01T00:00:00.000Z' })
-      .where(eq(referrals.id, id));
-    await purgeReferralPii({
-      db,
-      clock: fixedClock(NOW),
-      logger: createLogger('silent'),
-      retentionDays: 456,
-    });
-
-    const details = await readDetails(testApp, token, world.sessionId);
-    expect(details.status).toBe(200);
-    expect(details.body.referrals?.[0]).toMatchObject({
-      referralId: id,
-      refereeFirstName: null,
-      refereeSurname: null,
-      refereeAddress: null,
-      refereePostcode: null,
-      refereePhone: null,
-      // Forgetting a household is not forgetting who referred them: the
-      // organisation is `NOT NULL` and the purge leaves it, so this field
-      // stays a string when everything around it has gone.
-      referrerOrganisation: 'Guildford Borough Council',
-    });
   });
 });
 

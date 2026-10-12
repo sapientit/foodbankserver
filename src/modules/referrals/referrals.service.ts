@@ -777,7 +777,6 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
       refereePhoneNormalised: refereePhone === null ? null : normalisePhone(refereePhone),
       answersJson: JSON.stringify(input.answers),
       formId,
-      piiPurgedAt: null,
       createdByUserId: null,
       createdAt: now,
       updatedAt: now,
@@ -851,10 +850,9 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     });
 
     if (updated === undefined) {
-      // Nothing matched: there is no such referral, its details have been
-      // forgotten, or it is no longer pending. Tell the three apart so an
-      // admin is not sent chasing a ghost.
-      assertNotPurged(await getReferral(referralId));
+      // Nothing matched: there is no such referral, or it is no longer
+      // pending. Tell the two apart so an admin is not sent chasing a ghost.
+      await getReferral(referralId);
       throw new ConflictError('That referral is not waiting to be reviewed');
     }
 
@@ -897,11 +895,6 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     actor: Actor,
   ): Promise<void> {
     const referral = await getReferral(referralId);
-    // Before the list entry is written: the accept that follows will be
-    // refused for a forgotten referral, and authorising a referrer off the
-    // back of a decision that then does not happen is the state this ordering
-    // exists to avoid.
-    assertNotPurged(referral);
     const email = referral.referrerEmail;
     if (email === null) {
       throw new UnprocessableError('That referral has no referrer address to authorise');
@@ -944,9 +937,9 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     });
 
     if (updated === undefined) {
-      // Three cases again, as in `review` above: no such referral, forgotten,
-      // or not `active`. A forgotten referral has nothing left to read.
-      assertNotPurged(await getReferral(referralId));
+      // Two cases again, as in `review` above: no such referral, or not
+      // `active`.
+      await getReferral(referralId);
       throw new ConflictError('That referral is not waiting to be read');
     }
 
@@ -984,8 +977,8 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     input: { noPreviousReferral: true } | { previousSessionDate: string },
     actor: Actor,
   ): Promise<Referral> {
-    const referral = await getReferral(referralId);
-    assertNotPurged(referral);
+    // A `404` for an unknown id, before anything is written.
+    await getReferral(referralId);
 
     const patch: Patch<NewReferral> =
       'noPreviousReferral' in input
@@ -1010,25 +1003,6 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
   }
 
   /**
-   * A referral whose details have been forgotten cannot be acted on at all.
-   *
-   * Fifteen months on there is no name, no address and no answers left, so
-   * there is nothing to correct, nothing to move to another session, nothing
-   * to cancel and nothing to copy — `INITIAL_SPEC1.txt`, `#Referral
-   * maintenance`. Amending is the sharpest of the four: writing a name back
-   * onto a purged referral would put back exactly what the charity promised to
-   * forget.
-   *
-   * Pure and synchronous, so it can guard the copy route as well without
-   * pulling in the session read `assertOpenToChange` does.
-   */
-  function assertNotPurged(referral: Referral): void {
-    if (referral.piiPurgedAt !== null) {
-      throw new ConflictError('That referral has been forgotten and can no longer be changed');
-    }
-  }
-
-  /**
    * A referral that is finished with cannot be changed, and neither can one on
    * a session that has been confirmed.
    *
@@ -1045,7 +1019,6 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
    * session confirmed with one set of figures quietly acquires another.
    */
   async function assertOpenToChange(referral: Referral): Promise<void> {
-    assertNotPurged(referral);
     if (referral.status === 'cancelled') {
       throw new ConflictError('That referral has been cancelled');
     }
@@ -1184,8 +1157,8 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
       throw new NotFoundError('Referral not found');
     }
 
-    // Field NAMES only. Recording the values would make this table a second,
-    // un-purgeable copy of every referral.
+    // Field NAMES only. Recording the values would make this table a second
+    // copy of every referral's personal details.
     await repository.recordAudit({
       id: crypto.randomUUID(),
       occurredAt: clock.nowIso(),
@@ -1413,10 +1386,6 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
    * longer come to anything. See `copy` for why.
    */
   async function assertCopyable(referral: Referral): Promise<void> {
-    // First, and on its own: a forgotten referral has nothing left to copy, so
-    // there is no point asking what became of the household.
-    assertNotPurged(referral);
-
     const outcome = await outcomeFor(referral.id);
 
     const finishedWith =
@@ -1558,7 +1527,6 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
       // The copy has not been texted about its own session, whatever the
       // original was told about its one.
       smsReminderSentAt: null,
-      piiPurgedAt: null,
       createdByUserId: actor.userId,
       createdAt: now,
       updatedAt: now,
@@ -1662,7 +1630,6 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
       formId,
       adminInfo: `Copied from referral dated ${instantToLondonWallClock(source.referredAt).date}`,
       smsReminderSentAt: null,
-      piiPurgedAt: null,
       createdByUserId: actor.userId,
       createdAt: now,
       updatedAt: now,
@@ -1715,8 +1682,7 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
 export type ReferralsService = ReturnType<typeof createReferralsService>;
 
 /**
- * Surname first, then first name. A blank name sorts last: a purged referral
- * has nothing to look up and belongs at the bottom rather than the top.
+ * Surname first, then first name. A blank name sorts last rather than first.
  */
 function bySurnameThenFirstName(left: Referral, right: Referral): number {
   const key = (referral: Referral): string =>

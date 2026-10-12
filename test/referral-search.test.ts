@@ -9,7 +9,7 @@ import { auditEvents, referrals } from '../src/db/schema/referrals.ts';
 import { authorisedReferrers, referralReasons } from '../src/db/schema/referrers.ts';
 import { recurringSessions, sessions } from '../src/db/schema/sessions.ts';
 import { refreshTokens, users } from '../src/db/schema/users.ts';
-import { purgeReferralPii } from '../src/modules/jobs/purge-pii.ts';
+import { purgeExpiredReferrals } from '../src/modules/jobs/purge-referrals.ts';
 import { authHeaders, buildTestApp, devLogin, type TestApp } from './helpers/app.ts';
 import {
   BASELINE_FORM_ID,
@@ -799,11 +799,9 @@ describe('surnamePrefix narrows what the identifiers found', () => {
     const { testApp, token, world: w } = await referralWorld(NOW);
     const { wintergreen } = await twoAtOnePostcode(testApp, w);
 
-    // A row can have a null surname — a bulk-seeded referral, or one whose
-    // personal data has been purged — and `LIKE` against `NULL` is `NULL`, so
-    // it drops out rather than matching everything. The surname is nulled
-    // directly here because the purge would also null the postcode the search
-    // runs on, leaving nothing to distinguish the two behaviours.
+    // A row can have a null surname — the column is nullable, though a live
+    // submission requires one — and `LIKE` against `NULL` is `NULL`, so it
+    // drops out rather than matching everything.
     await db.update(referrals).set({ refereeSurname: null }).where(eq(referrals.id, wintergreen));
 
     const filtered = await search(testApp, token, {
@@ -919,7 +917,7 @@ it('finds a referral referred more than fifteen months ago, unlike the repeat-re
   );
 });
 
-it('does not find a referral once its personal data has been purged', async () => {
+it('does not find a referral once the purge has deleted it', async () => {
   const { testApp, token, world: w } = await referralWorld(NOW);
   const submitted = await submitReferral(
     testApp,
@@ -943,7 +941,7 @@ it('does not find a referral once its personal data has been purged', async () =
     .update(referrals)
     .set({ referredAt: '2020-01-01T00:00:00.000Z' })
     .where(eq(referrals.id, submitted.id));
-  await purgeReferralPii({
+  await purgeExpiredReferrals({
     db,
     clock: fixedClock(NOW),
     logger: createLogger('silent'),
@@ -1004,7 +1002,6 @@ describe('ordering and the fifty-result cap', () => {
       refereePostcodeNormalised: postcodeNormalised,
       refereePhoneNormalised: null,
       answersJson: null,
-      piiPurgedAt: null,
       createdByUserId: null,
       createdAt: NOW,
       updatedAt: NOW,

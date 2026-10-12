@@ -454,14 +454,10 @@ them or the server acts on them: `refereeFirstName`, `refereeSurname`,
 `answers` keys. The two questions that follow from `needsFuelHelp` — pre-payment
 meter, permission to ring — are ordinary answers.
 
-**After a retention purge, `answers` comes back empty** along with the referee's
-own fields — the server cannot tell which answers were personal, so it drops all
-of them. `adminInfo` goes with them. The referrer's name, email and phone
-survive, as does `reviewComment`: the point of the purge is to stop holding the
-household's details, not to lose track of who referred them or of why a referral
-was accepted. The note about the household is the one administrator-written
-field that does not survive, because it describes the people rather than a
-decision.
+**A referral past the fifteen-month retention period is deleted outright**, not
+anonymised — `answers` does not come back empty, there is no row left to return
+it on at all. See "A referral past retention is gone, not refused" in section
+3 for what that means for every route that addresses a referral by id.
 
 ### The postcode has a settled form, and you apply it too
 
@@ -724,9 +720,9 @@ Six things to build around:
   postcode would be the wrong kind of help. The charity was explicit about this.
 
 The lookback is fifteen months, counted from when each referral was made — the
-same clock the retention purge runs on, so a household whose details have been
-forgotten cannot be found. That is accepted, not a bug: there is nothing left to
-match on.
+same clock the retention purge runs on, so a referral past that period has
+already been deleted and cannot be matched. That is accepted, not a bug: there
+is no row left to match on.
 
 #### The `Exclude postcode matches` checkbox
 
@@ -779,9 +775,9 @@ them slightly wrong, and a search insisting they all agree would fail exactly
 when it was needed.
 
 **Cancelled and rejected referrals are searchable and returned**, and there is
-no fifteen-month window here — unlike the duplicate count. A referral whose
-details have been purged cannot be found, because the purge nulls the columns
-this searches on.
+no fifteen-month window here — unlike the duplicate count. A referral past the
+fifteen-month retention period cannot be found, because the purge has deleted
+it outright.
 
 **The results are the administrator's working list**: session date, status,
 first name, surname, postcode, phone number, the main reason id, the referrer's
@@ -796,10 +792,7 @@ endpoint is admin-only outright, so `null` is "no note" rather than "not for
 you".
 
 **`referrerOrganisation` is the one field here that is never null.** It is
-`NOT NULL` on the table and outside the PII block, so it survives the purge —
-though a purged referral cannot be found by this search anyway, since the purge
-nulls the columns it matches on. `referrerName` is unchanged and still returned
-beside it.
+`NOT NULL` on the table.
 
 **The secondary cause and the additional crisis detail are yours to extract.**
 They are answers, not columns, and `answers` comes through whole and unfiltered
@@ -1018,8 +1011,8 @@ administrator checks it through, answers anything new, chooses a session and
 submits; nothing exists until then.
 
 - `{id}` is the referral being copied **from**. It must be copy-eligible (the
-  same `status` / `outcome` rule, not forgotten) or this is a `409`. Allowed
-  whether or not its release is still in use.
+  same `status` / `outcome` rule) or this is a `409`. Allowed whether or not
+  its release is still in use.
 - **The referrer is not in the body.** Name, organisation, email and phone come
   from the original, unchanged, exactly as Copy carries them.
 - **`formId` is not in the body, and sending one is a `400`.** The new referral
@@ -1036,14 +1029,16 @@ submits; nothing exists until then.
   the reason again. This one is a guess (`x-assumed` in `openapi.yaml`).
 - Not idempotent. Guard the submit button against a double press.
 
-### A forgotten referral can no longer be acted on
+### A referral past retention is gone, not refused
 
-Once `piiPurgedAt` is set, `PATCH /referrals/{id}` (correcting **or** moving),
-`POST /referrals/{id}/cancel`, `/accept`, `/reject`, `/review` and `/copy` are
-all a `409`. Fifteen months on there is no name, no address and no answers left,
-so there is nothing to correct, decide on, read through, move or copy. Hide
-those controls on a purged referral rather than letting the user find out by
-pressing one.
+There is no `piiPurgedAt` any more, and no `409` for "forgotten". A referral
+past the fifteen-month retention period has been deleted outright —
+`INITIAL_SPEC1.txt`, `#Forgetting a referral` — so `PATCH /referrals/{id}`
+(correcting **or** moving), `POST /referrals/{id}/cancel`, `/accept`,
+`/reject`, `/review`, `/copy` and `/re-refer` all return the ordinary `404`
+for an unknown referral, exactly as an id that was never valid would. There is
+nothing to distinguish "forgotten" from "never existed", because nothing about
+it survives to tell the two apart.
 
 ---
 
@@ -1429,8 +1424,7 @@ carries the referral's **whole answers map**, unfiltered.
 Which of those are preferences is yours to know — the referral's release
 (`formId`) carries the `preference` flag on each question — so filter the map
 yourself. The server never reads a release and will not guess; that guess is exactly what
-`dietaryNotes` was. The map is empty once the referral's personal data has been
-purged.
+`dietaryNotes` was.
 
 ---
 
@@ -1446,7 +1440,7 @@ GET /api/v1/sessions/{sessionId}/listener-sheet
 
 **One sheet for the whole session**, not one per household. A listener is handed
 a single sheet and scans it for whoever is in front of them, so it comes ordered
-by surname; a purged household sorts last.
+by surname.
 
 Open to a **team leader**, and this is **the only place a team leader is given
 the reason for referral**. Everywhere else it stays with administrators, and
@@ -1454,10 +1448,9 @@ the reason for referral**. Everywhere else it stays with administrators, and
 an exception has been carved out of it. Do not use this endpoint to populate a
 referral screen.
 
-**`reason` is the label, not the id** — the thing to print. It **survives a
-purge**, because the reason sits outside the personal-data block so that
-reporting still works once nobody is identifiable. A reason the charity has
-since retired still appears, because the referral was made under it.
+**`reason` is the label, not the id** — the thing to print. A reason the
+charity has since retired still appears, because the referral was made under
+it.
 
 **Cause Details is yours to extract.** `answers` is the referral's dynamic
 answers whole and unfiltered, and _Cause Details_ is one of them. The server
@@ -1962,16 +1955,16 @@ shape, and it may be `null`.
 **`refereeDateOfBirth` is new, and this row did not carry it before.** It is
 `YYYY-MM-DD` — a date, not an age — and it is there to identify the household to
 whoever follows the bill up. It is typed nullable like every personal field here,
-but unlike `refereePhone` it is always given on a referral — the only way it
-comes back `null` is a purged one, and the retention window is far longer than
-this list's fourteen days, so in practice you will not see it.
+but unlike `refereePhone` it is always given on a referral — in practice you
+will not see it null, because the retention window is far longer than this
+list's fourteen days, and a referral past that window has been deleted
+outright rather than returned with the field blanked.
 
 **`needsFuelHelp` is new too, and on this list it is always `true`** — the
 repository already filters on it, so the field is not telling you anything the
 row's presence doesn't. It is here anyway, as a plain boolean rather than
 something to infer, because it is the same fixed field the client form shows
-everywhere else it appears. Unlike the rest of the row it is not personal data
-and does not go on the fifteen-month purge.
+everywhere else it appears.
 
 ---
 
@@ -2140,10 +2133,9 @@ because nobody walks in for a delivery; this is the list you ring people from,
 and a delivery household is the one the team most needs to reach.
 
 Cancelled and rejected referrals are left off. Ordered by surname then first
-name. Every field is nullable **except `referrerOrganisation`**: a purged
-household is still on the session and still appears, with nothing left to
-contact them by — but who referred them is not what the purge is forgetting, so
-the organisation is always a string.
+name. Every field is nullable **except `referrerOrganisation`** — matching
+`Referral`'s own referee and referrer columns — though in practice none of
+them is null for a referral the food bank still holds.
 
 **`pickNumber` is nullable for a different reason than the rest**: it is
 `null` when the household has no parcel yet, whether because no pick list has
@@ -2277,10 +2269,9 @@ Save the choice with `POST /referrals/{id}/first-time-review`, exactly one of:
 It responds with the updated `Referral`. It does not check the date you send
 against the candidate list — the candidates are for your screen to offer, not
 for the server to validate against — and it does not require the referral
-being reviewed to be in any particular `status`; only a referral whose
-details have been forgotten refuses it, with a `409`. Settled by Pete
-(closed Q49): a rejected, cancelled or confirmed-session referral can still
-be marked, since the screen is never offered against one in practice.
+being reviewed to be in any particular `status`. Settled by Pete (closed
+Q49): a rejected, cancelled or confirmed-session referral can still be
+marked, since the screen is never offered against one in practice.
 
 ### Derived value 1: the Run a session marker
 

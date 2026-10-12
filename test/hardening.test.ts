@@ -1,5 +1,4 @@
 import { env } from 'cloudflare:workers';
-import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fixedClock } from '../src/core/clock.ts';
 import { loadConfig } from '../src/config/env.ts';
@@ -11,8 +10,6 @@ import { modelParcels, parcelGrid } from '../src/db/schema/rules.ts';
 import { recurringSessions, sessions } from '../src/db/schema/sessions.ts';
 import { stockItems, stockLedger } from '../src/db/schema/stock.ts';
 import { refreshTokens, users } from '../src/db/schema/users.ts';
-import { purgeReferralPii } from '../src/modules/jobs/purge-pii.ts';
-import { createLogger } from '../src/core/log.ts';
 import { buildTestApp, devLogin } from './helpers/app.ts';
 import { GOOGLE_TEST_CLIENT_ID } from './helpers/google-token.ts';
 import { setUpReferralWorld, submission, submitReferral } from './helpers/referral-fixtures.ts';
@@ -302,129 +299,6 @@ describe('CORS', () => {
     // The self-service edit window is gone, so its header is no longer allowed.
     expect(allowed.headers.get('access-control-allow-headers')).not.toContain('x-referral-key');
     expect(refused.status).toBe(403);
-  });
-});
-
-describe('purging personal data', () => {
-  async function seedOldReferral() {
-    const testApp = buildTestApp({ clock: fixedClock('2026-08-04T09:00:00.000Z') });
-    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
-    const world = await setUpReferralWorld(testApp, accessToken);
-    const submitted = await submitReferral(testApp, world, {
-      answers: { dietary_needs: 'no pork' },
-    });
-    expect(submitted.status, JSON.stringify(submitted.body)).toBe(201);
-    const { id } = submitted;
-
-    // Age it beyond any plausible retention period.
-    await db
-      .update(referrals)
-      .set({ referredAt: '2020-01-01T00:00:00.000Z' })
-      .where(eq(referrals.id, id));
-
-    return { testApp, id };
-  }
-
-  const deps = (retentionDays: number | undefined) => ({
-    db,
-    clock: fixedClock('2026-08-04T09:00:00.000Z'),
-    logger: createLogger('silent'),
-    retentionDays,
-  });
-
-  it('does nothing at all until a retention period is set', async () => {
-    const { id } = await seedOldReferral();
-
-    const result = await purgeReferralPii(deps(undefined));
-
-    expect(result.purged).toBe(0);
-    const [row] = await db.select().from(referrals).where(eq(referrals.id, id));
-    expect(row?.refereeSurname).toBe('Wintergreen');
-    expect(row?.piiPurgedAt).toBeNull();
-  });
-
-  it("removes every one of the referee's own columns once it does", async () => {
-    const { id } = await seedOldReferral();
-
-    const result = await purgeReferralPii(deps(456));
-
-    expect(result.purged).toBe(1);
-    const [row] = await db.select().from(referrals).where(eq(referrals.id, id));
-
-    expect(row?.refereeFirstName).toBeNull();
-    expect(row?.refereeSurname).toBeNull();
-    expect(row?.refereeDateOfBirth).toBeNull();
-    expect(row?.refereeAddress).toBeNull();
-    expect(row?.refereePostcode).toBeNull();
-    expect(row?.refereePhone).toBeNull();
-    // The settled forms used for repeat-referral matching, alongside the
-    // values they are derived from. This matters more than it looks: without
-    // it, a household the food bank has promised to forget would go on
-    // matching by a postcode or phone number it says it no longer holds —
-    // the repeat-referral screen would keep surfacing a household that a
-    // purge was supposed to make untraceable.
-    expect(row?.refereePostcodeNormalised).toBeNull();
-    expect(row?.refereePhoneNormalised).toBeNull();
-    expect(row?.piiPurgedAt).toEqual(expect.any(String));
-  });
-
-  it("keeps the referrer's own details, which the purge is not aimed at", async () => {
-    const { id } = await seedOldReferral();
-
-    await purgeReferralPii(deps(456));
-    const [row] = await db.select().from(referrals).where(eq(referrals.id, id));
-
-    // The retention period exists to stop holding details of the household that
-    // needed feeding, not to lose track of the professional who referred them.
-    expect(row?.referrerName).toBe('Jane Fieldsworth');
-    expect(row?.referrerEmail).toBe('jane@guildford.gov.uk');
-    expect(row?.referrerPhone).toBe('01483 000111');
-  });
-
-  it('keeps what reporting needs, because it is no longer personal data', async () => {
-    const { id } = await seedOldReferral();
-
-    await purgeReferralPii(deps(456));
-    const [row] = await db.select().from(referrals).where(eq(referrals.id, id));
-
-    // "We fed 340 households, 890 people, 22% for benefit delay" must survive.
-    expect(row?.adults).toBe(2);
-    expect(row?.children).toBe(3);
-    expect(row?.reasonId).toEqual(expect.any(String));
-    expect(row?.needsFuelHelp).toBe(0);
-    expect(row?.referrerOrganisation).toBe('Guildford Borough Council');
-    expect(row?.sessionId).toEqual(expect.any(String));
-  });
-
-  it('drops the dynamic answers whole, because nothing can classify them', async () => {
-    const { id } = await seedOldReferral();
-
-    await purgeReferralPii(deps(456));
-    const [row] = await db.select().from(referrals).where(eq(referrals.id, id));
-
-    // The form is client configuration, so the server has no `isPii` flag to
-    // consult and cannot keep a key on the grounds that it looks harmless.
-    expect(row?.answersJson).toBeNull();
-  });
-
-  it('leaves a referral inside the retention period untouched', async () => {
-    const testApp = buildTestApp({ clock: fixedClock('2026-08-04T09:00:00.000Z') });
-    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
-    const world = await setUpReferralWorld(testApp, accessToken);
-    const { id } = await submitReferral(testApp, world);
-
-    const result = await purgeReferralPii(deps(456));
-
-    expect(result.purged).toBe(0);
-    const [row] = await db.select().from(referrals).where(eq(referrals.id, id));
-    expect(row?.refereeSurname).toBe('Wintergreen');
-  });
-
-  it('is idempotent — a second run purges nothing further', async () => {
-    await seedOldReferral();
-
-    expect((await purgeReferralPii(deps(456))).purged).toBe(1);
-    expect((await purgeReferralPii(deps(456))).purged).toBe(0);
   });
 });
 

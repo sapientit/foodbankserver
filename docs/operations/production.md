@@ -265,10 +265,17 @@ choose. Part 1 needed only the first; part 2 waited on the second.
 
 ### Still to do before go-live
 
-- Google consent-screen verification for the Sheets scope, which needs the domain proved (see "The
-  spreadsheet extract needs a domain before go-live").
-- `PII_RETENTION_DAYS=456`, a stock take before the first session (every level starts at **0**), and
-  the paid-plan decision.
+Production goes live on the **free plan** (Pete, 2026-10-12). Before it does
+(`INITIAL_SPEC1.txt`, `#Backups and recovery`):
+
+- [ ] A regular export of the production database, kept apart from Cloudflare's own Time Travel.
+- [ ] Restoring to an earlier point (Time Travel) documented here and rehearsed on UAT.
+- [ ] Restarting from an export documented here and rehearsed on UAT.
+- [x] `PII_RETENTION_DAYS=456` set on production (2026-10-12, in `env.production.vars`). The purge
+      deletes referrals outright in a fixed-size batch, so it is safe on the free plan.
+- [ ] Google consent-screen verification for the Sheets scope (see "The spreadsheet extract needs a
+      domain before go-live").
+- [ ] A stock take before the first session (every level starts at **0**).
 
 ## Seeding production from UAT
 
@@ -448,9 +455,8 @@ is refused with a `403` rather than answered.
 
 The period is **fifteen months**, settled by the charity on 2026-08-06 at twelve months and revised
 to fifteen on 2026-09-09 (`INITIAL_SPEC1.txt`, `#Forgetting a referral`). `PII_RETENTION_DAYS` is
-nonetheless still **unset**, so the purge runs nightly and purges nothing. Setting it to `456` is
-the whole change — and it is the moment the system starts deleting personal data, which is why it is
-a deliberate step at go-live rather than something already done.
+set to `456` on production (2026-10-12, while it held no referrals) and **unset** everywhere else,
+so test and UAT never delete their data on a timer.
 
 Fifteen months is also the lookback the repeat-referral count on the review screen depends on. Do not
 shorten one without the other: a shorter retention makes that count under-report silently.
@@ -486,14 +492,14 @@ only. You cannot restore one table. Plan any destructive migration on the basis 
 The test system runs on the free plan. Two of these are real constraints on behaviour, not just
 headroom:
 
-| Limit                          | Free      | Paid          | Bites                                                                                                                                                                      |
-| ------------------------------ | --------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Subrequests per invocation** | **50**    | 10,000        | **Yes.** SMS sending issues one outbound `fetch` per household, so a session of more than ~48 households cannot be texted in a single invocation.                          |
-| **CPU per invocation**         | **10 ms** | 30 s          | **Reliably exceeded by the nightly job, but confirmed harmless.** Applies to cron invocations too. D1 wait does not count, so most routes are safe. See below.             |
-| D1 queries per invocation      | 50        | 1,000         | Already designed around — see the query-budget note in `materialise-sessions.ts`. The PII purge is the known violator and stays inert while `PII_RETENTION_DAYS` is unset. |
-| Requests per day               | 100,000   | —             | No.                                                                                                                                                                        |
-| Cron triggers per account      | 5         | —             | No — one trigger, as the config comment says.                                                                                                                              |
-| D1 databases / storage         | 10 / 5 GB | 50,000 / 1 TB | No.                                                                                                                                                                        |
+| Limit                          | Free      | Paid          | Bites                                                                                                                                                              |
+| ------------------------------ | --------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Subrequests per invocation** | **50**    | 10,000        | **Yes.** SMS sending issues one outbound `fetch` per household, so a session of more than ~48 households cannot be texted in a single invocation.                  |
+| **CPU per invocation**         | **10 ms** | 30 s          | **Reliably exceeded by the nightly job, but confirmed harmless.** Applies to cron invocations too. D1 wait does not count, so most routes are safe. See below.     |
+| D1 queries per invocation      | 50        | 1,000         | Already designed around — see the query-budget note in `materialise-sessions.ts`. The referral purge is a fixed four statements in one batch, whatever the volume. |
+| Requests per day               | 100,000   | —             | No.                                                                                                                                                                |
+| Cron triggers per account      | 5         | —             | No — one trigger, as the config comment says.                                                                                                                      |
+| D1 databases / storage         | 10 / 5 GB | 50,000 / 1 TB | No.                                                                                                                                                                |
 
 **These limits are per _account_, not per Worker.** On the old personal account this mattered because
 it also ran an unrelated Worker, `losttemple-api`, sharing the same 100,000 daily requests, D1

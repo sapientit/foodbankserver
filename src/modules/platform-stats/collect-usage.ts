@@ -35,7 +35,7 @@ export interface CollectPlatformUsageDeps {
  * Captures **yesterday's** completed Cloudflare usage day — never today's,
  * which is still accumulating when the 02:17 cron runs.
  *
- * Does nothing, like `purgeReferralPii`, until all four settings are
+ * Does nothing, like `purgeExpiredReferrals`, until all four settings are
  * present. Guessing an account id would not merely do the wrong thing, it
  * would fail loudly against Cloudflare's API — but leaving three of four set
  * and one missing is exactly the state a half-finished deploy leaves things

@@ -12,7 +12,7 @@ import { parcelLines, parcels, pickLists } from '../src/db/schema/pick-lists.ts'
 import { recurringSessions, sessions } from '../src/db/schema/sessions.ts';
 import { stockItems, stockLedger } from '../src/db/schema/stock.ts';
 import { refreshTokens, users } from '../src/db/schema/users.ts';
-import { purgeReferralPii } from '../src/modules/jobs/purge-pii.ts';
+import { purgeExpiredReferrals } from '../src/modules/jobs/purge-referrals.ts';
 import { authHeaders, buildTestApp, devLogin, type TestApp } from './helpers/app.ts';
 import {
   setUpReferralWorld,
@@ -602,9 +602,9 @@ describe('repeat-referral detection at review', () => {
     const { id } = await submitReferral(testApp, w, {}, { clientIp: nextClientIp() });
 
     // No dob, an unparseable postcode and no phone. A live submission always
-    // requires a date of birth, so this state is only real after a purge, or
-    // for a referral entered with details the matching rule cannot place —
-    // constructed directly rather than by fighting the schema.
+    // requires a date of birth, so this state is only real for a referral
+    // entered with details the matching rule cannot place — constructed
+    // directly rather than by fighting the schema.
     await db
       .update(referrals)
       .set({
@@ -623,7 +623,7 @@ describe('repeat-referral detection at review', () => {
     expect(list.body).toEqual({ count: 0, mostRecentSessionDate: null, matches: [] });
   });
 
-  it('does not match a referral once it has been purged', async () => {
+  it('does not match a referral once the purge has deleted it', async () => {
     const { testApp, token, world: w } = await referralWorld(NOW);
     const other = await submitReferral(
       testApp,
@@ -646,12 +646,12 @@ describe('repeat-referral detection at review', () => {
     });
 
     // Age the other referral past retention and run the real purge job — the
-    // same one the nightly cron calls — rather than hand-editing the columns.
+    // same one the nightly cron calls — rather than deleting the row by hand.
     await db
       .update(referrals)
       .set({ referredAt: '2020-01-01T00:00:00.000Z' })
       .where(eq(referrals.id, other.id));
-    await purgeReferralPii({
+    await purgeExpiredReferrals({
       db,
       clock: fixedClock(NOW),
       logger: createLogger('silent'),
@@ -1072,7 +1072,6 @@ describe('the fifty-match cap on the list, and the uncapped count beside it', ()
       refereePostcodeNormalised: postcodeNormalised,
       refereePhoneNormalised: null,
       answersJson: null,
-      piiPurgedAt: null,
       createdByUserId: null,
       createdAt: NOW,
       updatedAt: NOW,
@@ -1369,7 +1368,6 @@ describe('the Exclude postcode matches checkbox (?excludePostcode)', () => {
       refereePostcodeNormalised: 'GU97ZZ',
       refereePhoneNormalised: null,
       answersJson: null,
-      piiPurgedAt: null,
       createdByUserId: null,
       createdAt: NOW,
       updatedAt: NOW,
@@ -1474,7 +1472,6 @@ describe('migration 0019 backfill', () => {
       refereePostcodeNormalised: null,
       refereePhoneNormalised: null,
       answersJson: null,
-      piiPurgedAt: null,
       createdByUserId: null,
       createdAt: now,
       updatedAt: now,

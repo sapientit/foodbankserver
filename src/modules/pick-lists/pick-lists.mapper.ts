@@ -78,9 +78,8 @@ export interface ParcelResponse {
    * it owns the form definition and marks each question `preference: true`.
    * The server keeps the form's releases but never reads them, so any attempt
    * to pick out the relevant keys here would be a guess — which is exactly what the four hard-coded
-   * dietary keys this replaced turned out to be. Empty once the referral has
-   * been purged, or if the referral has since been deleted from under the
-   * parcel.
+   * dietary keys this replaced turned out to be. Empty if the referral has
+   * since been deleted from under the parcel.
    */
   readonly answers: Record<string, unknown>;
   /**

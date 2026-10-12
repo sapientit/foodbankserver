@@ -212,11 +212,11 @@ export const FUEL_HELP_WINDOW_DAYS = 14;
  * Fifteen months, expressed as days (twelve months ≈ 365, plus three ≈ 91) —
  * and **deliberately the same period as the retention purge**
  * (`INITIAL_SPEC1.txt`, "Forgetting a referral", and `PII_RETENTION_DAYS` in
- * `config/env.ts`). Once a household's identifying columns have been nulled
- * there is nothing left on the row to match on, so the two periods only stay
- * honest together: shortening this window without shortening the purge's would
- * silently under-report, and the reverse would count against a household the
- * charity has already promised to forget.
+ * `config/env.ts`). Once a referral has been deleted there is nothing left to
+ * match on, so the two periods only stay honest together: shortening the
+ * purge's period without this one would silently under-report, and the
+ * reverse would count against a household the charity has already promised
+ * to forget.
  */
 export const REPEAT_REFERRAL_LOOKBACK_DAYS = 456;
 

@@ -2,7 +2,6 @@ import { env } from 'cloudflare:workers';
 import { eq } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { fixedClock } from '../src/core/clock.ts';
-import { createLogger } from '../src/core/log.ts';
 import { createDatabase } from '../src/db/client.ts';
 import { parcelLines, parcels, pickLists } from '../src/db/schema/pick-lists.ts';
 import { auditEvents, referrals } from '../src/db/schema/referrals.ts';
@@ -11,7 +10,6 @@ import { modelParcels, parcelGrid } from '../src/db/schema/rules.ts';
 import { recurringSessions, sessions } from '../src/db/schema/sessions.ts';
 import { stockItems, stockLedger } from '../src/db/schema/stock.ts';
 import { refreshTokens, users } from '../src/db/schema/users.ts';
-import { purgeReferralPii } from '../src/modules/jobs/purge-pii.ts';
 import { authHeaders, buildTestApp, devLogin, type TestApp } from './helpers/app.ts';
 import {
   setUpReferralWorld,
@@ -224,35 +222,6 @@ describe('POST /referrals/{id}/first-time-review', () => {
     expect(response.status).toBe(404);
   });
 
-  it('refuses a referral whose details have been forgotten', async () => {
-    const { testApp, token, world: w } = await world();
-    const { id, referralStatus } = await submitReferral(testApp, w);
-    expect(referralStatus).toBe('active');
-
-    await db
-      .update(referrals)
-      .set({ referredAt: '2020-01-01T00:00:00.000Z' })
-      .where(eq(referrals.id, id));
-    const result = await purgeReferralPii({
-      db,
-      clock: fixedClock(NOW),
-      logger: createLogger('silent'),
-      retentionDays: 456,
-    });
-    expect(result.purged).toBe(1);
-
-    const response = await testApp.request(`/api/v1/referrals/${id}/first-time-review`, {
-      method: 'POST',
-      headers: json(token),
-      body: JSON.stringify({ noPreviousReferral: true }),
-    });
-
-    expect(response.status).toBe(409);
-    const [stored] = await db.select().from(referrals).where(eq(referrals.id, id));
-    // Untouched by the refused write.
-    expect(stored?.firstTimeReviewStatus).toBe('unreviewed');
-  });
-
   it('is not refused for a rejected referral — settled by Pete, closed Q49', async () => {
     const { testApp, token, world: w } = await world();
     const { id } = await submitReferral(testApp, w, UNKNOWN_REFERRER);
@@ -299,37 +268,6 @@ describe('POST /referrals/{id}/first-time-review', () => {
       status: 'cancelled',
       firstTimeReview: { status: 'previous_session', previousSessionDate: '2026-01-05' },
     });
-  });
-
-  it('survives the fifteen-month PII purge, unlike the referee’s own fields', async () => {
-    const { testApp, token, world: w } = await world();
-    const { id } = await submitReferral(testApp, w);
-
-    await testApp.request(`/api/v1/referrals/${id}/first-time-review`, {
-      method: 'POST',
-      headers: json(token),
-      body: JSON.stringify({ previousSessionDate: '2026-01-05' }),
-    });
-
-    await db
-      .update(referrals)
-      .set({ referredAt: '2020-01-01T00:00:00.000Z' })
-      .where(eq(referrals.id, id));
-    const result = await purgeReferralPii({
-      db,
-      clock: fixedClock(NOW),
-      logger: createLogger('silent'),
-      retentionDays: 456,
-    });
-    expect(result.purged).toBe(1);
-
-    const [stored] = await db.select().from(referrals).where(eq(referrals.id, id));
-    expect(stored?.piiPurgedAt).not.toBeNull();
-    expect(stored?.refereeFirstName).toBeNull();
-    // Outside the purged set, like `reasonId` — only identifying in
-    // combination with the columns purged above.
-    expect(stored?.firstTimeReviewStatus).toBe('previous_session');
-    expect(stored?.firstTimeReviewDate).toBe('2026-01-05');
   });
 });
 
@@ -395,7 +333,6 @@ describe('migration 0033 backfill', () => {
       refereePostcodeNormalised: null,
       refereePhoneNormalised: null,
       answersJson: null,
-      piiPurgedAt: null,
       createdByUserId: null,
       createdAt: NOW,
       updatedAt: NOW,

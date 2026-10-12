@@ -2,7 +2,6 @@ import { env } from 'cloudflare:workers';
 import { eq } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { fixedClock } from '../src/core/clock.ts';
-import { createLogger } from '../src/core/log.ts';
 import { MAX_ADMIN_INFO_LENGTH } from '../src/config/constants.ts';
 import { createDatabase } from '../src/db/client.ts';
 import { parcelLines, parcels, pickLists } from '../src/db/schema/pick-lists.ts';
@@ -12,7 +11,6 @@ import { modelParcels, parcelGrid } from '../src/db/schema/rules.ts';
 import { recurringSessions, sessions } from '../src/db/schema/sessions.ts';
 import { stockItems, stockLedger } from '../src/db/schema/stock.ts';
 import { refreshTokens, users } from '../src/db/schema/users.ts';
-import { purgeReferralPii } from '../src/modules/jobs/purge-pii.ts';
 import { authHeaders, buildTestApp, devLogin, type TestApp } from './helpers/app.ts';
 import {
   setUpReferralWorld,
@@ -38,7 +36,7 @@ import {
  * admin, and it is absent — not null — everywhere else.
  *
  * The file is organised around what the field must do (read/write, coexist
- * with `answers`, purge) and then around every surface it must stay off —
+ * with `answers`) and then around every surface it must stay off —
  * the list, the search, the printed sheets, the extract.
  */
 
@@ -581,45 +579,6 @@ describe('absent from every list, export and print-oriented payload', () => {
   // could reach it, so there is nothing for a raw-text assertion to catch
   // that a read of `src/modules/sms/*.ts` does not already show. See the
   // report for the grep that established this.
-});
-
-describe('the purge clears adminInfo alongside the household, and leaves reviewComment', () => {
-  it('nulls adminInfo on an old referral while keeping reviewComment intact', async () => {
-    const { testApp, token, world: w } = await adminWorld();
-    // Held for review, so accepting attaches a reviewComment to contrast with.
-    const submitted = await submitReferral(testApp, w, UNKNOWN_REFERRER, {
-      clientIp: nextClientIp(),
-    });
-    expect(submitted.referralStatus).toBe('pending_review');
-
-    await testApp.request(`/api/v1/referrals/${submitted.id}/accept`, {
-      method: 'POST',
-      headers: json(token),
-      body: JSON.stringify({ comment: 'Approved by phone, referrer checked out' }),
-    });
-    await patchReferral(testApp, token, submitted.id, { adminInfo: NOTE });
-
-    await db
-      .update(referrals)
-      .set({ referredAt: '2020-01-01T00:00:00.000Z' })
-      .where(eq(referrals.id, submitted.id));
-
-    const result = await purgeReferralPii({
-      db,
-      clock: fixedClock(NOW),
-      logger: createLogger('silent'),
-      retentionDays: 456,
-    });
-    expect(result.purged).toBe(1);
-
-    const [row] = await db.select().from(referrals).where(eq(referrals.id, submitted.id));
-    expect(row?.adminInfo).toBeNull();
-    // The contrast, in the same test: reviewComment records a decision the
-    // charity made and is not aimed at by the purge, unlike the note.
-    expect(row?.reviewComment).toBe('Approved by phone, referrer checked out');
-    // And the household fields it goes alongside.
-    expect(row?.refereeSurname).toBeNull();
-  });
 });
 
 describe('validation', () => {

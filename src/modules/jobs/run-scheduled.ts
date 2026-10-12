@@ -9,7 +9,7 @@ import {
 import { createPlatformStatsRepository } from '../platform-stats/platform-stats.repository.ts';
 import { createSessionsRepository } from '../sessions/sessions.repository.ts';
 import { createJobsRepository } from './jobs.repository.ts';
-import { purgeReferralPii, PURGE_PII_JOB } from './purge-pii.ts';
+import { purgeExpiredReferrals, PURGE_REFERRALS_JOB } from './purge-referrals.ts';
 import { purgeSmsMessages, PURGE_SMS_JOB } from './purge-sms.ts';
 import {
   materialiseSessions,
@@ -29,8 +29,8 @@ export interface ScheduledDeps {
   readonly clock: Clock;
   readonly logger: Logger;
   /**
-   * Undefined until the charity sets a retention period, in which case the
-   * purge runs and reports zero rather than guessing.
+   * Undefined until `PII_RETENTION_DAYS` is set on the environment, in which
+   * case the referral purge does nothing and reports zero.
    */
   readonly piiRetentionDays?: number | undefined;
   /**
@@ -66,7 +66,7 @@ export async function runScheduledJobs(deps: ScheduledDeps): Promise<ScheduledRe
       logger: deps.logger,
     });
 
-    const pii = await purgeReferralPii({
+    const expired = await purgeExpiredReferrals({
       db: deps.db,
       clock: deps.clock,
       logger: deps.logger,
@@ -84,10 +84,10 @@ export async function runScheduledJobs(deps: ScheduledDeps): Promise<ScheduledRe
     await jobs.recordSuccess(MATERIALISE_SESSIONS_JOB, startedAt);
     await jobs.recordSuccess(PURGE_SMS_JOB, startedAt);
     if (deps.piiRetentionDays !== undefined) {
-      await jobs.recordSuccess(PURGE_PII_JOB, startedAt);
+      await jobs.recordSuccess(PURGE_REFERRALS_JOB, startedAt);
     }
 
-    core = { ...result, referralsPurged: pii.purged, smsMessagesPurged: sms.purged };
+    core = { ...result, referralsPurged: expired.purged, smsMessagesPurged: sms.purged };
   } catch (error) {
     const safe = toSafeError(error);
     deps.logger.error('scheduled job failed', {
@@ -103,7 +103,7 @@ export async function runScheduledJobs(deps: ScheduledDeps): Promise<ScheduledRe
 
   // Deliberately outside the block above and never rethrown: a Cloudflare
   // Analytics API outage is a monitoring gap, not a reason to report
-  // tonight's session materialisation, PII purge and SMS purge as failed —
+  // tonight's session materialisation, referral purge and SMS purge as failed —
   // those already succeeded by the time this runs.
   let platformUsageDate: string | undefined;
   try {

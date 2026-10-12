@@ -1,5 +1,4 @@
 import { env } from 'cloudflare:workers';
-import { eq } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { fixedClock } from '../src/core/clock.ts';
 import { createDatabase } from '../src/db/client.ts';
@@ -266,31 +265,6 @@ describe('the listener sheet', () => {
     ]) {
       expect(household).not.toHaveProperty(field);
     }
-  });
-
-  it('survives a purged referral rather than falling over on the nulls', async () => {
-    const { testApp, token, world } = await adminWorld();
-    const { id } = await submitReferral(testApp, world);
-    await generatePickList(testApp, token, world.sessionId);
-
-    await db
-      .update(referrals)
-      .set({
-        refereeFirstName: null,
-        refereeSurname: null,
-        answersJson: null,
-        piiPurgedAt: NOW,
-      })
-      .where(eq(referrals.id, id));
-
-    const sheet = await readSheet(testApp, token, world.sessionId);
-
-    expect(sheet.status).toBe(200);
-    expect(sheet.households?.[0]).toMatchObject({
-      refereeFirstName: null,
-      refereeSurname: null,
-      answers: {},
-    });
   });
 
   it('reports an unknown session as missing', async () => {

@@ -79,34 +79,22 @@ export type FirstTimeReviewStatus = (typeof FIRST_TIME_REVIEW_STATUSES)[number];
 /**
  * A request to feed a household at a session.
  *
- * ## The PII rule, and why it looks wrong
+ * ## Forgetting a referral deletes the row
+ *
+ * Fifteen months after it was made a referral is **deleted outright** —
+ * `INITIAL_SPEC1.txt`, `#Forgetting a referral`, and
+ * `modules/jobs/purge-referrals.ts`. Nothing on this table survives it, so no
+ * column here is "kept for reporting"; the charity's long-term figures come
+ * from the extract spreadsheet.
+ *
+ * ## Why the personal columns are nullable
  *
  * Every column holding personal data is **nullable in SQL and required in
- * Zod**. That asymmetry is deliberate and must not be "tidied up": SQLite has
- * no `ALTER COLUMN`, so a `NOT NULL` personal-data column could never be
- * purged without rebuilding a live table. Requiredness lives in
- * `referrals.schema.ts`, which is the only place a referral is ever created.
- *
- * ## What survives a purge, and why
- *
- * `adults`, `children`, `isDelivery`, `collectionMethod`, `needsFuelHelp`,
- * `reasonId`, `firstTimeReviewStatus` and `firstTimeReviewDate` sit
- * **outside** the purged set on purpose. Once the referee's own columns are
- * nulled they are no longer identifiable, so these become statistics rather
- * than personal data — and they are exactly what the charity needs to answer
- * "we fed 340 households, 890 people, 22% for benefit delay, in Q3". A
- * previous-session date is no more identifying on its own than `reasonId` is;
- * it is only personal data in combination with the columns that are purged.
- *
- * That is only safe because the reason is a **dropdown**, not free text.
- * Someone always eventually types a name into a free-text field.
- *
- * **The referrer's own details are kept too**, including `referrerName`,
- * `referrerEmail` and `referrerPhone`. The retention period exists to forget
- * the household that needed feeding, not the professional who referred them;
- * the charity needs to know who sent a referral long after the referral itself
- * has been anonymised. They stay nullable all the same, because they are
- * optional on some paths and because narrowing that later would need a rebuild.
+ * Zod**. That dates from an earlier design that nulled them in place instead
+ * of deleting the row. SQLite has no `ALTER COLUMN`, so narrowing them now
+ * would mean rebuilding a live table, which is not worth it. Requiredness
+ * lives in `referrals.schema.ts`, which is the only place a referral is ever
+ * created.
  */
 export const referrals = sqliteTable(
   'referrals',
@@ -144,7 +132,6 @@ export const referrals = sqliteTable(
     referrerOrganisation: text('referrer_organisation').notNull(),
     authorisedReferrerId: text('authorised_referrer_id').references(() => authorisedReferrers.id),
 
-    // --- Retained after a purge: statistics, once nobody is identifiable. ---
     adults: integer('adults').notNull(),
     children: integer('children').notNull(),
     /**
@@ -215,18 +202,16 @@ export const referrals = sqliteTable(
     needsFuelHelp: integer('needs_fuel_help').notNull().default(0),
 
     /**
-     * The referrer, who is a professional acting in their job. Kept after a
-     * purge; see the note on this table. Nullable for the reason every other
-     * personal column here is.
+     * The referrer, who is a professional acting in their job. Nullable for
+     * the reason every other personal column here is.
      */
     referrerName: text('referrer_name'),
     referrerEmail: text('referrer_email'),
     referrerPhone: text('referrer_phone'),
 
     // ===================== PII BLOCK =====================
-    // The referee's own details. Every column below is nullable so a purge can
-    // null it in place, and every one of them is nulled by `purgeReferralPii`.
-    // Required-ness is enforced in Zod. Do not add NOT NULL here.
+    // The referee's own details. Nullable for the reason in the note on this
+    // table; required-ness is enforced in Zod.
     //
     // The name is stored in two parts because the surname is what a list sorts
     // by and what a volunteer matches a bag to; joining them into one string
@@ -272,14 +257,11 @@ export const referrals = sqliteTable(
     /**
      * The administrators' own note about this household.
      *
-     * Written by an administrator rather than by the referrer, and **that is
-     * exactly why it is in this block rather than beside `reviewComment`.**
-     * The two look alike and are purged differently on purpose:
-     * `reviewComment` is the record of a decision the charity made about a
-     * referral and survives the purge with the referrer's details, while this
-     * is free text about the household — what the office learned from ringing
-     * them — so it goes when they are forgotten. Free text written about a
-     * person is personal data whoever typed it.
+     * Written by an administrator rather than by the referrer, and in this
+     * block for that reason: it is free text about the household — what the
+     * office learned from ringing them — and free text written about a person
+     * is personal data whoever typed it. `reviewComment`, by contrast, records
+     * a decision the charity made about the referral.
      *
      * Admin-only on the way out, and narrower than that: it reaches
      * `GET /referrals/{id}` and the write routes that return one referral, and
@@ -302,14 +284,9 @@ export const referrals = sqliteTable(
      * "one went at 09:04 on Friday" answers "did one go?" and a boolean does
      * not answer the other way round.
      *
-     * Outside the PII block deliberately. It holds no phone number and says
-     * nothing about who the household is once their own columns are nulled, so
-     * a purge leaves it alone. The message rows themselves are a different
-     * matter — they go after thirty days, see `db/schema/sms.ts`.
+     * The message rows themselves go after thirty days, see `db/schema/sms.ts`.
      */
     smsReminderSentAt: text('sms_reminder_sent_at'),
-
-    piiPurgedAt: text('pii_purged_at'),
 
     /**
      * The release of the form and rules this referral was filled in under;

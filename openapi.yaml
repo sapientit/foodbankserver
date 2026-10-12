@@ -1075,7 +1075,7 @@ paths:
       description: |
         **One sheet for the whole session**, not one per household — a listener
         is handed a single sheet and scans it for whoever is in front of them.
-        Ordered by surname for that reason; a purged household sorts last.
+        Ordered by surname for that reason.
 
         Open to a team leader, and **the only place a team leader is given the
         reason for referral**. That is a deliberate exception: a listener is
@@ -1186,9 +1186,7 @@ paths:
         that conversation; this is the list you ring people from, and a delivery
         household is one the team most needs to be able to reach.
 
-        Ordered by surname then first name. A purged household sorts last and
-        comes back with nulls — the referral is still on the session, but there
-        is nothing left to contact them with.
+        Ordered by surname then first name.
       responses:
         '200':
           description: The session and its households
@@ -1559,10 +1557,10 @@ paths:
         another chance after a no-show is copied onto a later session with
         `POST /referrals/{id}/copy`, not moved.
 
-        **A referral whose details have been forgotten cannot be amended or
-        moved either**, and is a `409`. Fifteen months on there is no name and no
-        answers left, so there is nothing to correct — and writing a name back
-        onto one would put back exactly what the charity promised to forget.
+        A referral past the fifteen-month retention period has been deleted
+        outright, so amending or moving it is a `404` like any other unknown
+        id — not a `409`, and not distinguishable from an id that was never
+        valid.
       requestBody:
         required: true
         content:
@@ -1580,12 +1578,13 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Referral' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: >-
             Target session is full and not acknowledged, the referral is
-            cancelled or rejected, its details have been forgotten, its current
-            session has been confirmed, or one of its parcels already has an
-            attendance outcome so it can no longer be moved
+            cancelled or rejected, its current session has been confirmed, or
+            one of its parcels already has an attendance outcome so it can no
+            longer be moved
         '422':
           description: The chosen reason for referral is no longer offered
 
@@ -1635,9 +1634,9 @@ paths:
         charity was explicit about this.
 
         The lookback is fifteen months, counted from when each referral was
-        made — the same clock the retention purge runs on, so a household whose
-        details have been forgotten cannot be found. That is accepted, not a
-        gap: there is nothing left on the row to match on.
+        made — the same clock the retention purge runs on, so a referral past
+        that period has already been deleted and cannot be matched. That is
+        accepted, not a gap: there is no row left to match on.
 
         Ordered by session date, **most recent first**. `matches` is empty when
         the household has not been here before, or when this referral has
@@ -1723,9 +1722,9 @@ paths:
         **This reaches every referral the food bank still holds details for,
         cancelled and rejected included** — "we turned that one away in March"
         is exactly what the caller is ringing about — and there is no
-        fifteen-month window here, unlike the duplicate count. It cannot reach a
-        referral whose details have been forgotten: the purge nulls the very
-        columns this searches on, so there is nothing left to match.
+        fifteen-month window here, unlike the duplicate count. It cannot reach
+        a referral past that period: the purge deletes it outright, so there
+        is nothing left to match.
 
         **What comes back is the administrator's working list:** session date,
         referral status, first name, surname, postcode, phone number, the main
@@ -1793,11 +1792,9 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: >-
-            That referral is not awaiting review, its details have been
-            forgotten so there is nothing left to decide on, or
-            `authoriseReferrer` was sent for an address already on the
-            authorised list — in which case the referral has **not** been
-            accepted either.
+            That referral is not awaiting review, or `authoriseReferrer` was
+            sent for an address already on the authorised list — in which
+            case the referral has **not** been accepted either.
         '422':
           description: >-
             `authoriseReferrer` was sent for a referral with no referrer address
@@ -1823,9 +1820,7 @@ paths:
               schema: { $ref: '#/components/schemas/Referral' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
-          description: >-
-            That referral is not awaiting review, or its details have been
-            forgotten so there is nothing left to decide on
+          description: That referral is not awaiting review
 
   /api/v1/referrals/{id}/review:
     parameters: [{ $ref: '#/components/parameters/Id' }]
@@ -1846,9 +1841,8 @@ paths:
         No body. There is no comment here — `reviewComment` belongs to the
         accept/reject decision, and no separate review timestamp is kept.
 
-        A referral still `pending_review` is a `409`: decide it first. So is one
-        already reviewed, rejected or cancelled, and so is one whose details
-        have been forgotten — fifteen months on there is nothing left to read.
+        A referral still `pending_review` is a `409`: decide it first. So is
+        one already reviewed, rejected or cancelled.
       responses:
         '200':
           description: Marked as read
@@ -1857,9 +1851,7 @@ paths:
               schema: { $ref: '#/components/schemas/Referral' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
-          description: >-
-            That referral is not waiting to be read, or its details have been
-            forgotten
+          description: That referral is not waiting to be read
 
   /api/v1/referrals/{id}/first-time-review:
     parameters: [{ $ref: '#/components/parameters/Id' }]
@@ -1878,7 +1870,6 @@ paths:
         matches are selectable (a No Show or Not In stays visible but is not
         offered) is yours to decide.
 
-        Refused only when this referral's details have been forgotten.
         **Not conditional on this referral's own `status` or its session's**
         — a rejected or cancelled referral, or one on a confirmed session,
         can still have its value set. Settled by Pete on 2026-09-03 (closed
@@ -1909,7 +1900,6 @@ paths:
         '400':
           description: Neither or both of `noPreviousReferral` and `previousSessionDate` were sent
         '404': { $ref: '#/components/responses/NotFound' }
-        '409': { description: That referral's details have been forgotten }
 
   /api/v1/referrals/{id}/cancel:
     parameters: [{ $ref: '#/components/parameters/Id' }]
@@ -1945,9 +1935,6 @@ paths:
         chance**, copy the referral onto a later session with `POST
         /referrals/{id}/copy` and leave the no-show where it happened.
 
-        **A referral whose details have been forgotten is a `409` too.** Fifteen
-        months on there is nothing left to cancel.
-
         **If a pick list has already been generated, this marks that household's
         parcel `attendance: "cancelled"` in the same write.** The parcel is not
         deleted and its lines, notes and `pickNumber` are untouched — it stays
@@ -1970,11 +1957,11 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Referral' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: >-
-            That referral was rejected, its session has been confirmed, one of
-            its parcels already has an attendance outcome, or its details have
-            been forgotten
+            That referral was rejected, its session has been confirmed, or one
+            of its parcels already has an attendance outcome
 
   /api/v1/referrals/{id}/copy:
     parameters: [{ $ref: '#/components/parameters/Id' }]
@@ -2004,8 +1991,8 @@ paths:
         decided needs feeding again, made the quick way rather than through the
         whole form.
 
-        **A referral whose details have been forgotten is a `409`.** There is
-        nothing left to copy.
+        A referral past the fifteen-month retention period has been deleted
+        outright, so copying it is a `404` like any other unknown id.
 
         **What the copy carries**: the referee's name, date of birth, address,
         postcode and phone; `adults`, `children`, `householdSize`,
@@ -2099,10 +2086,10 @@ paths:
         '409':
           description: >-
             The referral can still be completed so it should be moved rather
-            than copied, the referral's details have been forgotten, it was
-            made under a release of the form that is no longer in use (review
-            it through `re-refer` instead), or the target session is
-            cancelled, confirmed, or full and not acknowledged
+            than copied, it was made under a release of the form that is no
+            longer in use (review it through `re-refer` instead), or the
+            target session is cancelled, confirmed, or full and not
+            acknowledged
 
   /api/v1/referrals/{id}/re-refer:
     parameters: [{ $ref: '#/components/parameters/Id' }]
@@ -2117,10 +2104,9 @@ paths:
 
         `{id}` is the referral being copied **from**. It decides eligibility —
         exactly `copy`'s: its `status` is `cancelled` or `rejected`, or its
-        `outcome` is `no_show` or `attended`, and its details have not been
-        forgotten; anything else is a `409` — and it supplies the referrer's
-        name, organisation, email and phone, carried forward unchanged. The
-        body is the rest of the completed form.
+        `outcome` is `no_show` or `attended`; anything else is a `409` — and
+        it supplies the referrer's name, organisation, email and phone,
+        carried forward unchanged. The body is the rest of the completed form.
 
         Allowed whether or not the original's release is still the one in use.
 
@@ -2195,9 +2181,8 @@ paths:
           description: No such referral, or no such target session
         '409':
           description: >-
-            The original can still be completed, its details have been
-            forgotten, or the target session is cancelled, confirmed, or full
-            and not acknowledged
+            The original can still be completed, or the target session is
+            cancelled, confirmed, or full and not acknowledged
         '422': { description: The chosen reason is no longer offered }
 
   # ------------------------------------------------------------------- sms --
@@ -4512,8 +4497,9 @@ paths:
       summary: Run the scheduled jobs now
       description: |
         Admin only. Calls exactly what the nightly cron calls: generates six
-        weeks of sessions from the weekly templates, clears expired referral
-        edit keys, and purges old personal data if a retention period is set.
+        weeks of sessions from the weekly templates, deletes text messages
+        older than thirty days, and deletes referrals older than the retention
+        period if one is set (`referralsPurged` counts them).
 
         Six weeks is how far ahead sessions are *materialised*, and it is not
         the same thing as how far ahead anyone is shown them — see
@@ -5950,9 +5936,9 @@ components:
         from the list, and fetching one by id is a `404`. Pending ones they do
         see, marked by `status`, because a household awaiting review may well
         turn up and the team lead is the person in the hall when they do.
-      # The referee fields and piiPurgedAt are always emitted (they are in the
-      # mapper's `base` object, nullable rather than absent). Only the four
-      # admin-only fields below are conditional, so only those stay optional.
+      # The referee fields are always emitted (they are in the mapper's `base`
+      # object, nullable rather than absent). Only the four admin-only fields
+      # below are conditional, so only those stay optional.
       required:
         [
           id,
@@ -5975,7 +5961,6 @@ components:
           refereePhone,
           answers,
           formId,
-          piiPurgedAt,
         ]
       properties:
         id: { type: string, format: uuid }
@@ -6049,30 +6034,8 @@ components:
             baseline release. The column is nullable, so the type says so.
         answers:
           type: object
-          description: >
-            Exactly what was submitted. Empty once `piiPurgedAt` is set — see
-            below.
+          description: Exactly what was submitted.
           additionalProperties: true
-        piiPurgedAt:
-          type: [string, 'null']
-          format: date-time
-          description: >
-            When set, the **referee's** fields above are null by design,
-            `answers` is empty and `adminInfo` is null.
-
-            The referrer's own details are **not** purged — `referrerName`,
-            `referrerEmail`, `referrerPhone` and `reviewComment` all survive.
-            The retention period exists to forget the household that needed
-            feeding, not the professional who referred them. `adminInfo` is the
-            one administrator-written field that goes: it describes the
-            household rather than a decision about the referral.
-
-            This describes the anonymising purge as it runs today. The charity
-            has since settled (Q27, Q12) that a forgotten referral should be
-            deleted outright rather than reduced to this shape — see
-            `INITIAL_SPEC1.txt`, `#Forgetting a referral`, and the "Agreed but
-            not yet built" table in `STATUS.md`. Nothing here changes until
-            that is built.
         outcome:
           type: string
           enum: [attended, no_show, booked]
@@ -6147,9 +6110,7 @@ components:
             not be lost because a form page was saved without it. Amend it
             through `ReferralAmend.adminInfo`.
 
-            Null when there is no note. Cleared by the fifteen-month purge along
-            with the household's own fields and `answers` — unlike
-            `reviewComment`, which survives it.
+            Null when there is no note.
         repeatReferrals:
           allOf: [{ $ref: '#/components/schemas/RepeatReferralSummary' }]
           description: >
@@ -6462,10 +6423,9 @@ components:
         reason:
           type: [string, 'null']
           description: >-
-            The reason's **label**, not its id. It **survives a purge** — the
-            reason is outside the PII block so reporting still works once
-            nobody is identifiable. A reason the charity has since retired
-            still appears, because the referral was made under it.
+            The reason's **label**, not its id. A reason the charity has
+            since retired still appears, because the referral was made under
+            it.
         needsFuelHelp: { type: boolean }
         formId:
           type: [string, 'null']
@@ -6483,7 +6443,7 @@ components:
           description: >-
             The dynamic answers, whole. Take whichever of them the client's
             referral form marks for this sheet; the server does not know which
-            keys those are. `{}` once purged.
+            keys those are.
         firstTimeMarker:
           type: [string, 'null']
           enum: [first_time, admin, null]
@@ -6537,12 +6497,12 @@ components:
     ReferralDetailsHousehold:
       type: object
       description: >-
-        One household's contact details for the session being run. Every field
-        below except `referrerOrganisation` and `pickNumber` is nullable
-        because the referee columns are nulled by the retention purge — a
-        purged household is still on the session and still has to appear, with
-        nothing left to reach it by. `pickNumber` is nullable for a different
-        reason — see its own description.
+        One household's contact details for the session being run.
+        `referrerOrganisation` and `pickNumber` aside, every field is typed
+        nullable to match `Referral`'s own referee and referrer columns — in
+        practice none of them is null for a referral the food bank still
+        holds. `pickNumber` is nullable for a different reason — see its own
+        description.
       required:
         [
           referralId,
@@ -6565,21 +6525,18 @@ components:
         refereePhone:
           type: [string, 'null']
           description: >-
-            Null when the household has no number as well as when it has been
-            purged. A household nobody can ring is one somebody may need to call
-            at, which is why the address is here too.
+            Null when the household has no number on file. A household
+            nobody can ring is one somebody may need to call at, which is why
+            the address is here too.
         referrerName:
           type: [string, 'null']
-          description: >-
-            The professional who sent them. **Survives a purge** — the point of
-            forgetting is to stop holding details of the household, not of the
-            referrer.
+          description: The professional who sent them.
         referrerOrganisation:
           type: string
           description: >-
             Where the referrer works — what the referrer said it was, so expect
-            three spellings of the same council. **Never null**, here or after a
-            purge: it is the one non-nullable field on this object.
+            three spellings of the same council. **Never null** — it is the one
+            non-nullable field on this object.
         referrerPhone: { type: [string, 'null'] }
         pickNumber:
           type: [integer, 'null']
@@ -6685,17 +6642,14 @@ components:
           description: >-
             The main cause of crisis, and a fixed column rather than an answer.
             Resolve it through the admin referral-reasons lookup, including
-            retired reasons. Never null — it is `NOT NULL` on the table and
-            survives the purge.
+            retired reasons. Never null — it is `NOT NULL` on the table.
         referrerName: { type: [string, 'null'] }
         referrerOrganisation:
           type: string
           description: >-
             Where the referral came from — what the referrer typed on the form,
             so expect three spellings of the same council. **Never null**: it is
-            `NOT NULL` on the table and outside the PII block, so a purged
-            referral still reports it. `referrerName` is unchanged and still
-            returned.
+            `NOT NULL` on the table.
         formId:
           type: [string, 'null']
           format: uuid
@@ -6733,9 +6687,9 @@ components:
             endpoint is admin-only outright — a team lead gets a `403`, not a
             thinner row — so no recipient gets the row without the field, and
             `null` means there is no note rather than "you may not see it". A
-            referral whose details have been purged has no note either, but you
-            will not meet one here: the purge nulls the columns this searches
-            on, so it cannot be found at all.
+            referral past the fifteen-month retention period has been deleted
+            outright, so you will not meet one here: there is nothing left to
+            find.
 
     FuelHelpHousehold:
       type: object
@@ -6796,8 +6750,7 @@ components:
             Always `true` on this list — the repository filters on it — but a
             real column read off the referral rather than an implied constant,
             because the client form shows this question as a fixed field
-            everywhere else it appears. Survives the PII purge, unlike the
-            other fields on this row.
+            everywhere else it appears.
         formId:
           type: [string, 'null']
           format: uuid
@@ -7102,10 +7055,7 @@ components:
 
             **Deleted along with the referral at the fifteen-month purge**, on
             the same run as the referral's own answers — see
-            `INITIAL_SPEC1.txt`, `#Forgetting a referral`. The purge job itself
-            has not been rebuilt to do this yet (`STATUS.md`, "Agreed but not
-            yet built"); today's job still anonymises the referral in place and
-            leaves the parcel untouched.
+            `INITIAL_SPEC1.txt`, `#Forgetting a referral`.
 
     PreferenceLineEntry:
       type: object
@@ -7237,9 +7187,7 @@ components:
             any correction made to it.
 
             Deleted along with the rest of the parcel at the fifteen-month
-            purge, in the same run as `answers` — see `x-assumed` on
-            `PickListInformationEntry.notes` for the current gap between that
-            and what the purge job actually does today.
+            purge, in the same run as `answers`.
         formId:
           type: [string, 'null']
           format: uuid
@@ -7263,7 +7211,8 @@ components:
             guess — the four hard-coded dietary keys this replaced were exactly
             that guess, and none of them is a key in the real form.
 
-            Empty once the referral's personal data has been purged.
+            Deleted along with the rest of the parcel at the fifteen-month
+            purge, in the same run as `notes`.
         firstTimeMarker:
           type: [string, 'null']
           enum: [first_time, admin, null]

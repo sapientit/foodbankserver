@@ -207,49 +207,6 @@ describe('the fuel help list', () => {
     ]);
   });
 
-  it('nulls the personal fields but keeps needsFuelHelp true on a purged referral', async () => {
-    // The retention window (fifteen months) is far longer than this list's
-    // fourteen days, so this state cannot arise through the purge job itself
-    // in the time this list looks back over — it is produced by hand to prove
-    // the mapper's own behaviour rather than the job's reach. needsFuelHelp is
-    // outside the PII block and a real column, not something inferred from
-    // the row's presence on the list.
-    const { testApp, token, world } = await adminWorld();
-    const { referralId } = await fedAtSession(testApp, token, world, '2026-08-18');
-
-    await db
-      .update(referrals)
-      .set({
-        refereeFirstName: null,
-        refereeSurname: null,
-        refereeDateOfBirth: null,
-        refereeAddress: null,
-        refereePostcode: null,
-        refereePhone: null,
-        answersJson: null,
-        piiPurgedAt: NOW,
-      })
-      .where(eq(referrals.id, referralId));
-
-    const { households } = await readList(testApp, token);
-
-    expect(households).toEqual([
-      {
-        referralId,
-        sessionDate: '2026-08-18',
-        refereeFirstName: null,
-        refereeSurname: null,
-        refereeDateOfBirth: null,
-        refereeAddress: null,
-        refereePostcode: null,
-        refereePhone: null,
-        needsFuelHelp: true,
-        answers: {},
-        formId: BASELINE_FORM_ID,
-      },
-    ]);
-  });
-
   it('carries the answers whole, and still lists a household who said not to ring them', async () => {
     const { testApp, token, world } = await adminWorld();
     await fedAtSession(testApp, token, world, '2026-08-18', {

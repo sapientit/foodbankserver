@@ -90,7 +90,6 @@ export interface ReferralResponse {
    * column is nullable, so the contract says so.
    */
   readonly formId: string | null;
-  readonly piiPurgedAt: string | null;
   /**
    * What became of the household, as against `status` above, which is what
    * became of the referral. `INITIAL_SPEC1.txt`, `#Referral maintenance`.
@@ -216,7 +215,6 @@ export function toReferralResponse(
     refereePhone: referral.refereePhone,
     answers: parseAnswers(referral.answersJson),
     formId: referral.formId,
-    piiPurgedAt: referral.piiPurgedAt,
     // Spread for the same reason `adminInfo` is: a caller that did not pay
     // for the query gets no field at all, rather than a `null` a client would
     // have to read as "still to come".
@@ -329,12 +327,9 @@ export interface ListenerSheetHousehold {
   readonly refereeFirstName: string | null;
   readonly refereeSurname: string | null;
   /**
-   * The reason's **label**, not its id.
-   *
-   * It survives a purge — `reasonId` is outside the PII block on purpose, so
-   * that reporting still works once nobody is identifiable. Null only if the
-   * label could not be found at all, which should not happen and is not worth
-   * failing the whole sheet over.
+   * The reason's **label**, not its id. Null only if the label could not be
+   * found at all, which should not happen and is not worth failing the whole
+   * sheet over.
    */
   readonly reason: string | null;
   readonly needsFuelHelp: boolean;
@@ -577,8 +572,7 @@ export interface ReferralSearchResult {
    * organisation is what the household says on the phone.
    *
    * **Never null**, like `reasonId` and unlike everything else here: the
-   * column is `NOT NULL` and sits outside the PII block, so a purged referral
-   * still reports the organisation that sent it.
+   * column is `NOT NULL`.
    */
   readonly referrerOrganisation: string;
   readonly answers: Record<string, unknown>;
@@ -677,10 +671,7 @@ export interface ReferralDetailsHousehold {
   readonly refereePhone: string | null;
   readonly referrerName: string | null;
   /**
-   * **Not nullable, unlike every other field here.** The column is `NOT NULL`
-   * and the purge does not touch it, for the same reason it leaves
-   * `referrerName` alone: forgetting a household is not forgetting who
-   * referred them.
+   * **Not nullable, unlike every other field here.** The column is `NOT NULL`.
    */
   readonly referrerOrganisation: string;
   readonly referrerPhone: string | null;

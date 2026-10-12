@@ -74,11 +74,9 @@ reasoning that refuses a move once an outcome exists. A referral still on its wa
 moved, not copied, and the two must never be alternatives for the same referral. `INITIAL_SPEC1.txt`,
 `#Copying a referral`.
 
-**A purged referral is terminal in a stronger sense**: amend, move, cancel, accept, reject,
-mark-reviewed and copy are all refused once `piiPurgedAt` is set. `assertNotPurged` is the shared
-guard for the paths that read first; `updateIfStatus` carries `pii_purged_at IS NULL` for the two
-that do not. Fifteen months on there is nothing left to act on — `INITIAL_SPEC1.txt`,
-`#Referral maintenance`.
+**A referral past fifteen months does not exist.** The nightly purge deletes it outright, so every
+route addressing it answers `404` like any unknown id — `INITIAL_SPEC1.txt`, `#Forgetting a
+referral` and `#Referral maintenance`.
 
 **`outcome` is not `status`.** `status` is what became of the referral; `outcome` — `attended` |
 `no_show` | `booked`, derived from the referral's parcels — is what became of the household on the
@@ -389,10 +387,8 @@ the reasoning is about that one screen.
 they sent and phone the food bank. `referral_edit_keys` and the `x-referral-key` header were removed
 in migration `0012`.
 
-**Only the referee's own fields are purged**, plus `adminInfo`. The referrer's name, email and phone
-survive, as does `reviewComment` — the retention period is about forgetting the household, not the
-professional who referred them. `adminInfo` is the one field an administrator wrote that goes: it is
-free text about the household, and who typed it does not decide whose data it is.
+**The purge deletes the whole referral**, with its parcel, texts and audit events — the referrer's
+details and `reviewComment` included. Nothing on the row survives fifteen months.
 
 ## Three session windows, and they are not the same number
 

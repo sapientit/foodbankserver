@@ -52,8 +52,8 @@ migration, repository and schema file in full, plus the service that composes th
   the deferred-FK counter only decrements on inserts into the parent.
 - `DROP COLUMN` is usually _not_ a rebuild — SQLite refuses it only for a column in an index, a
   `CHECK`, a `FOREIGN KEY`, a generated column or the primary key.
-- **Every PII column must be nullable in SQL and required in Zod.** A `NOT NULL` PII column can
-  never be purged.
+- PII columns on `referrals` are nullable in SQL and required in Zod (left over from the old
+  anonymising purge); narrowing one is a rebuild, so do not.
 - Enums are `CHECK` constraints; extra values are not enumerated speculatively.
 - **Would this migration succeed against existing production data**, not just an empty test
   database? Backfill, defaults on a non-empty table, and a new unique index over data that may
@@ -77,11 +77,11 @@ migration, repository and schema file in full, plus the service that composes th
 - **Drizzle's error message contains the bound parameters — the row.** Any raw database error
   logged, or any `error.message` reaching a response, is Critical. Everything goes through
   `toSafeError`.
-- Does the purge still work? `purgeReferralPii` nulls the identifying columns and drops the dynamic
-  answers whole, keeping `adults`, `children`, `isDelivery` and `reasonId` as statistics. A new PII
-  column that the purge does not null is a finding — including a derived match key, which is as
-  identifying as what it was derived from. The retention period is settled at fifteen months; do not
-  change it.
+- Does the purge still work? `purgeExpiredReferrals` deletes an expired referral outright, with its
+  parcel, texts and audit events, in one fixed-size `db.batch()`. A new table with a foreign key to
+  `referrals` or `parcels` must be cleared by it (or cascade), or the delete fails — that is a
+  finding. So is any new copy of a referral's personal data outside `referrals` that the delete does
+  not reach. The retention period is settled at fifteen months; do not change it.
 
 **Tests**
 

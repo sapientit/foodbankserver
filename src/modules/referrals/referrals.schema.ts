@@ -11,10 +11,10 @@ import { isPlainDate } from '../../core/time/plain-date.ts';
 /**
  * Required-ness for personal data lives **here**, not in the DDL.
  *
- * The database columns are nullable so a purge can null them in place —
- * SQLite has no `ALTER COLUMN`, so a `NOT NULL` personal-data column could
- * never be purged. This schema is the only route by which a referral is
- * created, so it is where "a referee must have a surname" is enforced.
+ * The database columns are nullable — a design from when the retention purge
+ * nulled them in place, and SQLite has no `ALTER COLUMN` to undo it. This
+ * schema is the only route by which a referral is created, so it is where "a
+ * referee must have a surname" is enforced.
  */
 
 const personName = z.string().trim().min(1).max(100);

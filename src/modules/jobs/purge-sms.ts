@@ -14,20 +14,12 @@ export interface PurgeSmsResult {
 /**
  * Deletes text messages more than thirty days old.
  *
- * ## Why this one runs and the referral purge does not
+ * ## Why this one always runs and the referral purge waits for configuration
  *
- * `purgeReferralPii` does nothing until somebody sets a retention period,
- * because the charity has not settled one and deleting a household's details
- * on a guess would be worse than keeping them. This period **is** settled —
- * thirty days, in `INITIAL_SPEC1.txt` — so it is a constant rather than
- * configuration and it runs from the first night.
- *
- * ## Why it deletes rather than nulls
- *
- * The referral purge nulls columns and keeps the row, because `adults`,
- * `children` and the reason become statistics once nobody is identifiable.
- * A text message has nothing underneath it: the body *is* the personal data
- * and an empty row records nothing worth reporting on. So the row goes.
+ * `purgeExpiredReferrals` does nothing until `PII_RETENTION_DAYS` is set on
+ * the environment, because setting it is what starts deleting referrals. This
+ * period is thirty days, in `INITIAL_SPEC1.txt`, and a constant rather than
+ * configuration, so it runs from the first night.
  *
  * **Loose replies go the same way**, and that is the point of doing it on
  * `occurredAt` rather than through the referral. A reply from a number with no

@@ -47,9 +47,8 @@ function formatSessionDate(date: string): string {
  * Guildford Food Bank.` when a first name is available, or the plain `This is
  * Guildford Food Bank.` when it is not. `firstName` being `null` should not
  * happen in practice — both `refereeFirstName` and `referrerName` are
- * required at referral submission, and only go `null` after the
- * not-yet-enabled PII purge — but the column is nullable, so this must not
- * throw on it.
+ * required at referral submission — but the column is nullable, so this must
+ * not throw on it.
  */
 function greeting(firstName: string | null): string {
   return firstName === null

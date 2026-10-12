@@ -46,8 +46,9 @@ Full reasoning and the history behind each rule: [`docs/engineering/d1-constrain
 
 - **No `ALTER COLUMN`, no `DROP CONSTRAINT`.** Changing a column type or a `CHECK` means a full
   table rebuild.
-- **Every PII column is nullable in SQL and required in Zod.** Write `NOT NULL` on a PII column and
-  it can never be purged.
+- **Every PII column on `referrals` is nullable in SQL and required in Zod**, left over from the
+  old anonymising purge. The purge now deletes the row, so nullability is no longer what makes it
+  work — but narrowing a column is a table rebuild, so leave them as they are.
 - **Dropping a column is usually _not_ a rebuild.** SQLite refuses `DROP COLUMN` only for a column
   named in an index, a `CHECK`, a `FOREIGN KEY`, a generated column or the primary key.
 - **drizzle-kit will generate a drop-and-recreate anyway**, justified with "the table is empty" —

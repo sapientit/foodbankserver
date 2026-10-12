@@ -197,7 +197,6 @@ export function createDevTestImportsService(deps: DevTestImportsServiceDeps) {
         formId,
         adminInfo: null,
         smsReminderSentAt: null,
-        piiPurgedAt: null,
         createdByUserId: actor.userId,
         createdAt: now,
         updatedAt: now,

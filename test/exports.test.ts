@@ -935,7 +935,6 @@ describe('the spreadsheet extract', () => {
         'authorisedReferrerId',
         'reviewedByUserId',
         'cancelledReason',
-        'piiPurgedAt',
       ]) {
         expect(rowText).not.toContain(absent);
       }

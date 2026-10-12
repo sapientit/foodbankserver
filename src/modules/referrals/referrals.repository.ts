@@ -6,7 +6,6 @@ import {
   eq,
   gte,
   inArray,
-  isNull,
   max,
   ne,
   notInArray,
@@ -147,13 +146,10 @@ export interface ReferralSearchCandidate {
   readonly refereePhone: string | null;
   readonly sessionDate: string;
   readonly status: ReferralStatus;
-  /** `NOT NULL` on the table, and outside the PII block, so a purge leaves it. */
+  /** `NOT NULL` on the table. */
   readonly reasonId: string;
   readonly referrerName: string | null;
-  /**
-   * `NOT NULL` on the table and outside the PII block, like `reasonId`, so a
-   * purged referral still reports who sent it.
-   */
+  /** `NOT NULL` on the table, like `reasonId`. */
   readonly referrerOrganisation: string;
   /**
    * The dynamic answers blob, unparsed. The mapper turns it into an object;
@@ -161,11 +157,7 @@ export interface ReferralSearchCandidate {
    */
   readonly answersJson: string | null;
   readonly formId: string | null;
-  /**
-   * The administrators' own note about the household. Inside the PII block, so
-   * the purge nulls it — and a purged referral cannot be reached by this
-   * search at all, since the purge nulls the columns it matches on too.
-   */
+  /** The administrators' own note about the household. */
   readonly adminInfo: string | null;
 }
 
@@ -184,11 +176,8 @@ export interface ReferralSearchCandidate {
  * cancelled and rejected referrals leaking into the fifteen-month duplicate
  * list — that actually matters.
  *
- * Purged referrals cannot match: the purge nulls `refereeDateOfBirth`,
- * `refereePostcodeNormalised` and `refereePhoneNormalised`, and SQL's `eq`
- * never matches `NULL`. No `piiPurgedAt` filter here for the same reason
- * there is none on the predicate above — it would only be a second, weaker
- * statement of a rule the nulled columns already enforce.
+ * A referral past the retention period cannot match because it no longer
+ * exists: the nightly purge deletes it outright.
  *
  * Same "the throw is not decoration" reasoning as `repeatReferralPredicate`:
  * callers guard `hasAnythingToMatchOn` first, so `matchers` is never empty in
@@ -346,13 +335,6 @@ export function createReferralsRepository(db: Database) {
      *
      * Returns `undefined` when nothing matched, which the service reads as
      * "somebody else got there first".
-     *
-     * **Also refuses a referral whose details have been forgotten**, which is
-     * the second thing the caller has to tell apart when nothing matches.
-     * There is nothing left to accept, reject or read through fifteen months on
-     * — `INITIAL_SPEC1.txt`, `#Referral maintenance` — and the condition rides
-     * here with the status one rather than being read first, for the same
-     * reason.
      */
     async updateIfStatus(
       id: string,
@@ -362,7 +344,7 @@ export function createReferralsRepository(db: Database) {
       const rows = await db
         .update(referrals)
         .set(patch)
-        .where(and(eq(referrals.id, id), eq(referrals.status, from), isNull(referrals.piiPurgedAt)))
+        .where(and(eq(referrals.id, id), eq(referrals.status, from)))
         .returning();
       return expectAtMostOne(rows);
     },

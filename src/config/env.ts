@@ -73,9 +73,10 @@ const configSchema = z
     ALLOWED_ORIGINS: z.string().default(''),
 
     /**
-     * Days after which a referral's personal data is purged. **Unset means the
-     * purge never runs** — the charity has not set a retention period yet, and
-     * guessing one would be worse than doing nothing.
+     * Days after which a referral is deleted outright (`INITIAL_SPEC1.txt`,
+     * `#Forgetting a referral`: fifteen months, so `456`). **Unset means the
+     * purge never runs** — it is set per environment, deliberately, because
+     * setting it is what starts deleting.
      */
     PII_RETENTION_DAYS: z.coerce.number().int().min(1).max(3650).optional(),
 

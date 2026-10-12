@@ -54,29 +54,21 @@ allowlist, so a column added to `referrals` cannot widen what an administrator i
 
 ## The purge
 
-**This describes what `purgeReferralPii` does today, not what the spec now asks for.** Pete settled
-on 2026-08-21 (closing Q12 and Q27) that a forgotten referral is **deleted outright**, not
-anonymised, and on 2026-08-23 (closing Q32 and Q43) that its parcel — pick-list information included
-— is deleted with it — `INITIAL_SPEC1.txt`, `#Forgetting a referral`. The code below hasn't been
-rewritten to match; that's tracked in `STATUS.md` under "Agreed but not yet built". Two FKs will need
-handling when it is: `parcels.referral_id` (`NOT NULL`, no `ON DELETE`) and `sms_messages.referral_id`
-(nullable, also no `ON DELETE` — in practice always empty by fifteen months, since SMS rows live
-thirty days, but the purge can't assume that). Not urgent while the system isn't live. Don't restore
-the anonymising design once this is rebuilt.
+`purgeExpiredReferrals` (`modules/jobs/purge-referrals.ts`) **deletes** every referral older than
+the retention period outright — `INITIAL_SPEC1.txt`, `#Forgetting a referral` — together with its
+parcel (pick-list information included; parcel lines by cascade), any texts still filed against it,
+and its audit events. The session, its pick list and the stock ledger stay. It runs as one
+`db.batch()` of four set-based statements, so its cost does not grow with the number due — a
+statement per referral would exceed the free plan's fifty queries per invocation. **Do not restore
+the old anonymising design** (null the columns, keep the row), which this replaced on 2026-10-12.
 
-`purgeReferralPii` nulls the identifying columns, drops the dynamic answers **whole**, and nulls
-`adminInfo` — the administrators' own note about the household. That last one is written by an
-administrator and goes anyway, while `reviewComment`, also written by an administrator, stays: the
-comment records a decision about a referral, the note describes the people. It keeps
-`adults`, `children`, `isDelivery` and `reasonId`, which are outside the PII block — once the
-identifying columns are null those become statistics, which is how reporting survives a purge. That
-only works because the reason is chosen from a list rather than typed.
+It is wired into the nightly cron and **does nothing until `PII_RETENTION_DAYS` is set**. The period
+is **fifteen months**, so the value is `456`. Do not change the period; fifteen months is also the
+floor the repeat-referral count on the review screen depends on, and shortening it silently makes
+that count under-report.
 
-It is wired into the nightly cron and **does nothing until `PII_RETENTION_DAYS` is set**. The
-charity has settled the period at **fifteen months** (`INITIAL_SPEC1.txt`, `#Forgetting a referral`),
-so the value is `456` — but the variable is still unset, because setting it is what actually starts
-deleting. Do not change the period; fifteen months is also the floor the repeat-referral count on the
-review screen depends on, and shortening it silently makes that count under-report.
+Anything new that stores a copy of a referral's personal data outside `referrals` must be reached by
+this delete, or it outlives the household the charity promised to forget.
 
 ## Validation
 

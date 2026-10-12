@@ -42,8 +42,8 @@ export const authorisedReferrers = sqliteTable(
  *
  * A closed list rather than free text, so it can be reported on with a GROUP
  * BY — and so nobody types a name into it. That second property is what lets
- * the reason be **retained after a PII purge**: once the referee is no longer
- * identifiable, a reason code is a statistic rather than personal data.
+ * the reason travel to the extract spreadsheet without the household's name:
+ * a reason code on its own is a statistic rather than personal data.
  *
  * `isActive` retires an option without breaking historical referrals that used
  * it. Never delete a row that a referral points at.

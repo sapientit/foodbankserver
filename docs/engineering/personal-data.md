@@ -110,40 +110,25 @@ covers URL paths and query strings, which land in access logs the application do
 Drizzle's own errors are the sharp case — they contain the bound parameters, which on `referrals`
 is the row itself. See [`d1-constraints.md`](./d1-constraints.md).
 
-## What survives a purge, and why
+## Forgetting a referral: deleted, not anonymised
 
-`purgeReferralPii` nulls the identifying columns and keeps `adults`, `children`, `isDelivery` and
-`reasonId`, which sit outside the PII block. Once the identifying columns are null the referee is no
-longer identifiable, so those become statistics — which is how "we fed 340 households, 890 people,
-22% for benefit delay" survives a purge.
+At fifteen months the nightly purge (`modules/jobs/purge-referrals.ts`) **deletes** the referral —
+`INITIAL_SPEC1.txt`, `#Forgetting a referral`. Nothing about it survives in D1: its parcel goes with
+it (pick-list information included, and the parcel lines by cascade), and so do any texts still filed
+against it and its audit events. The session, its pick list and the stock ledger stay; they are the
+session's figures, not the household's. Long-term reporting — "we fed 340 households, 890 people,
+22% for benefit delay" — comes from the extract spreadsheet, not from this database.
 
-**That only works because the reason for referral is chosen from a maintained list rather than
-typed.** Free text would have to go with the rest.
-
-Dynamic answers are dropped **whole**. The server keeps the form's releases but never reads them, so
-it has nothing telling it which questions asked for personal data, and an answer that cannot be
-classified has to be assumed personal. Keeping a key because it looks harmless is the one mistake a
-purge cannot take back. Whether the charity needs any answers to survive for reporting is **Q12** in
-`OPEN-QUESTIONS.md`.
-
-**`parcels.notes` is the one place a copy of those answers outlives them — today.** A parcel's
-pick-list information is composed by the client from the answers its form marks as belonging on a
-picking sheet — allergies, what a household cannot eat — and written onto the parcel at generation.
-The purge nulls columns on `referrals` only; it has never touched `parcels`, and the parcel row
-outlives the anonymised referral. So free text about a household survives a purge that clears the
-answers it came from. Pete settled on 2026-08-23 (closing Q32 and Q43) that this is wrong: a
-referral's parcel is deleted along with it, pick-list information and all — `INITIAL_SPEC1.txt`,
-`#Forgetting a referral`. The purge job has not been rewritten to do this yet (`STATUS.md`, "Agreed
-but not yet built"); nothing should be written into `parcels` on the assumption that today's purge
-covers it, because it does not.
+This replaced an earlier purge that nulled the referee's columns and kept the row (2026-10-12). The
+personal columns on `referrals` are still nullable from that design; its `pii_purged_at` stamp was
+dropped in migration `0041`.
 
 The retention period is **fifteen months**, settled by the charity on 2026-08-06 at twelve months
 and revised to fifteen on 2026-09-09, recorded in `INITIAL_SPEC1.txt` under `#Forgetting a referral`.
-The schema isolates PII so a purge needs no table rebuild, and the job is written, tested and
-scheduled — it purges nothing until `PII_RETENTION_DAYS` is set to `456`, which is deliberately still
-pending, because setting it is the moment deletion begins.
+The job is written, tested and scheduled — it deletes nothing until `PII_RETENTION_DAYS` is set to
+`456`, because setting it is the moment deletion begins.
 
 Fifteen months is not only a privacy decision. The repeat-referral count on the admin review screen
-looks back fifteen months and matches on date of birth, postcode and phone — the columns this purge
-nulls. A shorter period does not fail loudly; it makes that count under-report and tells an
+looks back fifteen months and matches on date of birth, postcode and phone, which go when the
+referral is deleted. A shorter period does not fail loudly; it makes that count under-report and tells an
 administrator a household is new when it is not. The two numbers are one decision.
