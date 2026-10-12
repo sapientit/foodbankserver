@@ -1,4 +1,5 @@
 import { addDays, type PlainDate } from '../../core/time/plain-date.ts';
+import { classifyR2Action } from './r2-operations.ts';
 
 const GRAPHQL_ENDPOINT = 'https://api.cloudflare.com/client/v4/graphql';
 
@@ -12,6 +13,12 @@ export interface RawPlatformUsage {
   readonly d1RowsRead: number;
   readonly d1RowsWritten: number;
   readonly d1StorageBytes: number;
+  /** Account-wide — R2's allowance is account-wide, not per-bucket. */
+  readonly r2StorageBytes: number;
+  /** That day's Class A operations only — month-to-date is summed in `thresholds.ts`. */
+  readonly r2ClassAOperations: number;
+  /** That day's Class B operations only — month-to-date is summed in `thresholds.ts`. */
+  readonly r2ClassBOperations: number;
 }
 
 export interface CloudflareAnalyticsConfig {
@@ -57,6 +64,19 @@ const QUERY = `
         ) {
           sum { rowsRead rowsWritten }
         }
+        r2Storage: r2StorageAdaptiveGroups(
+          filter: { datetime_geq: $start, datetime_leq: $end }
+          limit: 1
+        ) {
+          max { payloadSize metadataSize }
+        }
+        r2Operations: r2OperationsAdaptiveGroups(
+          filter: { datetime_geq: $start, datetime_leq: $end }
+          limit: 100
+        ) {
+          sum { requests }
+          dimensions { actionType }
+        }
       }
     }
   }
@@ -81,6 +101,22 @@ interface GraphQlResponse {
         readonly d1: readonly {
           readonly sum: { readonly rowsRead: number; readonly rowsWritten: number };
         }[];
+        /**
+         * `null` on an account with R2 enabled but no activity that day, as
+         * well as `[]` — same "never assume one empty shape" caution as
+         * `errors` below. Both must record zero, not throw.
+         */
+        readonly r2Storage:
+          | readonly {
+              readonly max: { readonly payloadSize: number; readonly metadataSize: number };
+            }[]
+          | null;
+        readonly r2Operations:
+          | readonly {
+              readonly sum: { readonly requests: number };
+              readonly dimensions: { readonly actionType: string };
+            }[]
+          | null;
       }[];
     };
   } | null;
@@ -112,6 +148,15 @@ interface D1DatabaseResponse {
  * on this in production, and watch for the GraphQL API's habit of returning
  * `200` with an `errors` array on a bad query rather than a failing status.
  *
+ * `r2StorageAdaptiveGroups` and `r2OperationsAdaptiveGroups` are **also
+ * unverified against a live account** — added 2026-10-12, same gap. Queried
+ * account-wide (no `bucketName` filter), because R2's free allowance is
+ * per-account, not per-bucket. `datetime_leq: $end` (midnight the next UTC
+ * day) is reused from the Worker query's exclusive `$end` rather than a
+ * dedicated inclusive boundary; confirm against a live account that this
+ * does not double-count an event landing exactly on that instant — the risk
+ * is believed negligible but is itself unverified.
+ *
  * Never throws a raw fetch/parse error uninspected — `collectPlatformUsage`
  * relies on this rejecting with a message safe to log (no request bodies,
  * no tokens), same as every other outbound call in this codebase.
@@ -141,8 +186,23 @@ export function createCloudflareAnalyticsClient(
       const accountWide = account.accountWide[0];
       const thisApp = account.thisApp[0];
       const d1 = account.d1[0];
+      const r2Storage = account.r2Storage?.[0];
 
       const storageBytes = await fetchD1StorageBytes(config);
+
+      // An account with R2 enabled but no buckets, or no R2 activity that
+      // day, must record zeros rather than fail — `account.r2Operations` is
+      // observed as both `null` and `[]` in that case.
+      let r2ClassAOperations = 0;
+      let r2ClassBOperations = 0;
+      for (const row of account.r2Operations ?? []) {
+        const requests = row.sum.requests;
+        const operationClass = classifyR2Action(row.dimensions.actionType);
+        if (operationClass === 'classA') r2ClassAOperations += requests;
+        else if (operationClass === 'classB') r2ClassBOperations += requests;
+        // 'free' actions (DeleteObject, DeleteBucket, AbortMultipartUpload)
+        // count toward neither — see `r2-operations.ts`.
+      }
 
       return {
         workerRequestsAccountWide: accountWide?.sum.requests ?? 0,
@@ -154,6 +214,9 @@ export function createCloudflareAnalyticsClient(
         d1RowsRead: d1?.sum.rowsRead ?? 0,
         d1RowsWritten: d1?.sum.rowsWritten ?? 0,
         d1StorageBytes: storageBytes,
+        r2StorageBytes: (r2Storage?.max.payloadSize ?? 0) + (r2Storage?.max.metadataSize ?? 0),
+        r2ClassAOperations,
+        r2ClassBOperations,
       };
     },
   };

@@ -47,6 +47,9 @@ export interface PlatformStatsDayResponse {
   readonly d1RowsRead: CappedMeasureResponse;
   readonly d1RowsWritten: CappedMeasureResponse;
   readonly d1StorageBytes: CappedMeasureResponse;
+  readonly r2StorageBytes: CappedMeasureResponse;
+  readonly r2ClassAOperations: CappedMeasureResponse;
+  readonly r2ClassBOperations: CappedMeasureResponse;
 }
 
 export interface UsageReportResponse {
@@ -91,6 +94,9 @@ export function toPlatformStatsDayResponse(day: PlatformStatsDay): PlatformStats
     d1RowsRead: toCapped(day.d1RowsRead),
     d1RowsWritten: toCapped(day.d1RowsWritten),
     d1StorageBytes: toCapped(day.d1StorageBytes),
+    r2StorageBytes: toCapped(day.r2StorageBytes),
+    r2ClassAOperations: toCapped(day.r2ClassAOperations),
+    r2ClassBOperations: toCapped(day.r2ClassBOperations),
   };
 }
 

@@ -269,13 +269,30 @@ Production goes live on the **free plan** (Pete, 2026-10-12). Before it does
 (`INITIAL_SPEC1.txt`, `#Backups and recovery`):
 
 - [ ] A regular export of the production database, kept apart from Cloudflare's own Time Travel.
-- [ ] Restoring to an earlier point (Time Travel) documented here and rehearsed on UAT.
-- [ ] Restarting from an export documented here and rehearsed on UAT.
+      Decided (Pete, 2026-10-12): nightly, from the 02:17 job, into a private EU-jurisdiction R2
+      bucket on the charity account, each copy deleted after 30 days by a lifecycle rule. The
+      Worker calls Cloudflare's D1 export API with its own **D1 Edit** token (accepted: a Worker
+      cannot run `wrangler d1 export`, and building the dump itself would outgrow the free plan's
+      10 ms CPU). Built 2026-10-12 (`modules/jobs/export-database.ts`): bucket `foodbank-exports`
+      created and bound as `EXPORTS` on production; the job runs last in the 02:17 run and
+      records `export-database` in `system_jobs`. **Live once `CF_D1_EXPORT_API_TOKEN` is set on
+      `api`.** To fetch a copy:
+      `foodbank-charity-wrangler r2 object get foodbank-exports/exports/<date>.sql --jurisdiction eu --remote --file <local path>`
+      — it holds every household's details, so keep the local copy only as long as the restore
+      needs it.
+- [ ] Restoring to an earlier point (Time Travel) documented here and rehearsed on production,
+      while it holds no real data (Pete, 2026-10-12).
+- [ ] Restarting from an export documented here and rehearsed on production, using an export the
+      nightly job has written to R2 — so it waits for R2 (Pete, 2026-10-12).
 - [x] `PII_RETENTION_DAYS=456` set on production (2026-10-12, in `env.production.vars`). The purge
       deletes referrals outright in a fixed-size batch, so it is safe on the free plan.
 - [ ] Google consent-screen verification for the Sheets scope (see "The spreadsheet extract needs a
       domain before go-live").
 - [ ] A stock take before the first session (every level starts at **0**).
+- [ ] Platform usage monitoring on production: an Account Analytics: Read token on the charity
+      account set as `CF_ANALYTICS_API_TOKEN` on `api` (only test has one today), and R2 usage added
+      to the report (`INITIAL_SPEC1.txt`, `#Platform usage monitoring`), so a charge for going over
+      the free allowance cannot arrive unnoticed.
 
 ## Seeding production from UAT
 

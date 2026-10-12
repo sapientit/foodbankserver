@@ -47,6 +47,8 @@ export default {
         cfD1DatabaseId: config.cfD1DatabaseId,
         cfWorkerScriptName: config.cfWorkerScriptName,
         cfAnalyticsApiToken: config.cfAnalyticsApiToken,
+        cfD1ExportApiToken: config.cfD1ExportApiToken,
+        exportBucket: env.EXPORTS,
       });
 
       logger.info('scheduled run finished', { count: result.sessionsCreated });

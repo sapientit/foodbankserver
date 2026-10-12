@@ -9,6 +9,8 @@ import {
 import { createPlatformStatsRepository } from '../platform-stats/platform-stats.repository.ts';
 import { createSessionsRepository } from '../sessions/sessions.repository.ts';
 import { createJobsRepository } from './jobs.repository.ts';
+import { createD1ExportClient, type D1ExportClient } from './d1-export-client.ts';
+import { exportDatabase, EXPORT_DATABASE_JOB } from './export-database.ts';
 import { purgeExpiredReferrals, PURGE_REFERRALS_JOB } from './purge-referrals.ts';
 import { purgeSmsMessages, PURGE_SMS_JOB } from './purge-sms.ts';
 import {
@@ -22,6 +24,12 @@ export interface ScheduledResult extends MaterialiseResult {
   readonly smsMessagesPurged: number;
   /** `undefined` when the platform-usage settings are not all configured yet. */
   readonly platformUsageDate: string | undefined;
+  /**
+   * The R2 key tonight's database export was written to, or `undefined` when
+   * the export is not configured here or failed (a failure is logged and
+   * recorded against its own job, never thrown).
+   */
+  readonly databaseExport: string | undefined;
 }
 
 export interface ScheduledDeps {
@@ -44,6 +52,12 @@ export interface ScheduledDeps {
   readonly cfAnalyticsApiToken?: string | undefined;
   /** Overridden in tests so no real Cloudflare account is ever needed. */
   readonly analyticsClient?: CloudflareAnalyticsClient;
+  /** The `EXPORTS` R2 binding; production only. */
+  readonly exportBucket?: R2Bucket | undefined;
+  /** D1 Edit token for the export — see `CF_D1_EXPORT_API_TOKEN` in `config/env.ts`. */
+  readonly cfD1ExportApiToken?: string | undefined;
+  /** Overridden in tests so no real Cloudflare account is ever needed. */
+  readonly exportClient?: D1ExportClient;
 }
 
 /**
@@ -131,5 +145,42 @@ export async function runScheduledJobs(deps: ScheduledDeps): Promise<ScheduledRe
       .catch(() => undefined);
   }
 
-  return { ...core, platformUsageDate };
+  // Last, because a running export blocks other requests to the database,
+  // and on its own like the usage job: a failed copy is a gap in the backups
+  // to be noticed, not a reason to report the jobs above as failed.
+  let databaseExport: string | undefined;
+  try {
+    const exported = await exportDatabase({
+      bucket: deps.exportBucket,
+      client: exportClientFor(deps),
+      clock: deps.clock,
+      logger: deps.logger,
+    });
+    databaseExport = exported.key;
+    if (exported.key !== undefined) {
+      await jobs.recordSuccess(EXPORT_DATABASE_JOB, startedAt);
+    }
+  } catch (error) {
+    const safe = toSafeError(error);
+    deps.logger.error('scheduled job failed', { jobName: EXPORT_DATABASE_JOB, error: safe });
+    await jobs.recordFailure(EXPORT_DATABASE_JOB, startedAt, safe.message).catch(() => undefined);
+  }
+
+  return { ...core, platformUsageDate, databaseExport };
+}
+
+function exportClientFor(deps: ScheduledDeps): D1ExportClient | undefined {
+  if (deps.exportClient !== undefined) return deps.exportClient;
+  if (
+    deps.cfAccountId === undefined ||
+    deps.cfD1DatabaseId === undefined ||
+    deps.cfD1ExportApiToken === undefined
+  ) {
+    return undefined;
+  }
+  return createD1ExportClient({
+    accountId: deps.cfAccountId,
+    databaseId: deps.cfD1DatabaseId,
+    apiToken: deps.cfD1ExportApiToken,
+  });
 }

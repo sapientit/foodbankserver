@@ -39,6 +39,21 @@ export const platformDailyStats = sqliteTable('platform_daily_stats', {
   /** Snapshot at collection time, from the D1 REST API — not a daily figure. */
   d1StorageBytes: integer('d1_storage_bytes').notNull(),
 
+  /**
+   * The R2 measures below back the nightly database export's own free
+   * allowance — `INITIAL_SPEC1.txt`, `#Platform usage monitoring`. R2's
+   * allowance is account-wide and monthly, not per-bucket or per-day: storage
+   * is a snapshot like `d1StorageBytes`, shown directly against the monthly
+   * cap, but the two operation counts are *that day's* counts only — the
+   * report sums them itself, month to date, in `thresholds.ts`. `DEFAULT 0`
+   * backfills the rows captured before this column existed.
+   */
+  r2StorageBytes: integer('r2_storage_bytes').notNull().default(0),
+  /** That day's Class A (write-like) operations — see `r2-operations.ts`. */
+  r2ClassAOperations: integer('r2_class_a_operations').notNull().default(0),
+  /** That day's Class B (read-like) operations — see `r2-operations.ts`. */
+  r2ClassBOperations: integer('r2_class_b_operations').notNull().default(0),
+
   /** When the job actually ran, as opposed to the usage day it describes. */
   collectedAt: text('collected_at').notNull(),
 });

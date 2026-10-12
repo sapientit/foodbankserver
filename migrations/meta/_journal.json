@@ -295,6 +295,13 @@
       "when": 1791801622577,
       "tag": "0041_drop-pii-purged-at",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "6",
+      "when": 1791814244740,
+      "tag": "0042_platform-stats-r2",
+      "breakpoints": true
     }
   ]
 }

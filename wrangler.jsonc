@@ -299,6 +299,17 @@
           "migrations_dir": "migrations",
         },
       ],
+      // The nightly database export (modules/jobs/export-database.ts):
+      // private, EU jurisdiction, created 2026-10-12 with a lifecycle rule
+      // (`expire-after-30-days`, prefix `exports/`) that deletes each copy
+      // after thirty days. Production only — nowhere else exports.
+      "r2_buckets": [
+        {
+          "binding": "EXPORTS",
+          "bucket_name": "foodbank-exports",
+          "jurisdiction": "eu",
+        },
+      ],
       "ratelimits": [
         {
           "name": "REFERRAL_LIMITER",

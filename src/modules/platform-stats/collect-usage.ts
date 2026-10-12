@@ -82,6 +82,9 @@ export async function collectPlatformUsage(
     d1RowsRead: usage.d1RowsRead,
     d1RowsWritten: usage.d1RowsWritten,
     d1StorageBytes: usage.d1StorageBytes,
+    r2StorageBytes: usage.r2StorageBytes,
+    r2ClassAOperations: usage.r2ClassAOperations,
+    r2ClassBOperations: usage.r2ClassBOperations,
     collectedAt: deps.clock.nowIso(),
   });
 

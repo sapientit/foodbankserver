@@ -10,6 +10,11 @@ export interface Bindings {
   readonly ENVIRONMENT: string;
   readonly LOG_LEVEL: string;
   readonly AUTH_MODE: string;
+  /**
+   * Where the nightly database export goes. Bound on production only, so
+   * absent everywhere else — see `modules/jobs/export-database.ts`.
+   */
+  readonly EXPORTS?: R2Bucket;
 }
 
 /**

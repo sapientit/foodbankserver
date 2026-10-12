@@ -2618,7 +2618,7 @@ because the column is, but no referral has a null one.
 
 ## 5o. Platform usage monitoring
 
-New screen: the server now records its own Cloudflare Worker and D1 usage
+New screen: the server now records its own Cloudflare Worker, D1 and R2 usage
 every night, so an administrator can tell whether the food bank is safely
 inside the free plan's caps. Admin only, throughout — this is about running
 the system, not the food bank's own work.
@@ -2638,11 +2638,24 @@ GET /api/v1/platform-stats/usage?from=2026-09-01&to=2026-09-11
       "workerWallTimeP99Ms": { "value": 310 },
       "d1RowsRead": { "value": 812004, "cap": 5000000, "threshold": 4000000, "exceeded": false },
       "d1RowsWritten": { "value": 22110, "cap": 100000, "threshold": 80000, "exceeded": false },
-      "d1StorageBytes": { "value": 41943040, "cap": 524288000, "threshold": 419430400, "exceeded": false }
+      "d1StorageBytes": { "value": 41943040, "cap": 524288000, "threshold": 419430400, "exceeded": false },
+      "r2StorageBytes": { "value": 734003200, "cap": 10000000000, "threshold": 8000000000, "exceeded": false },
+      "r2ClassAOperations": { "value": 412, "cap": 1000000, "threshold": 800000, "exceeded": false },
+      "r2ClassBOperations": { "value": 60, "cap": 10000000, "threshold": 8000000, "exceeded": false }
     }
   ]
 }
 ```
+
+The nightly database export lives in R2, whose free allowance is monthly and
+account-wide rather than daily. `r2StorageBytes` is a snapshot at collection
+time, compared directly to the 10 GB-month allowance, the same way
+`d1StorageBytes` is. `r2ClassAOperations` (writes and similar) and
+`r2ClassBOperations` (reads and similar) are **month-to-date**: each day's
+value is the sum of that day and every earlier day in the same UTC calendar
+month, against the 1,000,000/month and 10,000,000/month allowances
+respectively — it resets on the 1st, not on the start of whichever range was
+requested.
 
 A date with no row in `days` means the job has not captured that day — not
 yet configured, not yet run, or a run was missed — rather than a day known to
@@ -2678,7 +2691,8 @@ GET /api/v1/platform-stats/usage/alert-summary
 
 A count for the alert section, not a list — the fourteen days with a
 captured row, not literally the last fourteen calendar days if some are
-missing.
+missing. A day marked for `r2StorageBytes`, `r2ClassAOperations` or
+`r2ClassBOperations` counts toward it exactly like any other measure.
 
 ---
 

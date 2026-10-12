@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { fixedClock } from '../src/core/clock.ts';
 import { createLogger } from '../src/core/log.ts';
 import { createDatabase } from '../src/db/client.ts';
-import { platformDailyStats } from '../src/db/schema/platform-stats.ts';
+import { platformDailyStats, type PlatformDailyStats } from '../src/db/schema/platform-stats.ts';
 import { systemJobs } from '../src/db/schema/jobs.ts';
 import type { CloudflareAnalyticsClient } from '../src/modules/platform-stats/cloudflare-analytics-client.ts';
 import { collectPlatformUsage } from '../src/modules/platform-stats/collect-usage.ts';
@@ -26,6 +26,26 @@ function testLogger() {
   return createLogger('silent');
 }
 
+/** A full `platform_daily_stats` row, quiet apart from the given overrides. */
+function rawRow(overrides: Partial<PlatformDailyStats> & { date: string }): PlatformDailyStats {
+  return {
+    workerRequestsAccountWide: 100,
+    workerRequestsThisApp: 100,
+    workerErrorsThisApp: 0,
+    workerCpuTimeP99Us: 100,
+    workerSubrequestsSum: 100,
+    workerWallTimeP99Ms: 50,
+    d1RowsRead: 100,
+    d1RowsWritten: 10,
+    d1StorageBytes: 1024,
+    r2StorageBytes: 0,
+    r2ClassAOperations: 0,
+    r2ClassBOperations: 0,
+    collectedAt: NOW,
+    ...overrides,
+  };
+}
+
 function fakeClient(usage: Partial<Record<string, number>> = {}): CloudflareAnalyticsClient {
   return {
     fetchDailyUsage: () =>
@@ -39,6 +59,9 @@ function fakeClient(usage: Partial<Record<string, number>> = {}): CloudflareAnal
         d1RowsRead: usage.d1RowsRead ?? 2000,
         d1RowsWritten: usage.d1RowsWritten ?? 100,
         d1StorageBytes: usage.d1StorageBytes ?? 4096,
+        r2StorageBytes: usage.r2StorageBytes ?? 8192,
+        r2ClassAOperations: usage.r2ClassAOperations ?? 20,
+        r2ClassBOperations: usage.r2ClassBOperations ?? 30,
       }),
   };
 }
@@ -215,6 +238,91 @@ describe('GET /platform-stats/usage', () => {
       exceeded: true,
     });
   });
+
+  it('sums R2 operations month to date, resetting on the 1st, even reading days before `from`', async () => {
+    const { testApp, adminToken } = await world();
+    const repository = createPlatformStatsRepository(db);
+
+    // Late August — must not leak into September's month-to-date sum.
+    await repository.upsert(
+      rawRow({ date: '2026-08-30', r2ClassAOperations: 500_000, r2ClassBOperations: 0 }),
+    );
+    await repository.upsert(
+      rawRow({ date: '2026-08-31', r2ClassAOperations: 500_000, r2ClassBOperations: 0 }),
+    );
+    // September, including a day before the requested range's `from`.
+    await repository.upsert(
+      rawRow({ date: '2026-09-01', r2ClassAOperations: 10, r2ClassBOperations: 100 }),
+    );
+    await repository.upsert(
+      rawRow({ date: '2026-09-02', r2ClassAOperations: 20, r2ClassBOperations: 200 }),
+    );
+    await repository.upsert(
+      rawRow({ date: '2026-09-03', r2ClassAOperations: 30, r2ClassBOperations: 300 }),
+    );
+
+    // Requested range starts on the 2nd, mid-month — 2026-09-01 is outside it.
+    const response = await testApp.request(
+      '/api/v1/platform-stats/usage?from=2026-09-02&to=2026-09-03',
+      { headers: authHeaders(adminToken) },
+    );
+    expect(response.status).toBe(200);
+
+    const body: {
+      days: {
+        date: string;
+        r2ClassAOperations: { value: number };
+        r2ClassBOperations: { value: number };
+      }[];
+    } = await response.json();
+
+    expect(body.days).toHaveLength(2);
+    // 2026-09-02's month-to-date reads 2026-09-01 (outside the range) too: 10 + 20.
+    expect(body.days[0]).toMatchObject({
+      date: '2026-09-02',
+      r2ClassAOperations: { value: 30 },
+      r2ClassBOperations: { value: 300 },
+    });
+    // 2026-09-03 adds its own day: 10 + 20 + 30, resetting clean of August's totals.
+    expect(body.days[1]).toMatchObject({
+      date: '2026-09-03',
+      r2ClassAOperations: { value: 60 },
+      r2ClassBOperations: { value: 600 },
+    });
+  });
+
+  it('marks R2 storage and month-to-date operations close to their caps, same as any other measure', async () => {
+    const { testApp, adminToken } = await world();
+    const repository = createPlatformStatsRepository(db);
+
+    await repository.upsert(
+      rawRow({
+        date: '2026-09-05',
+        r2StorageBytes: 8 * 1_000_000_000, // 80% of the 10 GB allowance
+        r2ClassAOperations: 800_000, // 80% of the 1,000,000/month allowance
+        r2ClassBOperations: 100,
+      }),
+    );
+
+    const response = await testApp.request(
+      '/api/v1/platform-stats/usage?from=2026-09-01&to=2026-09-10',
+      { headers: authHeaders(adminToken) },
+    );
+    expect(response.status).toBe(200);
+
+    const body: {
+      days: {
+        date: string;
+        r2StorageBytes: { value: number; exceeded: boolean };
+        r2ClassAOperations: { value: number; exceeded: boolean };
+        r2ClassBOperations: { value: number; exceeded: boolean };
+      }[];
+    } = await response.json();
+
+    expect(body.days[0]?.r2StorageBytes).toMatchObject({ exceeded: true });
+    expect(body.days[0]?.r2ClassAOperations).toMatchObject({ exceeded: true });
+    expect(body.days[0]?.r2ClassBOperations).toMatchObject({ exceeded: false });
+  });
 });
 
 describe('GET /platform-stats/usage/alert-summary', () => {
@@ -246,6 +354,9 @@ describe('GET /platform-stats/usage/alert-summary', () => {
       d1RowsRead: 100,
       d1RowsWritten: 10,
       d1StorageBytes: 1024,
+      r2StorageBytes: 0,
+      r2ClassAOperations: 0,
+      r2ClassBOperations: 0,
       collectedAt: NOW,
     });
     await repository.upsert({
@@ -259,6 +370,9 @@ describe('GET /platform-stats/usage/alert-summary', () => {
       d1RowsRead: 100,
       d1RowsWritten: 10,
       d1StorageBytes: 1024,
+      r2StorageBytes: 0,
+      r2ClassAOperations: 0,
+      r2ClassBOperations: 0,
       collectedAt: NOW,
     });
     // Outside the fourteen-day window ending 2026-09-11 (i.e. before 2026-08-29).
@@ -273,6 +387,9 @@ describe('GET /platform-stats/usage/alert-summary', () => {
       d1RowsRead: 100,
       d1RowsWritten: 10,
       d1StorageBytes: 1024,
+      r2StorageBytes: 0,
+      r2ClassAOperations: 0,
+      r2ClassBOperations: 0,
       collectedAt: NOW,
     });
 
@@ -283,5 +400,23 @@ describe('GET /platform-stats/usage/alert-summary', () => {
 
     const body: { windowDays: number; daysWithExceededThreshold: number } = await response.json();
     expect(body).toEqual({ windowDays: 14, daysWithExceededThreshold: 1 });
+  });
+
+  it('counts a day with only an R2 measure over its threshold, same as any other measure', async () => {
+    const { testApp, adminToken } = await world();
+    const repository = createPlatformStatsRepository(db);
+
+    // Clear in every way except R2 storage, which alone crosses 80% of 10 GB.
+    await repository.upsert(rawRow({ date: '2026-09-05', r2StorageBytes: 9 * 1_000_000_000 }));
+    // Clear in every way except R2 Class B operations, month to date.
+    await repository.upsert(rawRow({ date: '2026-09-06', r2ClassBOperations: 9_000_000 }));
+
+    const response = await testApp.request('/api/v1/platform-stats/usage/alert-summary', {
+      headers: authHeaders(adminToken),
+    });
+    expect(response.status).toBe(200);
+
+    const body: { windowDays: number; daysWithExceededThreshold: number } = await response.json();
+    expect(body).toEqual({ windowDays: 14, daysWithExceededThreshold: 2 });
   });
 });

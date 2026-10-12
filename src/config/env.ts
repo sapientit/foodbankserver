@@ -195,6 +195,15 @@ const configSchema = z
     CF_D1_DATABASE_ID: blankIsUnset,
     CF_WORKER_SCRIPT_NAME: blankIsUnset,
     CF_ANALYTICS_API_TOKEN: z.string().min(1).optional(),
+    /**
+     * A Cloudflare API token with **D1 Edit** on the account, for the nightly
+     * export into R2 (`modules/jobs/export-database.ts`). A Worker secret.
+     * D1 Edit is broader than the job needs — Cloudflare has no export-only
+     * permission — and was accepted for that reason by Pete on 2026-10-12.
+     * Optional with no tripwire, like the four above: without it, or without
+     * the `EXPORTS` bucket binding, the export reports itself unconfigured.
+     */
+    CF_D1_EXPORT_API_TOKEN: z.string().min(1).optional(),
   })
   .superRefine((value, ctx) => {
     // The dummy provider accepts any email address and issues a real admin
@@ -329,6 +338,7 @@ export interface AppConfig {
   readonly cfD1DatabaseId: string | undefined;
   readonly cfWorkerScriptName: string | undefined;
   readonly cfAnalyticsApiToken: string | undefined;
+  readonly cfD1ExportApiToken: string | undefined;
   readonly isProduction: boolean;
 }
 
@@ -380,6 +390,7 @@ export function loadConfig(bindings: object): AppConfig {
     cfD1DatabaseId: result.data.CF_D1_DATABASE_ID,
     cfWorkerScriptName: result.data.CF_WORKER_SCRIPT_NAME,
     cfAnalyticsApiToken: result.data.CF_ANALYTICS_API_TOKEN,
+    cfD1ExportApiToken: result.data.CF_D1_EXPORT_API_TOKEN,
     isProduction: result.data.ENVIRONMENT === 'production',
   };
 

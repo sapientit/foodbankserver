@@ -4527,6 +4527,14 @@ paths:
                       The UTC day of Cloudflare usage collected by this run, or
                       null if the platform-usage settings are not all
                       configured yet. See `GET /platform-stats/usage`.
+                  databaseExport:
+                    type: [string, 'null']
+                    description: >-
+                      The R2 key tonight's database export was written to
+                      (`exports/YYYY-MM-DD.sql`, London date), or null where the
+                      export is not configured (everywhere but production) or
+                      failed. A failure never fails the run; it is recorded
+                      against its own job.
 
   # ------------------------------------------------------------ platform stats --
   /api/v1/platform-stats/usage:
@@ -4535,9 +4543,16 @@ paths:
       summary: Cloudflare usage against the free-plan caps, for a date range
       description: |
         Admin only. For each day in `[from, to]` that the nightly job has
-        captured, this deployment's own Cloudflare Worker and D1 usage
+        captured, this deployment's own Cloudflare Worker, D1 and R2 usage
         alongside Cloudflare's published free-plan caps, so an administrator
         can see at a glance whether anything is running close to one.
+
+        R2's two operation measures (`r2ClassAOperations`, `r2ClassBOperations`)
+        are month-to-date, not that day alone — R2's free allowance is
+        monthly and account-wide, not per-day — and are computed from every
+        row captured so far in that day's UTC calendar month, including days
+        outside `[from, to]` when the range starts mid-month. R2 storage
+        (`r2StorageBytes`) is a snapshot, compared directly to the cap.
 
         A date with no row — the job has not run yet, or has not been
         configured, or a run was missed — is simply absent from `days` rather
@@ -7444,6 +7459,9 @@ components:
           d1RowsRead,
           d1RowsWritten,
           d1StorageBytes,
+          r2StorageBytes,
+          r2ClassAOperations,
+          r2ClassBOperations,
         ]
       properties:
         date:
@@ -7497,3 +7515,28 @@ components:
           allOf:
             - $ref: '#/components/schemas/CappedMeasure'
             - description: A snapshot at collection time, not a daily figure.
+        r2StorageBytes:
+          allOf:
+            - $ref: '#/components/schemas/CappedMeasure'
+            - description: >-
+                Storage used by the nightly database exports kept in R2, a
+                snapshot at collection time, compared directly to R2's
+                10 GB-month free allowance — account-wide, like
+                `workerRequestsAccountWide`. Unlike the two measures below,
+                not month-to-date: a snapshot has nothing to sum.
+        r2ClassAOperations:
+          allOf:
+            - $ref: '#/components/schemas/CappedMeasure'
+            - description: >-
+                Writes and similar (Class A) against R2's exports —
+                month-to-date, summed from this and every earlier day in the
+                same UTC calendar month, against R2's 1,000,000/month free
+                allowance. Resets on the 1st.
+        r2ClassBOperations:
+          allOf:
+            - $ref: '#/components/schemas/CappedMeasure'
+            - description: >-
+                Reads and similar (Class B) against R2's exports —
+                month-to-date, summed the same way as
+                `r2ClassAOperations`, against R2's 10,000,000/month free
+                allowance.

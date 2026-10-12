@@ -89,6 +89,12 @@ export function startOfWeek(date: PlainDate): PlainDate {
   return addDays(date, -(weekdayOf(date) - 1));
 }
 
+/** The first of the calendar month containing `date`. */
+export function startOfMonth(date: PlainDate): PlainDate {
+  const { year, month } = parsePlainDate(date);
+  return formatPlainDate(Date.UTC(year, month - 1, 1));
+}
+
 /** Negative if a < b, zero if equal, positive if a > b. Lexicographic works for YYYY-MM-DD. */
 export function comparePlainDates(a: PlainDate, b: PlainDate): number {
   return a < b ? -1 : a > b ? 1 : 0;

@@ -20,6 +20,7 @@ export default defineConfig({
       wrangler: { configPath: './wrangler.jsonc' },
       miniflare: {
         d1Databases: ['DB'],
+        r2Buckets: ['EXPORTS'],
         bindings: {
           TEST_MIGRATIONS: migrations,
           ENVIRONMENT: 'test',

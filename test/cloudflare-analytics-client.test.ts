@@ -9,7 +9,7 @@ const CONFIG = {
 };
 
 /** A real GraphQL success body — `errors` comes back `null`, not omitted. Confirmed live. */
-function graphqlSuccessBody() {
+function graphqlSuccessBody(r2Overrides: { r2Storage?: unknown; r2Operations?: unknown } = {}) {
   return {
     data: {
       viewer: {
@@ -23,6 +23,19 @@ function graphqlSuccessBody() {
               },
             ],
             d1: [{ sum: { rowsRead: 60489, rowsWritten: 1705 } }],
+            r2Storage:
+              'r2Storage' in r2Overrides
+                ? r2Overrides.r2Storage
+                : [{ max: { payloadSize: 500_000, metadataSize: 1_000 } }],
+            r2Operations:
+              'r2Operations' in r2Overrides
+                ? r2Overrides.r2Operations
+                : [
+                    { sum: { requests: 40 }, dimensions: { actionType: 'PutObject' } },
+                    { sum: { requests: 60 }, dimensions: { actionType: 'GetObject' } },
+                    { sum: { requests: 5 }, dimensions: { actionType: 'DeleteObject' } },
+                    { sum: { requests: 2 }, dimensions: { actionType: 'SomeFutureAction' } },
+                  ],
           },
         ],
       },
@@ -69,7 +82,41 @@ describe('createCloudflareAnalyticsClient', () => {
       d1RowsRead: 60489,
       d1RowsWritten: 1705,
       d1StorageBytes: 786432,
+      // 500,000 + 1,000 — the day's storage snapshot.
+      r2StorageBytes: 501_000,
+      // PutObject (Class A, 40) + SomeFutureAction (unknown → Class A, 2).
+      r2ClassAOperations: 42,
+      // GetObject (Class B, 60) only — DeleteObject is free, counted in neither.
+      r2ClassBOperations: 60,
     });
+  });
+
+  it('records zero R2 usage when the datasets come back `null`, not fail', async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse(graphqlSuccessBody({ r2Storage: null, r2Operations: null })),
+      )
+      .mockResolvedValueOnce(jsonResponse(d1SuccessBody()));
+
+    const client = createCloudflareAnalyticsClient(CONFIG);
+    const usage = await client.fetchDailyUsage('2026-09-10');
+
+    expect(usage.r2StorageBytes).toBe(0);
+    expect(usage.r2ClassAOperations).toBe(0);
+    expect(usage.r2ClassBOperations).toBe(0);
+  });
+
+  it('records zero R2 usage when the datasets come back empty — R2 enabled, no activity that day', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(graphqlSuccessBody({ r2Storage: [], r2Operations: [] })))
+      .mockResolvedValueOnce(jsonResponse(d1SuccessBody()));
+
+    const client = createCloudflareAnalyticsClient(CONFIG);
+    const usage = await client.fetchDailyUsage('2026-09-10');
+
+    expect(usage.r2StorageBytes).toBe(0);
+    expect(usage.r2ClassAOperations).toBe(0);
+    expect(usage.r2ClassBOperations).toBe(0);
   });
 
   it('reports a genuine GraphQL query error (an array, not null) as a thrown message rather than partial data', async () => {
