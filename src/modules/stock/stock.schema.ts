@@ -8,13 +8,14 @@ import { z } from 'zod';
 export const MAX_SEARCH_TERM = 40;
 
 /**
- * A category is short — it is a heading on a screen, not a sentence — and a
- * description is one line beside the name on a printed sheet. Both caps are
- * generous for that and small enough that neither can turn a pick list into
- * something that will not fit on a page.
+ * A category is short — it is a heading on a screen, not a sentence — and is
+ * capped generously for that. The name and description caps are the charity's
+ * own (INITIAL_SPEC1.txt, "#Stock maintenance"): each has to sit on one line
+ * of the picking sheet. `stock_items` carries the same two as `CHECK`s.
  */
 export const MAX_CATEGORY = 40;
-export const MAX_DESCRIPTION = 200;
+export const MAX_STOCK_ITEM_NAME = 40;
+export const MAX_DESCRIPTION = 50;
 
 /**
  * The ceiling on a direct stock-take count. Also the ceiling `stock.service.ts`
@@ -32,7 +33,7 @@ export const MAX_COUNTED_QUANTITY = 100000;
  * is forced to `null` whenever `unitsPerPack` is absent.
  */
 export const stockItemInputSchema = z.object({
-  name: z.string().trim().min(1).max(120),
+  name: z.string().trim().min(1).max(MAX_STOCK_ITEM_NAME),
   category: z.string().trim().min(1).max(MAX_CATEGORY),
   description: z.string().trim().max(MAX_DESCRIPTION).optional(),
   shelfNumber: z.string().trim().min(1).max(20),
@@ -44,7 +45,7 @@ export const stockItemInputSchema = z.object({
 
 export const stockItemPatchSchema = z
   .object({
-    name: z.string().trim().min(1).max(120),
+    name: z.string().trim().min(1).max(MAX_STOCK_ITEM_NAME),
     category: z.string().trim().min(1).max(MAX_CATEGORY),
     // Nullable, unlike the rest: a description is the one field here that can
     // be taken away as well as changed, and `null` is how a client says so.

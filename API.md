@@ -2010,10 +2010,15 @@ it is what two screens are ordered by.
 
 ### `description`
 
-Free text, **optional and nullable**, `maxLength` 200. What the item actually
-is, where the name does not say it — "half a kilo counts as one unit when rice
-is also given". Shown on the maintenance screen and **printed on the pick
-list** (see **5**).
+Free text, **optional and nullable**, `maxLength` 50. What the item actually
+is, where the name does not say it — "500g counts as one unit if rice is also
+given". Shown on the maintenance screen and **printed on the pick list** (see
+**5**).
+
+The item's `name` is likewise capped, at `maxLength` 40, on both `POST` and
+`PATCH`. Both caps are the charity's (each has to fit one line of the picking
+sheet), both count characters after trimming, and the database enforces them
+too — a longer value is a `400`, never truncated.
 
 On `PATCH /stock/items/{id}`, `null` clears it — and so does `""`. The two mean
 the same thing and both read back as `null`, so a cleared field never comes

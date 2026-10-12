@@ -2732,7 +2732,7 @@ paths:
               type: object
               required: [name, category, shelfNumber]
               properties:
-                name: { type: string, maxLength: 120 }
+                name: { type: string, maxLength: 40 }
                 category:
                   type: string
                   maxLength: 40
@@ -2740,7 +2740,7 @@ paths:
                   description: >-
                     Required. Stored with its capitalisation settled, so
                     `tinned goods` comes back as `Tinned Goods`.
-                description: { type: string, maxLength: 200 }
+                description: { type: string, maxLength: 50 }
                 shelfNumber: { type: string, maxLength: 20, examples: ['A1', '12b'] }
                 lowStockThreshold:
                   type: integer
@@ -2810,11 +2810,11 @@ paths:
               type: object
               minProperties: 1
               properties:
-                name: { type: string }
+                name: { type: string, maxLength: 40 }
                 category: { type: string, maxLength: 40 }
                 description:
                   type: [string, 'null']
-                  maxLength: 200
+                  maxLength: 50
                   description: >-
                     `null` clears it, and so does an empty string — the two are
                     the same thing and both read back as `null`.
@@ -6184,7 +6184,7 @@ components:
         ]
       properties:
         id: { type: string, format: uuid }
-        name: { type: string }
+        name: { type: string, maxLength: 40 }
         category:
           type: string
           maxLength: 40
@@ -6197,8 +6197,8 @@ components:
             matched or corrected — `Tins` and `Tinned` are two categories.
         description:
           type: [string, 'null']
-          maxLength: 200
-          examples: ['Half a kilo counts as one unit when rice is also given']
+          maxLength: 50
+          examples: ['500g counts as one unit if rice is also given']
           description: >-
             What the item is, in the charity's words. Printed on the pick list
             under the item name. `null` where the name says everything.

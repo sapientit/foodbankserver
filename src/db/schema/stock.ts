@@ -116,6 +116,15 @@ export const stockItems = sqliteTable(
       'stock_items_units_per_pack_positive',
       sql`${table.unitsPerPack} IS NULL OR ${table.unitsPerPack} > 0`,
     ),
+    // The same caps as `MAX_STOCK_ITEM_NAME` and `MAX_DESCRIPTION` in
+    // `stock.schema.ts` — INITIAL_SPEC1.txt says they hold however an item is
+    // written, so they are not left to the API alone. SQLite's `length()`
+    // counts characters, as the spec does.
+    check('stock_items_name_length', sql`length(${table.name}) <= 40`),
+    check(
+      'stock_items_description_length',
+      sql`${table.description} IS NULL OR length(${table.description}) <= 50`,
+    ),
   ],
 );
 
