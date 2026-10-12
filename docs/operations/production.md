@@ -275,8 +275,8 @@ Production goes live on the **free plan** (Pete, 2026-10-12). Before it does
       cannot run `wrangler d1 export`, and building the dump itself would outgrow the free plan's
       10 ms CPU). Built 2026-10-12 (`modules/jobs/export-database.ts`): bucket `foodbank-exports`
       created and bound as `EXPORTS` on production; the job runs last in the 02:17 run and
-      records `export-database` in `system_jobs`. **Live once `CF_D1_EXPORT_API_TOKEN` is set on
-      `api`.** To fetch a copy:
+      records `export-database` in `system_jobs`. `CF_D1_EXPORT_API_TOKEN` set on
+      `api` 2026-10-12; the first export is the 02:17 run of 2026-10-13. To fetch a copy:
       `foodbank-charity-wrangler r2 object get foodbank-exports/exports/<date>.sql --jurisdiction eu --remote --file <local path>`
       — it holds every household's details, so keep the local copy only as long as the restore
       needs it.
