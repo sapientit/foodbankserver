@@ -9,8 +9,10 @@ import { modelParcels, parcelGrid } from '../src/db/schema/rules.ts';
 import { recurringSessions, sessions } from '../src/db/schema/sessions.ts';
 import { stockItems, stockLedger } from '../src/db/schema/stock.ts';
 import { refreshTokens, users } from '../src/db/schema/users.ts';
+import { voucherConfig } from '../src/db/schema/voucher-config.ts';
 import { authHeaders, buildTestApp, devLogin, type TestApp } from './helpers/app.ts';
 import {
+  BASELINE_FORM_ID,
   setUpReferralWorld,
   submitReferral,
   UNKNOWN_REFERRER,
@@ -61,6 +63,10 @@ interface ReferralDetailsHouseholdBody {
   readonly referrerOrganisation: string;
   readonly referrerPhone: string | null;
   readonly pickNumber: number | null;
+  readonly answers: Record<string, unknown>;
+  readonly formId: string | null;
+  readonly firstTimeMarker: 'first_time' | 'admin' | null;
+  readonly voucherInstruction: 'provide_voucher' | 'already_received' | 'refer_to_admin' | null;
 }
 
 interface ReferralDetailsResponseBody {
@@ -120,6 +126,7 @@ beforeEach(async () => {
   await db.delete(recurringSessions);
   await db.delete(refreshTokens);
   await db.delete(users);
+  await db.delete(voucherConfig);
 });
 
 describe('GET /sessions/{sessionId}/referral-details — role access', () => {
@@ -386,7 +393,7 @@ describe('pickNumber', () => {
 });
 
 describe('the response allowlist', () => {
-  it('carries refereeAddress, refereePostcode, refereePhone, referrerName, referrerOrganisation and referrerPhone, and never carries date of birth, the reason, the answers, the review comment, referrerEmail, or any parcel or line data — asserted on the raw response text', async () => {
+  it('carries the contact details and the answers, and never carries date of birth, the reason, the review comment, referrerEmail, or any parcel or line data — asserted on the raw response text', async () => {
     const testApp = buildTestApp({ clock: fixedClock(NOW) });
     const { accessToken: token } = await devLogin(testApp, { email: 'admin@foodbank.org' });
     const world: PickingWorld = await setUpPickingWorld(testApp, token);
@@ -444,6 +451,8 @@ describe('the response allowlist', () => {
     expect(text).toContain('Jane Fieldsworth'); // referrerName
     expect(text).toContain(UNKNOWN_REFERRER.referrerOrganisation);
     expect(text).toContain('01483 000111'); // referrerPhone
+    // The answers come whole, for the Run Sheet's "Referrer comments".
+    expect(text).toContain('Allergic to shellfish specifically');
 
     // Absent on purpose.
     for (const shouldNotLeak of [
@@ -452,8 +461,6 @@ describe('the response allowlist', () => {
       'reasonId',
       '"reason"',
       world.reasonId,
-      'answers',
-      'Allergic to shellfish specifically',
       'reviewComment',
       'Confidential referral note',
       UNKNOWN_REFERRER.referrerEmail,
@@ -467,5 +474,137 @@ describe('the response allowlist', () => {
     ]) {
       expect(text).not.toContain(shouldNotLeak);
     }
+  });
+});
+
+/**
+ * The Run Sheet shows First?, Voucher and Referrer comments for every
+ * household, and a household not yet picked for has no parcel to read them
+ * from — so they come with the referral. Same derivations as
+ * `Parcel.firstTimeMarker` / `Parcel.voucherInstruction`; the answers whole,
+ * as the listener sheet sends them, since which one is "other information"
+ * is the form's business.
+ */
+describe('First?, Voucher and Referrer comments, without depending on the pick list', () => {
+  async function asAdmin(testApp: TestApp, token: string, path: string, body: unknown) {
+    const response = await testApp.request(path, {
+      method: path.endsWith('voucher-config') ? 'PUT' : 'POST',
+      headers: json(token),
+      body: JSON.stringify(body),
+    });
+    expect(response.status).toBe(200);
+  }
+
+  it('carries the answers whole and the form release, before any pick list exists', async () => {
+    const { testApp, token, world } = await adminWorld();
+    const { id } = await submitReferral(
+      testApp,
+      world,
+      { answers: { 'Other information': 'Ring the side door', Dietary: 'no pork' } },
+      { clientIp: nextClientIp() },
+    );
+
+    const details = await readDetails(testApp, token, world.sessionId);
+    const household = details.body.referrals?.find((referral) => referral.referralId === id);
+
+    expect(household?.pickNumber).toBeNull();
+    expect(household?.answers).toEqual({
+      'Other information': 'Ring the side door',
+      Dietary: 'no pork',
+    });
+    expect(household?.formId).toBe(BASELINE_FORM_ID);
+  });
+
+  it('derives the marker and the voucher instruction for households with no parcel, matching the pick list once one exists', async () => {
+    const testApp = buildTestApp({ clock: fixedClock(NOW) });
+    const { accessToken: token } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world: PickingWorld = await setUpPickingWorld(testApp, token);
+    const unreviewed = await submitReferral(
+      testApp,
+      world,
+      { refereeSurname: 'Ashdown' },
+      { clientIp: nextClientIp() },
+    );
+    const noPrevious = await submitReferral(
+      testApp,
+      world,
+      { refereeSurname: 'Bracken' },
+      { clientIp: nextClientIp() },
+    );
+    const previousInRange = await submitReferral(
+      testApp,
+      world,
+      { refereeSurname: 'Cotswold' },
+      { clientIp: nextClientIp() },
+    );
+    await asAdmin(testApp, token, `/api/v1/referrals/${noPrevious.id}/first-time-review`, {
+      noPreviousReferral: true,
+    });
+    await asAdmin(testApp, token, `/api/v1/referrals/${previousInRange.id}/first-time-review`, {
+      previousSessionDate: '2026-08-05',
+    });
+    await asAdmin(testApp, token, '/api/v1/voucher-config', {
+      startDate: '2026-08-01',
+      endDate: '2026-08-31',
+    });
+
+    const markers = async () => {
+      const details = await readDetails(testApp, token, world.sessionId);
+      return new Map(
+        (details.body.referrals ?? []).map((referral) => [
+          referral.referralId,
+          {
+            firstTimeMarker: referral.firstTimeMarker,
+            voucherInstruction: referral.voucherInstruction,
+          },
+        ]),
+      );
+    };
+
+    const beforePicking = await markers();
+    expect(beforePicking.get(unreviewed.id)).toEqual({
+      firstTimeMarker: 'admin',
+      voucherInstruction: 'refer_to_admin',
+    });
+    expect(beforePicking.get(noPrevious.id)).toEqual({
+      firstTimeMarker: 'first_time',
+      voucherInstruction: 'provide_voucher',
+    });
+    expect(beforePicking.get(previousInRange.id)).toEqual({
+      firstTimeMarker: null,
+      voucherInstruction: 'already_received',
+    });
+
+    // The same values the Client List reads off the parcels.
+    await generatePickList(testApp, token, world.sessionId);
+    const pickList = await testApp.request(`/api/v1/sessions/${world.sessionId}/pick-list`, {
+      headers: authHeaders(token),
+    });
+    const pickListBody: {
+      parcels?: {
+        referralId: string;
+        firstTimeMarker: string | null;
+        voucherInstruction: string | null;
+      }[];
+    } = await pickList.json();
+    const afterPicking = await markers();
+    expect(pickListBody.parcels?.length).toBe(3);
+    for (const parcel of pickListBody.parcels ?? []) {
+      expect(afterPicking.get(parcel.referralId)).toEqual({
+        firstTimeMarker: parcel.firstTimeMarker,
+        voucherInstruction: parcel.voucherInstruction,
+      });
+    }
+  });
+
+  it('leaves voucherInstruction null when no voucher range covers the session', async () => {
+    const { testApp, token, world } = await adminWorld();
+    const { id } = await submitReferral(testApp, world, {}, { clientIp: nextClientIp() });
+
+    const details = await readDetails(testApp, token, world.sessionId);
+    const household = details.body.referrals?.find((referral) => referral.referralId === id);
+
+    expect(household?.firstTimeMarker).toBe('admin');
+    expect(household?.voucherInstruction).toBeNull();
   });
 });

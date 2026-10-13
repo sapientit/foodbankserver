@@ -433,20 +433,25 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
    * all; a household not yet picked for just carries `pickNumber: null`
    * rather than blocking the whole screen — see `INITIAL_SPEC1.txt`,
    * `#Reviewing a referral`.
+   *
+   * The voucher-config row is read for the same reason `listenerSheet` reads
+   * it: each household's `voucherInstruction` is derived fresh, never stored.
    */
   async function referralDetails(sessionId: string): Promise<{
     session: Session;
     referrals: Referral[];
     pickNumberByReferral: Map<string, number>;
+    voucher: ListenerSheetVoucherContext;
   }> {
     const session = await sessions.findById(sessionId);
     if (session === undefined) {
       throw new NotFoundError('Session not found');
     }
 
-    const [households, pickList] = await Promise.all([
+    const [households, pickList, voucherRow] = await Promise.all([
       repository.list({ sessionId }),
       pickLists.findBySession(sessionId),
+      voucherConfig.find(),
     ]);
 
     const holdingAPlace = households
@@ -460,7 +465,15 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
       parcels.map((parcel) => [parcel.referralId, parcel.pickNumber]),
     );
 
-    return { session, referrals: holdingAPlace, pickNumberByReferral };
+    const voucher: ListenerSheetVoucherContext = {
+      sessionDate: session.sessionDate,
+      voucherRange:
+        voucherRow === undefined
+          ? undefined
+          : { startDate: voucherRow.startDate, endDate: voucherRow.endDate },
+    };
+
+    return { session, referrals: holdingAPlace, pickNumberByReferral, voucher };
   }
 
   /**

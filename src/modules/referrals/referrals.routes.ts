@@ -90,8 +90,8 @@ export function referralRoutes(): Hono<AppEnv> {
   });
 
   /**
-   * The referral-details list: everybody on a session the team needs to be
-   * able to ring, for a team leader to print. `INITIAL_SPEC1.txt`,
+   * The referral-details list behind the Run Sheet: everybody on a session
+   * the team needs to be able to ring, for a team leader to print. `INITIAL_SPEC1.txt`,
    * `#Reviewing a referral`, the team-leader paragraph.
    *
    * Session-scoped and open to `readers` for the same reason the listener
@@ -100,12 +100,12 @@ export function referralRoutes(): Hono<AppEnv> {
    * leaves them off.
    */
   routes.get('/sessions/:sessionId/referral-details', ...readers, async (c) => {
-    const { session, referrals, pickNumberByReferral } = await serviceFor(c).referralDetails(
-      c.req.param('sessionId'),
-    );
+    const { session, referrals, pickNumberByReferral, voucher } = await serviceFor(
+      c,
+    ).referralDetails(c.req.param('sessionId'));
 
     return c.json<ReferralDetailsResponse>(
-      toReferralDetailsResponse(session, referrals, pickNumberByReferral),
+      toReferralDetailsResponse(session, referrals, pickNumberByReferral, voucher),
     );
   });
 

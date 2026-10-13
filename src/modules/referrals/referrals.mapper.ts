@@ -657,20 +657,23 @@ export function toReferralSearchResponse(result: {
 }
 
 /**
- * One household on `GET /sessions/{sessionId}/referral-details` —
- * `INITIAL_SPEC1.txt`, `#Reviewing a referral`, the team-leader paragraph:
- * "the client name, address, postcode and phone number, the referrer's name,
- * organisation and phone number, and the household's pick number. ... It does
- * not otherwise carry the reason for referral, date of birth, answers, review
- * comment, the referrer's email address, the administrators' note or parcel
- * contents."
+ * One household on `GET /sessions/{sessionId}/referral-details`, the data
+ * behind the Run Sheet — `INITIAL_SPEC1.txt`, `#Reviewing a referral`, the
+ * team-leader paragraph.
  *
  * This is a wider read than the listener sheet — it hands a team leader a
  * household's address and phone number, which the listener sheet deliberately
  * withholds — and it is deliberately narrower than `ReferralResponse`: no
- * reason, no date of birth, no answers, no review comment, no referrer email.
- * It exists so the team can ring a household, not so they can read the
- * referral.
+ * reason, no date of birth, no review comment, no referrer email. It exists so
+ * the team can ring a household, not so they can read the referral.
+ *
+ * `answers`, `firstTimeMarker` and `voucherInstruction` are there because the
+ * Run Sheet shows the household's "other information" answer, whether it is
+ * new and what to do about a voucher, for **every** household — including one
+ * not yet picked for, which has no parcel to read them from. They are built
+ * exactly as `toListenerSheetHousehold` builds them: the answers whole (which
+ * one is "other information" is the form's business), the two derived values
+ * fresh on every read.
  */
 export interface ReferralDetailsHousehold {
   readonly referralId: string;
@@ -692,11 +695,19 @@ export interface ReferralDetailsHousehold {
    * before picking happens at all.
    */
   readonly pickNumber: number | null;
+  readonly answers: Record<string, unknown>;
+  /** The form release the answers were given to; see `ListenerSheetHousehold.formId`. */
+  readonly formId: string | null;
+  /** Identical to `Parcel.firstTimeMarker`; see `derivations.ts#firstTimeMarkerFor`. */
+  readonly firstTimeMarker: FirstTimeMarker | null;
+  /** Identical to `Parcel.voucherInstruction`; see `derivations.ts#voucherInstructionFor`. */
+  readonly voucherInstruction: VoucherInstruction | null;
 }
 
 export function toReferralDetailsHousehold(
   referral: Referral,
   pickNumber: number | null,
+  voucher: ListenerSheetVoucherContext,
 ): ReferralDetailsHousehold {
   return {
     referralId: referral.id,
@@ -709,6 +720,13 @@ export function toReferralDetailsHousehold(
     referrerOrganisation: referral.referrerOrganisation,
     referrerPhone: referral.referrerPhone,
     pickNumber,
+    answers: parseAnswers(referral.answersJson),
+    formId: referral.formId,
+    firstTimeMarker: firstTimeMarkerFor(referral.firstTimeReviewStatus),
+    voucherInstruction: voucherInstructionFor(voucher.sessionDate, voucher.voucherRange, {
+      status: referral.firstTimeReviewStatus,
+      previousSessionDate: referral.firstTimeReviewDate,
+    }),
   };
 }
 
@@ -730,6 +748,7 @@ export function toReferralDetailsResponse(
   },
   referrals: readonly Referral[],
   pickNumberByReferral: ReadonlyMap<string, number>,
+  voucher: ListenerSheetVoucherContext,
 ): ReferralDetailsResponse {
   return {
     sessionId: session.id,
@@ -737,7 +756,7 @@ export function toReferralDetailsResponse(
     startTime: session.startTime,
     location: session.location,
     referrals: referrals.map((referral) =>
-      toReferralDetailsHousehold(referral, pickNumberByReferral.get(referral.id) ?? null),
+      toReferralDetailsHousehold(referral, pickNumberByReferral.get(referral.id) ?? null, voucher),
     ),
   };
 }

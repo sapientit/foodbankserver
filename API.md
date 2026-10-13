@@ -231,7 +231,7 @@ Three roles. Use them for menus; **never for access control.**
 |                                                           | `admin` | `team_lead` | `fuel_admin` |
 | --------------------------------------------------------- | ------- | ----------- | ------------ |
 | Client List: pick lists, printing, attendance             | ✅      | ✅          | ❌           |
-| Read sessions, stock, referrals (the Run Sheet)           | ✅      | ✅          | ❌           |
+| Read sessions, stock, referrals                           | ✅      | ✅          | ❌           |
 | See the session list more than six days ahead             | ✅      | ❌          | ❌           |
 | The weekly stock take                                     | ✅      | ✅          | ❌           |
 | Create or amend sessions and referrals                    | ✅      | ❌          | ❌           |
@@ -2130,7 +2130,7 @@ as one, and never add it to a total.
 
 ---
 
-## 5h. Session referral details — contact list for the day
+## 5h. Session referral details — the Run Sheet
 
 ```
 GET /api/v1/sessions/{sessionId}/referral-details
@@ -2138,10 +2138,11 @@ GET /api/v1/sessions/{sessionId}/referral-details
           referrals: [ { referralId, refereeFirstName, refereeSurname,
                          refereeAddress, refereePostcode, refereePhone,
                          referrerName, referrerOrganisation,
-                         referrerPhone, pickNumber } ] }
+                         referrerPhone, pickNumber, answers, formId,
+                         firstTimeMarker, voucherInstruction } ] }
 ```
 
-Admin **and team lead**, for the _Client List_ screen. **You own the print
+Admin **and team lead**, for the _Run Sheet_ screen. **You own the print
 view**; this is the data behind it.
 
 **This is a contact list, not a listener sheet**, and the two must not be
@@ -2151,9 +2152,24 @@ number, so whoever is running the session can find a door, ring a household
 that has not arrived, ring the professional who sent them and know where they
 are ringing, or give a picker the household's number over the same call.
 
+**It also carries the Run Sheet's First?, Voucher and Referrer comments
+columns**, for every household:
+
+- `firstTimeMarker` and `voucherInstruction` — **identical to the `Parcel`
+  fields of the same name** (section on the derived values below), same rule,
+  worked out fresh on every read.
+- `answers`, whole, with `formId` naming the release they were given to. The
+  Referrer comments column is the "other information" answer; which key that
+  is belongs to the form, exactly as on the listener sheet, so take it out
+  client-side.
+
+These come with the referral, not the parcel, so a household not yet picked
+for has them too. **Read them from here for the Run Sheet**, not from
+`GET /sessions/{id}/pick-list`.
+
 **What it does not otherwise carry**, and must not be padded with from other
-endpoints: date of birth, the reason for referral, the form answers, the
-review comment, the parcel contents, and the referrer's email address. The
+endpoints: date of birth, the reason for referral, the review comment, the
+administrators' note, the parcel contents, and the referrer's email address. The
 reason stays where it was — a team leader gets it on the listener sheet and
 nowhere else, and putting it on a second sheet quietly undoes that.
 
@@ -2331,6 +2347,11 @@ carries nothing else about the referral. It is **not** on `PrintParcel`: the
 voucher is handed over at the session, not off the sheet carried round the
 hall, which still has no `answers`, no reason for referral and now no voucher
 instruction — see **5**.
+
+Both derived values are also on the listener sheet and on the Run Sheet
+(`GET /sessions/{sessionId}/referral-details`, **5h**), with the same values
+from the same rule. On the Run Sheet they are there for every household,
+including one with no parcel yet.
 
 ---
 

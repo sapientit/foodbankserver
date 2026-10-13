@@ -1158,9 +1158,9 @@ paths:
       tags: [Referrals]
       summary: Contact details for every household on a session
       description: |
-        For the **Client List** screen, open to a team leader as well as an
-        administrator. The client owns the print view; this is the data behind
-        it.
+        For the **Run Sheet** screen — the printable contact list for a
+        session — open to a team leader as well as an administrator. The client
+        owns the print view; this is the data behind it.
 
         **This is a contact list, not a listener sheet.** It carries the
         household's address, postcode and phone number, and the referrer's name,
@@ -1170,9 +1170,16 @@ paths:
         one place a team leader is given a household's phone number outside the
         picking sheet for a delivery.
 
+        **It also carries what the Run Sheet shows beside each household** —
+        the form `answers` whole (the screen's "Referrer comments" is the
+        "other information" answer, and which key that is belongs to the
+        form), `firstTimeMarker` and `voucherInstruction`. These come with the
+        referral, not the parcel, so a household not yet picked for carries
+        them too; you do not need the pick list to show them.
+
         **What it deliberately leaves out:** date of birth, the reason for
-        referral, the form answers, the administrator's review comment, the
-        parcel contents, and the referrer's email address. The reason in
+        referral, the administrator's review comment, the administrators'
+        note, the parcel contents, and the referrer's email address. The reason in
         particular stays where it was — a team leader gets it on the listener
         sheet and nowhere else.
 
@@ -6531,7 +6538,9 @@ components:
     ReferralDetailsHousehold:
       type: object
       description: >-
-        One household's contact details for the session being run.
+        One household on the Run Sheet: contact details for the session being
+        run, plus the answers and the two derived first-time and voucher
+        values.
         `referrerOrganisation` and `pickNumber` aside, every field is typed
         nullable to match `Referral`'s own referee and referrer columns — in
         practice none of them is null for a referral the food bank still
@@ -6549,6 +6558,10 @@ components:
           referrerOrganisation,
           referrerPhone,
           pickNumber,
+          answers,
+          formId,
+          firstTimeMarker,
+          voucherInstruction,
         ]
       properties:
         referralId: { type: string, format: uuid }
@@ -6581,6 +6594,36 @@ components:
             generated for the session, or it was referred after one was.
             Unlike the listener sheet, this list is never refused over a
             missing pick number — it is open before picking happens at all.
+        answers:
+          type: object
+          additionalProperties: true
+          description: >-
+            The dynamic answers, whole, as on the listener sheet. Take the
+            "other information" one for the Run Sheet's "Referrer comments";
+            the server does not know which key that is. Render with the
+            release named by `formId`.
+        formId:
+          type: [string, 'null']
+          format: uuid
+          description: >-
+            The release of the referral form these answers were given to —
+            see `ListenerSheetHousehold.formId`. Null never in practice.
+        firstTimeMarker:
+          type: [string, 'null']
+          enum: [first_time, admin, null]
+          description: >-
+            Whether this household is new — **identical to
+            `Parcel.firstTimeMarker`**, same rule, same values, present
+            whether or not the household has a parcel yet. Never the date or
+            the raw review status.
+        voucherInstruction:
+          type: [string, 'null']
+          enum: [provide_voucher, already_received, refer_to_admin, null]
+          description: >-
+            The one Christmas-voucher instruction for this household —
+            **identical to `Parcel.voucherInstruction`**, derived fresh on
+            every read and present whether or not the household has a parcel
+            yet. `null` outside the configured voucher range.
 
     ReferralSearchRequest:
       type: object
