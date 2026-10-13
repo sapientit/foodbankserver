@@ -934,7 +934,7 @@ describe('the spreadsheet extract', () => {
         'sessionId',
         'authorisedReferrerId',
         'reviewedByUserId',
-        'cancelledReason',
+        'picklistAdmin',
       ]) {
         expect(rowText).not.toContain(absent);
       }

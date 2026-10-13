@@ -148,6 +148,18 @@ export const MAX_ANSWERS_BYTES = 16 * 1024;
 export const MAX_ADMIN_INFO_LENGTH = 2000;
 
 /**
+ * How long the administrators' one line for the picker may be.
+ *
+ * Eighty characters: one line, which is what heads the Information for
+ * pickers on a printed sheet. It is printed, so it is kept short enough that
+ * it never becomes a second note about the household.
+ *
+ * **The same number is written into `openapi.yaml` as `maxLength`.** Change
+ * one and change the other.
+ */
+export const MAX_PICKLIST_ADMIN_LENGTH = 80;
+
+/**
  * How long a text message is kept before the nightly job deletes it.
  *
  * **Policy, not configuration** — unlike `PII_RETENTION_DAYS`, which is unset

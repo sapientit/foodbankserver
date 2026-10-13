@@ -69,7 +69,27 @@ export interface ParcelResponse {
   readonly householdSize: number;
   readonly reviewedAt: string | null;
   readonly attendance: string;
+  /**
+   * The `No longer stocked: …` line the client wrote at generation, when a
+   * historic release named an item that no longer resolves — and nothing
+   * else. It is no longer the pick-list information: the client composes that
+   * afresh on every showing from `picklistAdmin`, the marked `answers` and
+   * this. Nobody edits it.
+   */
   readonly notes: string | null;
+  /**
+   * The referral's `picklistAdmin`, **read now, not copied at generation**,
+   * and given to a team lead as well as an administrator.
+   *
+   * The referral withholds it from a team lead; the parcel does not, because
+   * it heads the Information for pickers on the Session Run Sheet and on the
+   * printed sheet, and a team lead runs both. It is the administrator's line
+   * for the picker and says so where it is typed — which is the only thing
+   * keeping the reason for referral off a printed sheet through this field.
+   * Locked with the rest of the referral once its session is confirmed, so a
+   * completed session's sheets still read as they were printed.
+   */
+  readonly picklistAdmin: string | null;
   /**
    * The referral's answers, whole and unfiltered.
    *
@@ -94,14 +114,14 @@ export interface ParcelResponse {
    * `first_time`, `admin` or no marker at all — never the historic date or
    * anything else about the referral. `INITIAL_SPEC1.txt`, `#Christmas
    * voucher and first-time selection`: this is what tells a team leader on
-   * the Run a session screen whether a household is new. Safe for a team
+   * the Session Run Sheet screen whether a household is new. Safe for a team
    * lead, unlike the referral's own `firstTimeReview`, which stays
    * admin-only — see `derivations.ts#firstTimeMarkerFor`.
    */
   readonly firstTimeMarker: FirstTimeMarker | null;
   /**
    * The one voucher instruction for this household, shown to the team leader
-   * on the Run a session screen. `INITIAL_SPEC1.txt`, `#Christmas voucher and
+   * on the Session Run Sheet screen. `INITIAL_SPEC1.txt`, `#Christmas voucher and
    * first-time selection`.
    *
    * Calculated fresh on every read, never stored on the parcel and never
@@ -151,6 +171,7 @@ export function toParcelResponse(
     reviewedAt: parcel.reviewedAt,
     attendance: parcel.attendance,
     notes: parcel.notes,
+    picklistAdmin: referral?.picklistAdmin ?? null,
     answers: parseAnswers(referral?.answersJson ?? null),
     formId: referral?.formId ?? null,
     firstTimeMarker: firstTimeMarkerFor(referral?.firstTimeReviewStatus),
@@ -188,7 +209,7 @@ export function toParcelResponse(
  *   is in `lines`.
  * - **No voucher instruction.** The Christmas-voucher decision is acted on at
  *   the session, not off the carried sheet, so it rides on
- *   `ParcelResponse.voucherInstruction` for the Run a session screen and is
+ *   `ParcelResponse.voucherInstruction` for the Session Run Sheet screen and is
  *   deliberately absent here.
  */
 export interface PrintParcelResponse {

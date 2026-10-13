@@ -1333,41 +1333,34 @@ describe('pick-list information at generation', () => {
     expect(rows[0]?.notes).toBe('Allergies: 2 people who are vegan.\nBeans: Kidney beans please.');
   });
 
-  it('never overwrites a note a team leader has since edited via PATCH, even when reconciliation resends it', async () => {
+  it('never overwrites the note on an existing parcel, even when reconciliation resends a different one', async () => {
     const { testApp, token, world: w } = await world();
     const referralA = await submitReferral(testApp, w, { adults: 1, children: 0 });
 
-    const original = [{ referralId: referralA.id, notes: 'Original note from the form.' }];
-    const first = await generatePickList(testApp, token, w.sessionId, undefined, original);
+    const first = await generatePickList(testApp, token, w.sessionId, undefined, [
+      { referralId: referralA.id, notes: 'No longer stocked: Tinned peaches' },
+    ]);
     expect(first.status).toBe(200);
     expect(first.parcelsCreated).toBe(1);
 
-    const { parcels: firstRows } = await readPickList(testApp, token, first.id);
-    const parcelA = firstRows.find((p) => p.referralId === referralA.id);
-
-    const patch = await testApp.request(`/api/v1/parcels/${parcelA?.id ?? ''}`, {
-      method: 'PATCH',
-      headers: { ...authHeaders(token), 'content-type': 'application/json' },
-      body: JSON.stringify({ notes: 'Edited by the team leader.' }),
-    });
-    expect(patch.status).toBe(200);
-
     const referralB = await submitReferral(testApp, w, { adults: 1, children: 0 });
 
-    // Sent again, unchanged, alongside a fresh entry for the newly-arrived
-    // household — the reconciliation the client actually performs.
+    // Resent with different words alongside a fresh entry for the
+    // newly-arrived household — only the new parcel takes its note.
     const reconciled = await generatePickList(testApp, token, w.sessionId, undefined, [
-      ...original,
-      { referralId: referralB.id, notes: 'New household note.' },
+      { referralId: referralA.id, notes: 'No longer stocked: Tinned pears' },
+      { referralId: referralB.id, notes: 'No longer stocked: Custard' },
     ]);
     expect(reconciled.status).toBe(200);
     expect(reconciled.parcelsCreated).toBe(1);
 
     const { parcels: rows } = await readPickList(testApp, token, first.id);
-    const stillA = rows.find((p) => p.referralId === referralA.id);
-    const nowB = rows.find((p) => p.referralId === referralB.id);
-    expect(stillA?.notes).toBe('Edited by the team leader.');
-    expect(nowB?.notes).toBe('New household note.');
+    expect(rows.find((p) => p.referralId === referralA.id)?.notes).toBe(
+      'No longer stocked: Tinned peaches',
+    );
+    expect(rows.find((p) => p.referralId === referralB.id)?.notes).toBe(
+      'No longer stocked: Custard',
+    );
   });
 
   it("gives each newly created parcel only its own referral's annotation, and null for one with none", async () => {
@@ -1558,60 +1551,25 @@ describe('pick-list information at generation', () => {
   });
 });
 
-describe('editing a parcel note', () => {
-  it('sets and then clears a parcel note via PATCH', async () => {
+describe('a parcel note cannot be edited', () => {
+  it('has no PATCH /parcels/{id}, and the note written at generation is left alone', async () => {
     const { testApp, token, world: w } = await world();
-    await submitReferral(testApp, w, { adults: 1, children: 0 });
-    const { id } = await generatePickList(testApp, token, w.sessionId);
+    const referral = await submitReferral(testApp, w, { adults: 1, children: 0 });
+    const { id } = await generatePickList(testApp, token, w.sessionId, undefined, [
+      { referralId: referral.id, notes: 'No longer stocked: Tinned peaches' },
+    ]);
     const { parcels: rows } = await readPickList(testApp, token, id);
     const parcelId = rows[0]?.id ?? '';
 
-    const set = await testApp.request(`/api/v1/parcels/${parcelId}`, {
+    const response = await testApp.request(`/api/v1/parcels/${parcelId}`, {
       method: 'PATCH',
       headers: { ...authHeaders(token), 'content-type': 'application/json' },
       body: JSON.stringify({ notes: 'Handle with care.' }),
     });
-    expect(set.status).toBe(200);
-    expect(await set.json()).toEqual({ id: parcelId, notes: 'Handle with care.' });
+    expect(response.status).toBe(404);
 
-    const afterSet = await readPickList(testApp, token, id);
-    expect(afterSet.parcels[0]?.notes).toBe('Handle with care.');
-
-    const clear = await testApp.request(`/api/v1/parcels/${parcelId}`, {
-      method: 'PATCH',
-      headers: { ...authHeaders(token), 'content-type': 'application/json' },
-      body: JSON.stringify({ notes: null }),
-    });
-    expect(clear.status).toBe(200);
-    expect(await clear.json()).toEqual({ id: parcelId, notes: null });
-
-    const afterClear = await readPickList(testApp, token, id);
-    expect(afterClear.parcels[0]?.notes).toBeNull();
-  });
-
-  it('accepts a PATCH note of exactly 1200 characters and refuses one of 1201', async () => {
-    const { testApp, token, world: w } = await world();
-    await submitReferral(testApp, w, { adults: 1, children: 0 });
-    const { id } = await generatePickList(testApp, token, w.sessionId);
-    const { parcels: rows } = await readPickList(testApp, token, id);
-    const parcelId = rows[0]?.id ?? '';
-    const withinLimit = 'b'.repeat(1200);
-    const overLimit = 'b'.repeat(1201);
-
-    const refused = await testApp.request(`/api/v1/parcels/${parcelId}`, {
-      method: 'PATCH',
-      headers: { ...authHeaders(token), 'content-type': 'application/json' },
-      body: JSON.stringify({ notes: overLimit }),
-    });
-    expect(refused.status).toBe(400);
-
-    const accepted = await testApp.request(`/api/v1/parcels/${parcelId}`, {
-      method: 'PATCH',
-      headers: { ...authHeaders(token), 'content-type': 'application/json' },
-      body: JSON.stringify({ notes: withinLimit }),
-    });
-    expect(accepted.status).toBe(200);
-    expect(await accepted.json()).toEqual({ id: parcelId, notes: withinLimit });
+    const after = await readPickList(testApp, token, id);
+    expect(after.parcels[0]?.notes).toBe('No longer stocked: Tinned peaches');
   });
 });
 

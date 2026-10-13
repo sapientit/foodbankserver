@@ -15,25 +15,19 @@ const preferenceQuantitySchema = z
   );
 
 /**
- * How much pick-list information a parcel may carry.
+ * How long a parcel's note may be.
  *
- * Two of the form's longest permitted answers are 500 characters each, and the
- * client sends them with a label saying which is which — so 500 was never
- * enough to hold what the charity asks the form for. Enforced here and on the
- * PATCH that edits a note afterwards; both go through this constant so a note
- * accepted at generation can always be edited and put back.
+ * The note now holds only the `No longer stocked: …` line the client writes at
+ * generation; the rest of the pick-list information is composed by the client
+ * on every showing and never stored. The limit dates from when the note held
+ * all of it, and is kept rather than lowered because it costs nothing and a
+ * historic release can name several items that no longer resolve.
  *
- * SQLite `TEXT` is unbounded, so this is the only limit there is: raising it
- * needs no migration, and lowering it would strand notes that already exist.
+ * SQLite `TEXT` is unbounded, so this is the only limit there is.
  */
 export const PARCEL_NOTES_MAX_LENGTH = 1200;
 
-/**
- * The free text shown beside a parcel and printed on its sheet.
- *
- * Trimmed before it is measured, so trailing whitespace never costs a
- * character.
- */
+/** Trimmed before it is measured, so trailing whitespace never costs a character. */
 export const parcelNotesSchema = z.string().trim().max(PARCEL_NOTES_MAX_LENGTH);
 
 /**
@@ -42,9 +36,7 @@ export const parcelNotesSchema = z.string().trim().max(PARCEL_NOTES_MAX_LENGTH);
  * The client evaluates its own preference rules against the referral answers
  * and sends the stock items it resolved them to — **ids, never names**, since
  * the server keeps the form's releases but never reads them and must not start
- * matching on text. It
- * composes the pick-list information out of those same answers for the same
- * reason, and sends the finished words.
+ * matching on text.
  *
  * Duplicates are refused rather than merged, both here and at the referral
  * level. Two quantities for one item in one request is an ambiguous
@@ -53,14 +45,16 @@ export const parcelNotesSchema = z.string().trim().max(PARCEL_NOTES_MAX_LENGTH);
  */
 export const generatePickListSchema = z.object({
   /**
-   * The pick-list information the client composed for each referral, from the
-   * form answers it marks as belonging on the sheet.
+   * The parcel note for each referral that needs one — which is now only a
+   * referral whose historic release named stock that no longer resolves, and
+   * the note is just the `No longer stocked: …` line. The rest of the pick-list
+   * information is composed by the client every time it is shown, from the
+   * referral's `picklistAdmin` and its marked answers, and is not sent here.
    *
    * Finished text, never answer keys: the server keeps the form's releases but
-   * never reads them, and the same reasoning that stops it matching stock items on names stops it
-   * deciding which answers are picking information. Duplicates are refused
-   * rather than concatenated, for the same reason a duplicate preference line
-   * is — two notes for one household is an ambiguous instruction.
+   * never reads them. Duplicates are refused rather than concatenated, for the
+   * same reason a duplicate preference line is — two notes for one household
+   * is an ambiguous instruction.
    */
   pickListInformation: z
     .array(

@@ -23,7 +23,7 @@ import {
  * `ParcelResponse.firstTimeMarker` and `ParcelResponse.voucherInstruction`
  * (`GET /sessions/{sessionId}/pick-list`, `GET /pick-lists/{id}`) —
  * `INITIAL_SPEC1.txt`, `#Christmas voucher and first-time selection`. Both are
- * for the Run a session screen; neither is on the printed sheet.
+ * for the Session Run Sheet screen; neither is on the printed sheet.
  * `setUpPickingWorld`'s session is dated `2026-08-11`, which the voucher-range
  * tests below deliberately straddle or exclude.
  */
@@ -216,7 +216,7 @@ describe('Parcel.voucherInstruction', () => {
     return new Map(body.parcels.map((p) => [p.referralId, p.voucherInstruction]));
   }
 
-  it('gives the right instruction for each of the three states on both Run a session routes when the range includes the session date', async () => {
+  it('gives the right instruction for each of the three states on both Session Run Sheet routes when the range includes the session date', async () => {
     const { testApp, token, world: w } = await world();
     const referrals3 = await seedThreeStates(testApp, token, w);
     await setVoucherRange(testApp, token, { startDate: '2026-08-01', endDate: '2026-08-20' });
@@ -291,7 +291,7 @@ describe('Parcel.voucherInstruction', () => {
     }
   });
 
-  it('is visible to a team lead on the Run a session screen, not just an admin', async () => {
+  it('is visible to a team lead on the Session Run Sheet screen, not just an admin', async () => {
     const { testApp, token, world: w } = await world();
     const { id: referralId } = await submitReferral(testApp, w, { adults: 1, children: 0 });
     await setFirstTimeReview(testApp, token, referralId, { noPreviousReferral: true });
@@ -308,7 +308,7 @@ describe('Parcel.voucherInstruction', () => {
     expect(byReferral.get(referralId)).toBe('provide_voucher');
   });
 
-  it('never leaks the historic previous-session date onto the Run a session screen', async () => {
+  it('never leaks the historic previous-session date onto the Session Run Sheet screen', async () => {
     const { testApp, token, world: w } = await world();
     const referral = await submitReferral(testApp, w, {
       adults: 1,

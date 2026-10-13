@@ -13,7 +13,7 @@ import { createStockRepository } from '../stock/stock.repository.ts';
 import { createVoucherConfigRepository } from '../voucher-config/voucher-config.repository.ts';
 import { stockOrderSchema } from '../stock/stock.schema.ts';
 import { createPickListsRepository } from './pick-lists.repository.ts';
-import { generatePickListSchema, parcelNotesSchema } from './pick-lists.schema.ts';
+import { generatePickListSchema } from './pick-lists.schema.ts';
 import { createPickListsService } from './pick-lists.service.ts';
 import { createAttendanceService } from './attendance.service.ts';
 import {
@@ -32,11 +32,6 @@ const lineSchema = z.object({
   stockItemId: z.uuid(),
   /** Zero removes the line, which is how a picker says "we had none". */
   quantity: z.number().int().min(0).max(1000),
-});
-
-/** `null` clears the note; the limit is the one generation writes under. */
-const notesSchema = z.object({
-  notes: parcelNotesSchema.nullable(),
 });
 
 const attendanceSchema = z.object({
@@ -213,13 +208,6 @@ export function pickListRoutes(): Hono<AppEnv> {
   routes.delete('/parcels/:id/lines/:stockItemId', ...staff, async (c) => {
     await serviceFor(c).removeLine(c.req.param('id'), c.req.param('stockItemId'));
     return c.body(null, 204);
-  });
-
-  routes.patch('/parcels/:id', ...staff, async (c) => {
-    const { notes } = await parseJsonBody(c, notesSchema);
-    const updated = await serviceFor(c).setParcelNotes(c.req.param('id'), notes);
-
-    return c.json({ id: updated.id, notes: updated.notes });
   });
 
   routes.post('/parcels/:id/review', ...staff, async (c) => {

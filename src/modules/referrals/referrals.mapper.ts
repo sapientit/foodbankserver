@@ -121,6 +121,14 @@ export interface ReferralResponse {
    */
   readonly adminInfo?: string | null | undefined;
   /**
+   * The administrators' one line for the picker. **On exactly the responses
+   * `adminInfo` is on** — admin-only, one referral at a time — and gated by
+   * the same option. A team lead never receives it here; they receive it on
+   * the parcel instead (`ParcelResponse.picklistAdmin`), which is where the
+   * picker needs it.
+   */
+  readonly picklistAdmin?: string | null | undefined;
+  /**
    * How many times this household has been referred in the last fifteen
    * months, and the session date of the most recent of those. Admin-only,
    * like the four fields above, and only present when the caller supplies
@@ -177,7 +185,7 @@ export interface ReferralResponseOptions {
    */
   readonly repeatReferrals?: RepeatReferralSummaryResponse | undefined;
   /**
-   * Emit `adminInfo`.
+   * Emit `adminInfo`, and `picklistAdmin` with it.
    *
    * **Opt-in, so that the referral list cannot acquire it by accident.** The
    * charity asked for the note on the referral an administrator has open, not
@@ -235,7 +243,9 @@ export function toReferralResponse(
     // Spread rather than assigned, so an unasked-for field is absent rather
     // than null — a client cannot tell "you may not see this" from "there is
     // no note" if both arrive as null.
-    ...(includeAdminInfo === true ? { adminInfo: referral.adminInfo } : {}),
+    ...(includeAdminInfo === true
+      ? { adminInfo: referral.adminInfo, picklistAdmin: referral.picklistAdmin }
+      : {}),
     ...(repeatReferrals === undefined ? {} : { repeatReferrals }),
   };
 }
@@ -304,7 +314,7 @@ export function toReceiptResponse(referral: Referral): ReferralReceiptResponse {
  * "what went wrong": the listener is the person actually talking to the
  * household, so they see whether it is new and what to do about a Christmas
  * voucher — `INITIAL_SPEC1.txt`, `#Listener sheet`. They are the **same two
- * derived enums** `Parcel` carries for the Run a session screen, with the
+ * derived enums** `Parcel` carries for the Session Run Sheet screen, with the
  * same values and the same guarantee: no historic session date, nothing else
  * about the referral. The client renders any wording.
  *

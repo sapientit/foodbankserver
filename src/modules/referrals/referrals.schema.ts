@@ -4,6 +4,7 @@ import {
   MAX_ANSWERS,
   MAX_ANSWERS_BYTES,
   MAX_ANSWER_KEY_LENGTH,
+  MAX_PICKLIST_ADMIN_LENGTH,
 } from '../../config/constants.ts';
 import { COLLECTION_METHODS, REFERRAL_STATUSES } from '../../db/schema/referrals.ts';
 import { isPlainDate } from '../../core/time/plain-date.ts';
@@ -138,6 +139,9 @@ export type ReferralSubmission = z.infer<typeof referralSubmissionSchema>;
  * counts as "other information" is the client's to know — the server keeps
  * the form's releases but never reads them, and does not police which key moved.
  */
+/** The administrators' note, shared by amending and cancelling. */
+const adminInfoSchema = z.string().trim().min(1).max(MAX_ADMIN_INFO_LENGTH);
+
 export const referralAmendSchema = z.object({
   refereeFirstName: personName.optional(),
   refereeSurname: personName.optional(),
@@ -159,16 +163,22 @@ export const referralAmendSchema = z.object({
    * Nullable for the same reason `refereePhone` is: `null` is a real value
    * meaning "there is no note now", and omitting the key leaves whatever is
    * there alone. **An empty string is a `400`, not a clearance** — the repo
-   * refuses empty text everywhere (`cancelReferralSchema`,
-   * `rejectReferralSchema`), and quietly turning `''` into `null` would make
-   * one of the two ways of clearing a note invisible in the contract.
+   * refuses empty text everywhere (`rejectReferralSchema`), and quietly
+   * turning `''` into `null` would make one of the two ways of clearing a note
+   * invisible in the contract.
    *
    * Not part of `answers`. The answers are what the referrer submitted and the
    * client replaces them wholesale from the form it owns; this is what the
    * office wrote, and the server holds it as its own field so that a form the
    * client reshapes cannot take it with it.
    */
-  adminInfo: z.string().trim().min(1).max(MAX_ADMIN_INFO_LENGTH).nullable().optional(),
+  adminInfo: adminInfoSchema.nullable().optional(),
+  /**
+   * The administrators' one line for the picker. The same shape and the same
+   * rules as `adminInfo` — `null` clears it, an empty string is a `400` — and
+   * the same lock, because it is amended through the same route.
+   */
+  picklistAdmin: z.string().trim().min(1).max(MAX_PICKLIST_ADMIN_LENGTH).nullable().optional(),
 });
 
 export type ReferralAmend = z.infer<typeof referralAmendSchema>;
@@ -201,8 +211,22 @@ export const referralAdminAmendSchema = z
     'supply something to change, a session, or both',
   );
 
+/**
+ * `POST /referrals/{id}/cancel`.
+ *
+ * There is no cancellation reason any more: the administrator writes why into
+ * the administrators' note, and the note is saved with the cancellation.
+ * `adminInfo` follows `ReferralAmend.adminInfo` exactly — a string replaces
+ * the note, `null` clears it, omitting it leaves it alone.
+ *
+ * **Not strict, unlike the `PATCH` body, and only for the changeover.** A
+ * client built before this change still sends `reason`; refusing it would
+ * stop administrators cancelling at all between this deploying and the
+ * client's, whereas stripping it loses only a value the charity has said it
+ * no longer wants kept.
+ */
 export const cancelReferralSchema = z.object({
-  reason: z.string().trim().min(1).max(500).optional(),
+  adminInfo: adminInfoSchema.nullable().optional(),
 });
 
 /**

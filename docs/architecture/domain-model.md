@@ -235,16 +235,17 @@ one to stock. `-1` can only be created at generation, on a parcel that is by def
 unreviewed; `PUT /parcels/:id/lines` accepts `0` and above. **The charity settled this on
 2026-08-11** — see `INITIAL_SPEC1.txt`, "Picking list".
 
-**A parcel's pick-list information is written once, at creation, and never overwritten.** The
-client composes it from the answers its form marks as belonging on a sheet and sends the finished
-text as `pickListInformation`; the server stores it verbatim in `parcels.notes` and never reads an
-answer to build it. Generation applies an entry only to a parcel it is creating, so sending the
-whole session's information on every reconciliation is safe — from the moment the parcel exists the
-note is the team leader's, editable through `PATCH /parcels/:id` until confirmation, and the printed
-sheet carries it as saved. The invariant is the same one that protects a parcel's lines, and it
-matters more here: the note is where an allergy is written down, and a reconciliation that reverted
-a correction to one would be silent. Capped at `PARCEL_NOTES_MAX_LENGTH` (1,200) in Zod only —
-`parcels.notes` is unbounded `TEXT`, so the limit lives at the boundary and nowhere else.
+**A parcel's information for pickers is composed by the client on every showing, not stored.** It
+is three parts — the referral's `picklistAdmin`, the answers the referral's release marks for the
+sheet, and `parcels.notes` — and only the last is on the parcel. `parcels.notes` now holds only the
+`No longer stocked: …` line the client sends as `pickListInformation` at generation; it is written
+only onto a parcel that call creates, never overwritten and never edited (`PATCH /parcels/:id` is
+gone). `Parcel.picklistAdmin` is read from the referral on every read rather than copied, and is
+given to a team lead although `Referral.picklistAdmin` is not, because it heads the printed sheet. A
+completed session's sheets still read as printed only because every input is locked once the
+session is confirmed — the referral's answers and `picklistAdmin` by `assertOpenToChange`, the note
+by never being written again. Unlock any of them and that stops being true. Capped at
+`PARCEL_NOTES_MAX_LENGTH` (1,200) in Zod only.
 
 **A parcel reaches neither paper nor a household until it has been reviewed.** Attendance on an
 unreviewed parcel is a `ConflictError`, and so is a print request — both `GET /pick-lists/:id/print`
@@ -287,7 +288,7 @@ leaving exactly the state this removes with nothing recording it.
 voucher range and the referral's `firstTimeReviewStatus`/`firstTimeReviewDate` fresh on every call to
 `GET /sessions/{sessionId}/pick-list` and `GET /pick-lists/{id}` — nothing is written onto `parcels`
 and nothing is computed at generation. An administrator may make the first-time-review decision after
-a pick list already exists, and the spec is explicit that the Run a session screen must reflect the
+a pick list already exists, and the spec is explicit that the Session Run Sheet screen must reflect the
 decision as it stands **now**, not as it stood when the list was made. It is **not** on
 `PrintParcel`: the voucher is handed over at the session, not off the sheet carried round the hall.
 `Parcel.firstTimeMarker` (`derivations.ts#firstTimeMarkerFor`) is the same kind of derivation for the
@@ -298,7 +299,7 @@ admin-only.
 `ListenerSheetHousehold` carries `firstTimeMarker` and `voucherInstruction` too — the **same two
 enums** with the same values, for the listener, who is the person actually talking to the household.
 `referrals.service.ts#listenerSheet` reads the voucher-config row and calls the same
-`firstTimeMarkerFor` / `voucherInstructionFor`, so the sheet and the Run a session screen can never
+`firstTimeMarkerFor` / `voucherInstructionFor`, so the sheet and the Session Run Sheet screen can never
 disagree. No new derivation, and nothing exposed that the two parcel fields do not already expose.
 
 **`referrals.first_time_review_status` carries no `CHECK` constraint**, the same deliberate omission

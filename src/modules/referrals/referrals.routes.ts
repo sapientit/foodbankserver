@@ -312,9 +312,9 @@ export function referralRoutes(): Hono<AppEnv> {
     const service = serviceFor(c);
     const actor = actorOf(c);
 
-    const { reason } = await parseOptionalJsonBody(c, cancelReferralSchema);
+    const { adminInfo } = await parseOptionalJsonBody(c, cancelReferralSchema);
     const referral = await service.getReferral(c.req.param('id'));
-    const cancelled = await service.cancel(referral, reason ?? null, {
+    const cancelled = await service.cancel(referral, adminInfo, {
       kind: 'user',
       userId: actor.userId,
     });

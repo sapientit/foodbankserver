@@ -980,7 +980,6 @@ describe('ordering and the fifty-result cap', () => {
       status: 'active',
       referredAt: NOW,
       cancelledAt: null,
-      cancelledReason: null,
       reviewComment: null,
       reviewedByUserId: null,
       referrerOrganisation: 'Search Cap Test Org',

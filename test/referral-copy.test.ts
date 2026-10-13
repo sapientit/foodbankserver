@@ -262,7 +262,7 @@ describe('eligibility — offered only where the original can no longer come to 
 
     await db
       .update(referrals)
-      .set({ status: 'cancelled', cancelledAt: NOW, cancelledReason: null })
+      .set({ status: 'cancelled', cancelledAt: NOW })
       .where(eq(referrals.id, id));
 
     const target = await createSession(testApp, token);

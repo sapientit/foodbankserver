@@ -53,6 +53,11 @@ added to `referrals` cannot silently widen what leaves.
 household, it is purged at fifteen months, and it is **not** an extract column. A field the purge
 clears must not be written somewhere the purge cannot reach.
 
+`picklistAdmin` is free text about a household too, and goes with the referral at fifteen months. It
+is the one administrator-written field that **is** printed: it reaches a team lead on
+`Parcel.picklistAdmin` and the client puts it on the picking sheet. It must never hold the reason
+for referral, and only the administrator typing it can ensure that — the server has no way to tell.
+
 ### `sms_messages` is the other table holding personal data
 
 Everything in this document was written about `referrals`. Since text reminders

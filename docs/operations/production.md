@@ -268,6 +268,13 @@ choose. Part 1 needed only the first; part 2 waited on the second.
 Production goes live on the **free plan** (Pete, 2026-10-12). Before it does
 (`INITIAL_SPEC1.txt`, `#Backups and recovery`):
 
+- [ ] **[Pete]** In TheSMSWorks, change the reply number's incoming-message
+      webhook from UAT to
+      `https://api.guildfordfoodbank.workers.dev/api/v1/webhooks/sms`. Keep its
+      HTTP Basic username and password exactly aligned with production's
+      `SMS_WEBHOOK_SECRET`, then send a controlled test reply and confirm it
+      appears in the production SMS inbox. A reply number has one webhook
+      destination, so UAT will stop receiving replies once this is changed.
 - [ ] A regular export of the production database, kept apart from Cloudflare's own Time Travel.
       Decided (Pete, 2026-10-12): nightly, from the 02:17 job, into a private EU-jurisdiction R2
       bucket on the charity account, each copy deleted after 30 days by a lifecycle rule. The

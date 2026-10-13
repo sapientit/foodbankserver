@@ -106,7 +106,6 @@ export const referrals = sqliteTable(
     status: text('status').$type<ReferralStatus>().notNull().default('active'),
     referredAt: text('referred_at').notNull(),
     cancelledAt: text('cancelled_at'),
-    cancelledReason: text('cancelled_reason'),
 
     /**
      * One line from the administrator who accepted or rejected this referral.
@@ -269,6 +268,19 @@ export const referrals = sqliteTable(
      * spreadsheet.
      */
     adminInfo: text('admin_info'),
+    /**
+     * The administrators' one line for whoever packs the bag — what the office
+     * needs the picker to know that the referral form does not ask.
+     *
+     * In this block for the reason `adminInfo` is: free text an administrator
+     * wrote about a household. Admin-only on the referral, but **read onto
+     * every parcel of this referral for a team lead too**, because it heads the
+     * Information for pickers on the screen and on the printed sheet. It is
+     * read live, not copied into the parcel at generation, so it is locked by
+     * the same rule that locks the rest of the referral. `INITIAL_SPEC1.txt`,
+     * `#Picking list`.
+     */
+    picklistAdmin: text('picklist_admin'),
     // =====================================================
 
     /**

@@ -1447,7 +1447,6 @@ describe('the collectionMethod backfill fallback', () => {
       status: 'active',
       referredAt: NOW,
       cancelledAt: null,
-      cancelledReason: null,
       reviewComment: null,
       reviewedByUserId: null,
       referrerOrganisation: 'Backfill Test Org',

@@ -48,11 +48,13 @@ export interface GenerateOptions {
    */
   readonly preferenceLines?: PreferenceLineSet;
   /**
-   * Pick-list information the client composed from the referral's answers.
+   * The parcel note for each referral that needs one — now only the
+   * `No longer stocked: …` line, worked out from the release the household
+   * answered.
    *
-   * Written onto parcels this call creates and nowhere else. An existing
-   * parcel's note is a snapshot the team leader may already have corrected, and
-   * overwriting it is precisely the failure this rule exists to prevent.
+   * Written onto parcels this call creates and nowhere else. A parcel's note
+   * is fixed at its creation and nothing changes it afterwards, so a
+   * reconciliation resending it must not either.
    */
   readonly pickListInformation?: PickListInformationSet;
   readonly existingPickList?: PickList;
@@ -302,9 +304,8 @@ export async function generatePickList(
       // Snapshots: amending the referral later must not change what was picked.
       adults: referral.adults,
       children: referral.children,
-      // Likewise a snapshot. Only a parcel being created gets one, which is
-      // what makes sending the whole session's information on every
-      // reconciliation safe for a note a team leader has since edited.
+      // Likewise a snapshot. Only a parcel being created gets one, so a
+      // reconciliation resending the session's notes leaves existing ones be.
       notes: notesByReferral.get(referral.id) ?? null,
       createdAt: now,
       updatedAt: now,

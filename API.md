@@ -230,7 +230,7 @@ Three roles. Use them for menus; **never for access control.**
 
 |                                                           | `admin` | `team_lead` | `fuel_admin` |
 | --------------------------------------------------------- | ------- | ----------- | ------------ |
-| Run a session: pick lists, printing, attendance           | ✅      | ✅          | ❌           |
+| Session Run Sheet: pick lists, printing, attendance       | ✅      | ✅          | ❌           |
 | Read sessions, stock, referrals                           | ✅      | ✅          | ❌           |
 | See the session list more than six days ahead             | ✅      | ❌          | ❌           |
 | The weekly stock take                                     | ✅      | ✅          | ❌           |
@@ -288,6 +288,11 @@ referral: `GET /referrals/{id}`, `PATCH /referrals/{id}`, and the accept,
 reject, review, cancel and copy routes. It is **absent from the `GET /referrals`
 list rows for an administrator too**, so do not build a list column from it —
 open the referral.
+
+**`picklistAdmin` follows `adminInfo` exactly on a referral** — admin-only, the
+same one-referral responses, absent from the list and from the search rows. A
+team lead receives it on the **parcel** instead (`Parcel.picklistAdmin`), which
+is the one place it goes beyond `adminInfo`: see **5i**.
 
 **`outcome` is optional for a different reason and is not admin-only.** A team
 lead receives it. It is on the same one-referral responses as `adminInfo` and
@@ -867,6 +872,14 @@ complete preserved answers map, and the note must not vanish with a page that
 never held it. Include `adminInfo` in that same `PATCH` when the note changed;
 leave the key out when it did not.
 
+**`picklistAdmin` is the administrators' one line for the picker**, amended the
+same way: a string sets it (trimmed, at most **80** characters), `null` clears
+it, omitting it leaves it, and **an empty string is a `400`**. It is locked with
+the rest of the referral — a `409` once the referral is cancelled or rejected
+or its session is confirmed. It is printed on the picking sheet, so the edit
+dialog should say so plainly: the server cannot stop the reason for referral
+being typed into it.
+
 **The referrer's own details are still refused**: `referrerName`,
 `referrerPhone`, `referrerOrganisation` and above all `referrerEmail`, which is
 what the accept-or-hold decision was made on. The body is strict, so sending one
@@ -946,8 +959,9 @@ form again.
 **What the copy carries:** the referee's name, date of birth, address, postcode
 and phone; `adults`, `children`, `householdSize`, `collectionMethod` (and the
 `isDelivery` it derives), `needsFuelHelp`;
-`reasonId`; `answers` whole; and the referrer's name, organisation, email and
-phone.
+`reasonId`; `answers` whole; `picklistAdmin`; and the referrer's name,
+organisation, email and phone. `re-refer` carries the original's
+`picklistAdmin` across too.
 
 **What it does not:** `status`, `sessionId`, `reviewComment`, `adminInfo`, and
 any parcel.
@@ -1130,7 +1144,7 @@ changes is that it comes back reading:
 Treat that as "this snapshot is retained, but the household is not part of this
 session any more". Concretely:
 
-- **Leave it off the Run a session client list**, or show it greyed with the
+- **Leave it off the Session Run Sheet client list**, or show it greyed with the
   cancellation plain — not as somebody still to be served.
 - **It is not pending attendance.** Do not include it in "everyone ticked off?"
   completion checks, and do not offer the attended / no-show buttons for it —
@@ -1158,6 +1172,16 @@ off the shelves and cannot be un-given, and cancelling afterwards would leave
 the parcel's account of the morning contradicting the referral's. So only a
 `pending` parcel ever becomes `cancelled` — not because a recorded outcome wins
 a race, but because the cancellation never happens.
+
+**There is no cancellation reason any more.** `POST /referrals/{id}/cancel`
+takes an optional `{ "adminInfo": string | null }` instead: show the existing
+administrators' note in the cancel dialog, editable, and send it back. It
+replaces the note **in the same write as the cancellation**, under exactly
+`ReferralAmend.adminInfo`'s rules (empty string `400`, `null` clears, omitted
+leaves it alone). A refused cancel — `404`, `409`, or a `400` for the body —
+writes nothing, note included. A repeat cancel of an already-cancelled referral
+returns it unchanged and **ignores** `adminInfo`. A `reason` key is discarded
+rather than refused, so an older client still cancels; stop sending it.
 
 **Gate the cancel button on `outcome` as well as `status`.** Two things an
 operator might have meant instead:
@@ -1394,8 +1418,8 @@ in the name, like "half a kilo counts as one unit", reaches the person packing
 the bag. There is no `category` on a line: the sheet is in shelf order.
 
 What is **on every sheet**: `pickNumber`, `refereeFirstName` /
-`refereeSurname`, and the parcel's `notes` — its pick-list information, as
-saved. The name used to be withheld on collections; it is now on all of them,
+`refereeSurname`, and the Information for pickers, which you compose — see
+**5i**. The name used to be withheld on collections; it is now on all of them,
 because the person carrying the bag has to hand it to somebody and a number does
 not do that.
 
@@ -1413,8 +1437,8 @@ What is deliberately **not** on a sheet:
   snake_case keys, none of which is a key in the real form, so it would have
   become `null` the day the form shipped. The preferences belong on the
   maintenance screen instead; see below. What a picker needs to be told about a
-  household reaches the sheet as the parcel's `notes`, which you compose — see
-  **5i**.
+  household reaches the sheet as the Information for pickers, which you compose
+  from the session's `Parcel` — see **5i**.
 
 ### Preferences on the maintenance screen
 
@@ -2117,7 +2141,7 @@ GET /api/v1/sessions/{sessionId}/referral-details
                          referrerPhone, pickNumber } ] }
 ```
 
-Admin **and team lead**, for the _Run a session_ screen. **You own the print
+Admin **and team lead**, for the _Session Run Sheet_ screen. **You own the print
 view**; this is the data behind it.
 
 **This is a contact list, not a listener sheet**, and the two must not be
@@ -2153,42 +2177,53 @@ all, not a sheet that has to line up against the picking sheets.
 
 ## 5i. Pick-list information
 
-The free text that goes beside a parcel and onto its printed sheet — allergies,
-what the household cannot eat, a preference somebody wrote out in their own
-words. It is `Parcel.notes`, which already existed; what is new is that you can
-now write it **at generation**, and that it holds 1,200 characters rather than 500.
+The Information for pickers — what whoever packs the bag has to be told about
+the household, beside the parcel on the Session Run Sheet and on its printed
+sheet. **You compose it every time you show or print it**, from three parts in
+this order, each on its own line and each left out when empty:
 
-### Sending it
+1. `Parcel.picklistAdmin` — the administrators' one line for the picker, the
+   referral's **current** value (see below);
+2. a `key: value` line for each of `Parcel.answers` that the release named by
+   `Parcel.formId` marks for pick-list information;
+3. `Parcel.notes`, which now holds **only** the `No longer stocked: …` line you
+   write at generation, or `null`.
 
-`POST /sessions/{sessionId}/pick-list` takes it in the same optional body as
-the preference lines, and independently of them:
+Nobody edits it: there is **no `PATCH /parcels/{id}` any more**. Every parcel
+generated before this change had its `notes` reset to `null`, because each held
+the old composed snapshot and would otherwise print its answers twice.
+
+A completed session's sheets still read as they were printed: the answers and
+`picklistAdmin` are both locked with the referral once its session is
+confirmed, and the note never changes.
+
+### `picklistAdmin` on the parcel
+
+Required and nullable on `Parcel`, and **given to a team lead as well as an
+administrator** — unlike `Referral.picklistAdmin` — because it heads the
+Information for pickers. It is read when the parcel is read, not copied at
+generation, so an administrator's change shows at once. It is not on
+`PrintParcel`: join each sheet to its session parcel by `pickNumber`, as you
+already do for `answers`.
+
+### Sending the note at generation
+
+`POST /sessions/{sessionId}/pick-list` takes `pickListInformation` in the same
+optional body as the preference lines, independently of them. Send an entry
+**only for a household whose release names stock that no longer resolves**,
+holding just that line:
 
 ```json
 {
-  "pickListInformation": [
-    {
-      "referralId": "…",
-      "notes": "Allergies: 2 people who are vegan.\nBeans: Kidney beans please."
-    }
-  ]
+  "pickListInformation": [{ "referralId": "…", "notes": "No longer stocked: Tinned peaches" }]
 }
 ```
 
-**You compose the text; the server stores it verbatim.** Which answers belong
-on a picking sheet is yours to know for exactly the reason preferences are —
-the server keeps the form's releases but never reads them. It never inspects an
-answer, never understands a question key, and does the labelling nowhere: send
-the finished words, labels and all.
-
-What the server does with them:
+What the server does with it:
 
 - Writes each entry onto the parcel **that call creates** for that referral,
-  inside the same atomic write as the parcel and its lines.
-- **Never touches an existing parcel's note.** Send the whole session's
-  information every time you generate or reconcile — an existing parcel is a
-  snapshot the team leader may already have corrected, and the correction wins.
-  A note about an allergy is the one thing that must not be quietly reverted by
-  a reconciliation.
+  inside the same atomic write as the parcel and its lines. **Never touches an
+  existing parcel's note**, whatever a later reconciliation sends.
 - A referral on the session that gets no parcel — cancelled, rejected, or
   already picked — is ignored rather than refused, the same ordinary race the
   preference lines tolerate.
@@ -2197,23 +2232,7 @@ What the server does with them:
   and the same detail key as a preference line.
 - The same referral twice is a `400`.
 - `notes` is trimmed, must not be empty once trimmed, and is capped at **1,200
-  characters**. To clear a note, use the PATCH below with `null`; do not send an
-  empty entry here.
-
-### Editing and printing it
-
-`PATCH /parcels/{id}` with `{ "notes": string | null }` is unchanged apart from
-the limit, which is now 1,200 to match generation — so a note created at
-generation can always be edited and put straight back. `null` clears it.
-
-Editable while the pick list is `draft` **and after `printed`**, on the same
-terms as the parcel's lines; `409` once the session is confirmed.
-
-The printed sheet carries `PrintParcel.notes` **as saved**, not the answers as
-they read today. Render the parcel's note; do not recompose it from
-`Parcel.answers` on the maintenance screen either, or a team leader's edit will
-appear to have been thrown away. `PrintParcel` still carries no `answers` and
-never the reason for referral — see **5**.
+  characters**. Leave a household out rather than sending an empty entry.
 
 ---
 
@@ -2278,7 +2297,7 @@ being reviewed to be in any particular `status`. Settled by Pete (closed
 Q49): a rejected, cancelled or confirmed-session referral can still be
 marked, since the screen is never offered against one in practice.
 
-### Derived value 1: the Run a session marker
+### Derived value 1: the Session Run Sheet marker
 
 `Parcel.firstTimeMarker`, on `GET /sessions/{sessionId}/pick-list` and
 `GET /pick-lists/{id}` — safe for a team lead, unlike `firstTimeReview`
@@ -2292,7 +2311,7 @@ itself:
 ### Derived value 2: the voucher instruction
 
 `Parcel.voucherInstruction`, on `GET /sessions/{sessionId}/pick-list` and
-`GET /pick-lists/{id}` — for the Run a session screen, alongside the marker
+`GET /pick-lists/{id}` — for the Session Run Sheet screen, alongside the marker
 above. **Worked out fresh on every read** — never stored on the parcel,
 never generated with the pick list, so a first-time-review decision made
 after the pick list already exists is reflected the next time the screen is

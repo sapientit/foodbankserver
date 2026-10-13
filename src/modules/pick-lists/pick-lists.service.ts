@@ -162,20 +162,6 @@ export function createPickListsService(deps: PickListsServiceDeps) {
     await repository.updateParcel(parcelId, { updatedAt: clock.nowIso() });
   }
 
-  async function setParcelNotes(parcelId: string, notes: string | null): Promise<Parcel> {
-    const parcel = await getParcel(parcelId);
-    await requireEditable(parcel.pickListId);
-
-    const updated = await repository.updateParcel(parcelId, {
-      notes,
-      updatedAt: clock.nowIso(),
-    });
-    if (updated === undefined) {
-      throw new NotFoundError('Parcel not found');
-    }
-    return updated;
-  }
-
   /**
    * Marks the checked parcel ready for printing and its attendance outcome.
    * Idempotent.
@@ -459,7 +445,6 @@ export function createPickListsService(deps: PickListsServiceDeps) {
     voucherContext,
     setLine,
     removeLine,
-    setParcelNotes,
     markParcelReviewed,
     markPrinted,
     stockRequirement,

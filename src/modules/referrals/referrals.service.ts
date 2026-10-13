@@ -744,7 +744,6 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
       status: authorisation.authorised ? 'active' : 'pending_review',
       referredAt: now,
       cancelledAt: null,
-      cancelledReason: null,
       reviewComment: null,
       reviewedByUserId: null,
       // Taken from the submission, because an unrecognised referrer has no row
@@ -1045,9 +1044,10 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
    * the authorisation decision was made on, and the rest is the record of who
    * sent the referral rather than a field to tidy up.
    *
-   * `adminInfo` — the administrators' own note about the household — is
-   * amended here too, and is the one field on this route that no referrer ever
-   * wrote. Sending a string sets it, `null` clears it, omitting it leaves it.
+   * `adminInfo` — the administrators' own note about the household — and
+   * `picklistAdmin` — their one line for the picker — are amended here too,
+   * and are the two fields on this route that no referrer ever wrote. Sending
+   * a string sets one, `null` clears it, omitting it leaves it.
    *
    * Only fields actually supplied are written, so a one-field correction stays
    * a one-field correction. `answers` is the exception and replaces the set
@@ -1151,6 +1151,10 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     // wholesale, and a note the office wrote must not be lost because the
     // client re-sent a form page without it.
     assign('adminInfo', input.adminInfo, 'adminInfo');
+    // The picker's line is the office's too, and amended the same way. It is
+    // under this route's lock on purpose: a parcel reads it live, so a sheet
+    // printed for a confirmed session must not change after the fact.
+    assign('picklistAdmin', input.picklistAdmin, 'picklistAdmin');
 
     const updated = await repository.update(referral.id, patch);
     if (updated === undefined) {
@@ -1203,16 +1207,23 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
    * household another chance" copies the referral, leaving the no show where
    * it happened.
    *
+   * **There is no cancellation reason.** Why a household was cancelled goes
+   * into the administrators' note, which the cancel dialog shows for editing
+   * and which is saved by the same statement that cancels — `INITIAL_SPEC1.txt`,
+   * `#Referral maintenance`.
+   *
    * The three writes go in **one batch**. Without it a failure between them
    * leaves a cancelled referral with a live parcel, which is exactly the state
    * this exists to remove — and nothing would say so.
    */
   async function cancel(
     referral: Referral,
-    reason: string | null,
+    adminInfo: string | null | undefined,
     actor: { kind: 'user'; userId: string | null },
   ): Promise<Referral> {
-    if (referral.status === 'cancelled') return referral; // Idempotent.
+    // Idempotent, and a repeat does not write the note: a cancelled referral
+    // is closed to amendment, and a second press is not a way round that.
+    if (referral.status === 'cancelled') return referral;
     // Same guard as amending and moving: a rejection is not a cancellation, a
     // forgotten household is not one waiting for food, and a confirmed session
     // is closed to all three.
@@ -1229,11 +1240,15 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     }
 
     const now = clock.nowIso();
+    // The administrators' note rides on the same conditioned `UPDATE` as the
+    // status, so a cancellation that is refused writes no note either — a
+    // note saying why a household was cancelled must never be left on one
+    // that was not. Omitted, it is not in the patch and the note is untouched.
     const patch = {
       status: 'cancelled',
       cancelledAt: now,
-      cancelledReason: reason,
       updatedAt: now,
+      ...(adminInfo === undefined ? {} : { adminInfo }),
     } as const;
 
     const [cancelled] = await db.batch([
@@ -1274,8 +1289,8 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
 
     logger.info('referral cancelled', { referralId: referral.id });
     // Read back rather than merging the patch onto the referral as it was
-    // loaded, the same way `submit` ends. The `UPDATE` names only the four
-    // cancellation columns, so an amendment that landed in the meantime is not
+    // loaded, the same way `submit` ends. The `UPDATE` names only the
+    // cancellation columns and the note, so an amendment that landed in the meantime is not
     // clobbered — but merging locally would not show it either, and would hand
     // the admin who cancelled a stale address. This also restores the
     // `NotFoundError` that `.returning()` used to give when nothing matched.
@@ -1487,7 +1502,6 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
       status: 'reviewed',
       referredAt: now,
       cancelledAt: null,
-      cancelledReason: null,
       // Neither comes across: the comment explains a decision made about the
       // original, and no review has taken place on this one.
       reviewComment: null,
@@ -1524,6 +1538,10 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
       // **original's** submission date, in London, which is how somebody
       // reading this recognises which referral it means.
       adminInfo: `Copied from referral dated ${instantToLondonWallClock(referral.referredAt).date}`,
+      // Unlike the note above, the picker's line does come across: it says
+      // how to pack for this household, which a copy has not changed.
+      // `INITIAL_SPEC1.txt`, `#Copying a referral`.
+      picklistAdmin: referral.picklistAdmin,
       // The copy has not been texted about its own session, whatever the
       // original was told about its one.
       smsReminderSentAt: null,
@@ -1604,7 +1622,6 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
       status: 'reviewed',
       referredAt: now,
       cancelledAt: null,
-      cancelledReason: null,
       reviewComment: null,
       reviewedByUserId: actor.userId,
       referrerOrganisation: source.referrerOrganisation,
@@ -1629,6 +1646,8 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
       answersJson: JSON.stringify(input.answers),
       formId,
       adminInfo: `Copied from referral dated ${instantToLondonWallClock(source.referredAt).date}`,
+      // Carried across as `copy` carries it: it is the office's, not the form's.
+      picklistAdmin: source.picklistAdmin,
       smsReminderSentAt: null,
       createdByUserId: actor.userId,
       createdAt: now,
