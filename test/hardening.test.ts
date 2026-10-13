@@ -337,23 +337,48 @@ describe('security headers', () => {
   });
 });
 
+/**
+ * Runs a flood inside a single rate-limit window, and only accepts a run that
+ * stayed in one.
+ *
+ * The local limiter counts in fixed sixty-second windows of the **wall
+ * clock** and clears every bucket when a new one starts; the injected `Clock`
+ * does not reach it. A flood that straddles a minute boundary is split across
+ * two buckets and may never reach the limit, so such a run proves nothing
+ * either way — it is thrown away and repeated from a fresh address, so the
+ * requests that landed in the new window do not count against the retry.
+ * Assert on what this returns, never inside `run`.
+ */
+async function inOneLimiterWindow<T>(run: (attempt: number) => Promise<T>): Promise<T> {
+  const windowOf = (): number => Math.floor(Date.now() / 60_000);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const before = windowOf();
+    const result = await run(attempt);
+    if (windowOf() === before) return result;
+  }
+  throw new Error('Every attempt crossed a rate-limit window boundary');
+}
+
 describe('rate limiting the open endpoints', () => {
   it('cuts off a flood of referrals from one address', async () => {
     // The limiter is 5 a minute for submissions. A real referrer submits once;
     // anything near this from a single address is a bot or a bug. Fixed
     // clock so the submissions land inside the booking cutoff for
     // `setUpReferralWorld`'s hardcoded session date.
-    const testApp = buildTestApp({
-      clientIp: '203.0.113.9',
-      clock: fixedClock('2026-08-04T09:00:00.000Z'),
-    });
-    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
-    const world = await setUpReferralWorld(testApp, accessToken);
+    const statuses = await inOneLimiterWindow(async (attempt) => {
+      const testApp = buildTestApp({
+        clientIp: `203.0.113.${String(9 + 100 * attempt)}`,
+        clock: fixedClock('2026-08-04T09:00:00.000Z'),
+      });
+      const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+      const world = await setUpReferralWorld(testApp, accessToken);
 
-    const statuses: number[] = [];
-    for (let i = 0; i < 8; i++) {
-      statuses.push((await submitReferral(testApp, world)).status);
-    }
+      const seen: number[] = [];
+      for (let i = 0; i < 8; i++) {
+        seen.push((await submitReferral(testApp, world)).status);
+      }
+      return seen;
+    });
 
     expect(statuses).toContain(429);
     // Everything before the cut-off still worked, so this throttles rather
@@ -382,42 +407,52 @@ describe('rate limiting the open endpoints', () => {
   });
 
   it('never trusts x-forwarded-for, which a client controls', async () => {
-    const testApp = buildTestApp({ clientIp: '203.0.113.12' });
-    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
-    const world = await setUpReferralWorld(testApp, accessToken);
+    // Fixed clock, same reason as above: a submission the limiter lets
+    // through is then a 201, not a 409 for a session long closed.
+    const status = await inOneLimiterWindow(async (attempt) => {
+      const testApp = buildTestApp({
+        clientIp: `203.0.113.${String(12 + 100 * attempt)}`,
+        clock: fixedClock('2026-08-04T09:00:00.000Z'),
+      });
+      const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+      const world = await setUpReferralWorld(testApp, accessToken);
 
-    for (let i = 0; i < 8; i++) await submitReferral(testApp, world);
+      for (let i = 0; i < 8; i++) await submitReferral(testApp, world);
 
-    // Spoofing a fresh forwarded-for must not reset the bucket.
-    const response = await testApp.request('/api/v1/public/referrals', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-forwarded-for': '198.51.100.1' },
-      body: JSON.stringify(submission(world)),
+      // Spoofing a fresh forwarded-for must not reset the bucket.
+      const response = await testApp.request('/api/v1/public/referrals', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-forwarded-for': '198.51.100.1' },
+        body: JSON.stringify(submission(world)),
+      });
+      return response.status;
     });
 
-    expect(response.status).toBe(429);
+    expect(status).toBe(429);
   });
 
   it('cuts off a flood of sign-in attempts from one address', async () => {
     // 60 a minute. Unknown addresses, so every attempt is a 401 until the
     // limiter takes over — refusal counts against the bucket just the same.
-    const flooder = buildTestApp({ clientIp: '203.0.113.13' });
-    const attempt = (testApp: typeof flooder) =>
-      testApp.request('/api/v1/auth/dev-login', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ email: 'nobody@foodbank.org' }),
-      });
-
-    const statuses: number[] = [];
-    for (let i = 0; i < 70; i++) statuses.push((await attempt(flooder)).status);
+    const { statuses, refreshStatus } = await inOneLimiterWindow(async (attempt) => {
+      const flooder = buildTestApp({ clientIp: `203.0.113.${String(13 + 100 * attempt)}` });
+      const seen: number[] = [];
+      for (let i = 0; i < 70; i++) {
+        const response = await flooder.request('/api/v1/auth/dev-login', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ email: 'nobody@foodbank.org' }),
+        });
+        seen.push(response.status);
+      }
+      // Refresh shares the bucket: a flooder cannot switch routes to reset it.
+      const refresh = await flooder.request('/api/v1/auth/refresh', { method: 'POST' });
+      return { statuses: seen, refreshStatus: refresh.status };
+    });
 
     expect(statuses.slice(0, 10).every((status) => status === 401)).toBe(true);
     expect(statuses).toContain(429);
-
-    // Refresh shares the bucket: a flooder cannot switch routes to reset it.
-    const refresh = await flooder.request('/api/v1/auth/refresh', { method: 'POST' });
-    expect(refresh.status).toBe(429);
+    expect(refreshStatus).toBe(429);
 
     // Another address, same moment, still signs in.
     await expect(
