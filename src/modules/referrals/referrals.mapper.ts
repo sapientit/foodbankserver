@@ -314,7 +314,7 @@ export function toReceiptResponse(referral: Referral): ReferralReceiptResponse {
  * "what went wrong": the listener is the person actually talking to the
  * household, so they see whether it is new and what to do about a Christmas
  * voucher — `INITIAL_SPEC1.txt`, `#Listener sheet`. They are the **same two
- * derived enums** `Parcel` carries for the Session Run Sheet screen, with the
+ * derived enums** `Parcel` carries for the Client List screen, with the
  * same values and the same guarantee: no historic session date, nothing else
  * about the referral. The client renders any wording.
  *

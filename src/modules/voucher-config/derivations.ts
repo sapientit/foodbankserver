@@ -55,7 +55,7 @@ export function voucherInstructionFor(
 export type FirstTimeMarker = 'first_time' | 'admin';
 
 /**
- * What a team leader sees on the Session Run Sheet screen — never the historic
+ * What a team leader sees on the Client List screen — never the historic
  * date, never the raw status. `no_previous_referral` reads `first_time`,
  * `unreviewed` (or a referral this couldn't be determined for at all) reads
  * `admin`, and a recorded previous-session date carries no marker at all.

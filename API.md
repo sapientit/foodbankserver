@@ -230,8 +230,8 @@ Three roles. Use them for menus; **never for access control.**
 
 |                                                           | `admin` | `team_lead` | `fuel_admin` |
 | --------------------------------------------------------- | ------- | ----------- | ------------ |
-| Session Run Sheet: pick lists, printing, attendance       | ✅      | ✅          | ❌           |
-| Read sessions, stock, referrals                           | ✅      | ✅          | ❌           |
+| Client List: pick lists, printing, attendance             | ✅      | ✅          | ❌           |
+| Read sessions, stock, referrals (the Run Sheet)           | ✅      | ✅          | ❌           |
 | See the session list more than six days ahead             | ✅      | ❌          | ❌           |
 | The weekly stock take                                     | ✅      | ✅          | ❌           |
 | Create or amend sessions and referrals                    | ✅      | ❌          | ❌           |
@@ -1144,7 +1144,7 @@ changes is that it comes back reading:
 Treat that as "this snapshot is retained, but the household is not part of this
 session any more". Concretely:
 
-- **Leave it off the Session Run Sheet client list**, or show it greyed with the
+- **Leave it off the Client List**, or show it greyed with the
   cancellation plain — not as somebody still to be served.
 - **It is not pending attendance.** Do not include it in "everyone ticked off?"
   completion checks, and do not offer the attended / no-show buttons for it —
@@ -2141,7 +2141,7 @@ GET /api/v1/sessions/{sessionId}/referral-details
                          referrerPhone, pickNumber } ] }
 ```
 
-Admin **and team lead**, for the _Session Run Sheet_ screen. **You own the print
+Admin **and team lead**, for the _Client List_ screen. **You own the print
 view**; this is the data behind it.
 
 **This is a contact list, not a listener sheet**, and the two must not be
@@ -2178,7 +2178,7 @@ all, not a sheet that has to line up against the picking sheets.
 ## 5i. Pick-list information
 
 The Information for pickers — what whoever packs the bag has to be told about
-the household, beside the parcel on the Session Run Sheet and on its printed
+the household, beside the parcel on the Client List and on its printed
 sheet. **You compose it every time you show or print it**, from three parts in
 this order, each on its own line and each left out when empty:
 
@@ -2297,7 +2297,7 @@ being reviewed to be in any particular `status`. Settled by Pete (closed
 Q49): a rejected, cancelled or confirmed-session referral can still be
 marked, since the screen is never offered against one in practice.
 
-### Derived value 1: the Session Run Sheet marker
+### Derived value 1: the Client List marker
 
 `Parcel.firstTimeMarker`, on `GET /sessions/{sessionId}/pick-list` and
 `GET /pick-lists/{id}` — safe for a team lead, unlike `firstTimeReview`
@@ -2311,7 +2311,7 @@ itself:
 ### Derived value 2: the voucher instruction
 
 `Parcel.voucherInstruction`, on `GET /sessions/{sessionId}/pick-list` and
-`GET /pick-lists/{id}` — for the Session Run Sheet screen, alongside the marker
+`GET /pick-lists/{id}` — for the Client List screen, alongside the marker
 above. **Worked out fresh on every read** — never stored on the parcel,
 never generated with the pick list, so a first-time-review decision made
 after the pick list already exists is reflected the next time the screen is

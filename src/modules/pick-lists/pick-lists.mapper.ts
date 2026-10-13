@@ -82,7 +82,7 @@ export interface ParcelResponse {
    * and given to a team lead as well as an administrator.
    *
    * The referral withholds it from a team lead; the parcel does not, because
-   * it heads the Information for pickers on the Session Run Sheet and on the
+   * it heads the Information for pickers on the Client List and on the
    * printed sheet, and a team lead runs both. It is the administrator's line
    * for the picker and says so where it is typed — which is the only thing
    * keeping the reason for referral off a printed sheet through this field.
@@ -114,14 +114,14 @@ export interface ParcelResponse {
    * `first_time`, `admin` or no marker at all — never the historic date or
    * anything else about the referral. `INITIAL_SPEC1.txt`, `#Christmas
    * voucher and first-time selection`: this is what tells a team leader on
-   * the Session Run Sheet screen whether a household is new. Safe for a team
+   * the Client List screen whether a household is new. Safe for a team
    * lead, unlike the referral's own `firstTimeReview`, which stays
    * admin-only — see `derivations.ts#firstTimeMarkerFor`.
    */
   readonly firstTimeMarker: FirstTimeMarker | null;
   /**
    * The one voucher instruction for this household, shown to the team leader
-   * on the Session Run Sheet screen. `INITIAL_SPEC1.txt`, `#Christmas voucher and
+   * on the Client List screen. `INITIAL_SPEC1.txt`, `#Christmas voucher and
    * first-time selection`.
    *
    * Calculated fresh on every read, never stored on the parcel and never
@@ -209,7 +209,7 @@ export function toParcelResponse(
  *   is in `lines`.
  * - **No voucher instruction.** The Christmas-voucher decision is acted on at
  *   the session, not off the carried sheet, so it rides on
- *   `ParcelResponse.voucherInstruction` for the Session Run Sheet screen and is
+ *   `ParcelResponse.voucherInstruction` for the Client List screen and is
  *   deliberately absent here.
  */
 export interface PrintParcelResponse {

@@ -288,7 +288,7 @@ leaving exactly the state this removes with nothing recording it.
 voucher range and the referral's `firstTimeReviewStatus`/`firstTimeReviewDate` fresh on every call to
 `GET /sessions/{sessionId}/pick-list` and `GET /pick-lists/{id}` — nothing is written onto `parcels`
 and nothing is computed at generation. An administrator may make the first-time-review decision after
-a pick list already exists, and the spec is explicit that the Session Run Sheet screen must reflect the
+a pick list already exists, and the spec is explicit that the Client List screen must reflect the
 decision as it stands **now**, not as it stood when the list was made. It is **not** on
 `PrintParcel`: the voucher is handed over at the session, not off the sheet carried round the hall.
 `Parcel.firstTimeMarker` (`derivations.ts#firstTimeMarkerFor`) is the same kind of derivation for the
@@ -299,7 +299,7 @@ admin-only.
 `ListenerSheetHousehold` carries `firstTimeMarker` and `voucherInstruction` too — the **same two
 enums** with the same values, for the listener, who is the person actually talking to the household.
 `referrals.service.ts#listenerSheet` reads the voucher-config row and calls the same
-`firstTimeMarkerFor` / `voucherInstructionFor`, so the sheet and the Session Run Sheet screen can never
+`firstTimeMarkerFor` / `voucherInstructionFor`, so the sheet and the Client List screen can never
 disagree. No new derivation, and nothing exposed that the two parcel fields do not already expose.
 
 **`referrals.first_time_review_status` carries no `CHECK` constraint**, the same deliberate omission

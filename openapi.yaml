@@ -1089,7 +1089,7 @@ paths:
 
         The only thing beyond "what went wrong" is `firstTimeMarker` and
         `voucherInstruction` — the **same two derived enums** `Parcel`
-        carries for the Session Run Sheet screen, with the same values. The
+        carries for the Client List screen, with the same values. The
         listener is the one talking to the household, so they see whether it
         is new and what to do about a Christmas voucher. Both carry no
         historic session date and nothing else about the referral.
@@ -1158,7 +1158,7 @@ paths:
       tags: [Referrals]
       summary: Contact details for every household on a session
       description: |
-        For the **Session Run Sheet** screen, open to a team leader as well as an
+        For the **Client List** screen, open to a team leader as well as an
         administrator. The client owns the print view; this is the data behind
         it.
 
@@ -7242,7 +7242,7 @@ components:
 
             **Given to a team lead as well as an administrator**, unlike
             `Referral.picklistAdmin`, because it heads the Information for
-            pickers on the Session Run Sheet and on the printed sheet. It is
+            pickers on the Client List and on the printed sheet. It is
             printed, so it must never carry the reason for referral; the server
             cannot tell, and the only guard is the administrator typing it —
             say so where it is typed.
@@ -7279,7 +7279,7 @@ components:
           type: [string, 'null']
           enum: [first_time, admin, null]
           description: >
-            What the Session Run Sheet screen shows for whether this household is
+            What the Client List screen shows for whether this household is
             new — `INITIAL_SPEC1.txt`, `#Christmas voucher and first-time
             selection`. `first_time` when the referral's first-time review
             recorded no previous referral, `admin` while that review is still
@@ -7292,7 +7292,7 @@ components:
           enum: [provide_voucher, already_received, refer_to_admin, null]
           description: >
             The one Christmas-voucher instruction for this household, shown to
-            the team leader on the Session Run Sheet screen — `INITIAL_SPEC1.txt`,
+            the team leader on the Client List screen — `INITIAL_SPEC1.txt`,
             `#Christmas voucher and first-time selection`. **Calculated fresh
             on every read, never stored on the parcel or generated with the
             pick list** — an administrator may make the first-time-review
@@ -7375,8 +7375,8 @@ components:
           type: array
           items: { $ref: '#/components/schemas/ParcelLine' }
       # No `voucherInstruction`: the Christmas voucher is acted on at the
-      # session, so it rides on `Parcel.voucherInstruction` for the Session
-      # Run Sheet screen and is deliberately absent from the carried sheet.
+      # session, so it rides on `Parcel.voucherInstruction` for the Client
+      # List screen and is deliberately absent from the carried sheet.
 
     # ---- Admin setup: referrers and reasons ----
     # All mapped by exhaustive object literals, so every field is required.
