@@ -6,6 +6,9 @@ export default tseslint.config(
   {
     ignores: [
       'coverage/**',
+      // Wrangler build output is deployed as-is and is outside tsconfig, so it
+      // must not be rediscovered by the type-aware source lint.
+      'dist/**',
       'node_modules/**',
       '.wrangler/**',
       'migrations/**',
