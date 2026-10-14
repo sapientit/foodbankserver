@@ -1336,7 +1336,7 @@ Two things worth knowing when you build a report:
 
 ```
 GET /sessions/{sessionId}/stock-requirement?order=shelf|category
-  → { pickListId, items: [{ …StockLevel, requiredQuantity, shortfall }] }
+  → { pickListId, items: [{ …StockLevel, requiredQuantity, earlierSessionsQuantity, shortfall }] }
 ```
 
 **Only the items the session actually needs.** Each line is a stock item one or
@@ -1345,9 +1345,21 @@ the two numbers this screen exists for. An item nothing on that morning needs is
 absent, not a nought — the list is as long as the work is, and no longer.
 
 - `requiredQuantity` — the total across the session's parcels.
+- `earlierSessionsQuantity` — what earlier sessions the same day are still going
+  to take first (back-to-back sessions). `0` when there are none.
 - `quantityOnHand` — the level now, summed from the ledger. **May be negative.**
-- `shortfall` — `requiredQuantity - quantityOnHand` floored at zero, so a
-  surplus is `0` and anything above zero is the number you cannot find.
+- `shortfall` — `requiredQuantity + earlierSessionsQuantity - quantityOnHand`
+  floored at zero, so a surplus is `0` and anything above zero is the number you
+  cannot find.
+
+**Earlier sessions the same day.** A session on the same date with a strictly
+earlier start time, not cancelled, contributes the lines of its parcels that
+have **no attendance outcome yet** — an attended parcel's stock has already left
+`quantityOnHand`, a no-show took nothing, a cancelled one is not picked. Those
+sessions are not gated on review and their `-1` lines are left out, so treat this
+figure as a prompt to check the shelf, not an exact count. It only raises items
+this session needs; nothing is listed just because an earlier session needs it.
+A session starting at the same time, or on an earlier day, does not count.
 
 **`409` until every parcel has been reviewed** — the same gate as
 `GET /pick-lists/{id}/print`, and a cancelled parcel is not waited for. An

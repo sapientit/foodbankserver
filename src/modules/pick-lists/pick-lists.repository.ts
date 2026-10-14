@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, inArray, lte, min, ne, sql, sum } from 'drizzle-orm';
+import { and, asc, eq, gte, inArray, lt, lte, min, ne, sql, sum } from 'drizzle-orm';
 import type { Database } from '../../db/client.ts';
 import { expectAtMostOne } from '../../db/expect.ts';
 import {
@@ -201,6 +201,62 @@ export function createPickListsRepository(db: Database) {
           and(
             inArray(parcels.pickListId, openPickLists),
             ne(parcels.attendance, 'cancelled'),
+            ne(parcelLines.quantity, NEEDS_ATTENTION_QUANTITY),
+          ),
+        )
+        .groupBy(parcelLines.stockItemId);
+
+      return rows.map((row) => ({
+        stockItemId: row.stockItemId,
+        // `SUM` comes back as a string from D1.
+        requiredQuantity: Number(row.required ?? 0),
+      }));
+    },
+
+    /**
+     * What earlier sessions the same day are still going to take off the
+     * shelves — the back-to-back part of the per-session comparison,
+     * `INITIAL_SPEC1.txt`, the paragraph beginning "Sometimes - over
+     * Christmas".
+     *
+     * Only `pending` parcels: an attended one has already issued its stock
+     * into the ledger, so counting it would count it twice; a no-show's
+     * movements were deleted; a cancelled one is not picked. A `-1` is left
+     * out with `ne` rather than refused — these sessions are not gated on
+     * review, and the figure is a prompt to look at the shelf, not a count.
+     *
+     * `startTime` is compared as text: it is validated `HH:MM` on the way in,
+     * so string order is time order. Strictly earlier — a session at the same
+     * time runs alongside, not before. Same nested-`IN` shape as
+     * `sumRequiredUpTo`, for the same reason.
+     */
+    async sumPendingEarlierSameDay(
+      sessionDate: string,
+      startTime: string,
+    ): Promise<{ stockItemId: string; requiredQuantity: number }[]> {
+      const earlierPickLists = db
+        .select({ id: pickLists.id })
+        .from(pickLists)
+        .innerJoin(sessions, eq(sessions.id, pickLists.sessionId))
+        .where(
+          and(
+            eq(sessions.sessionDate, sessionDate),
+            lt(sessions.startTime, startTime),
+            ne(sessions.status, 'cancelled'),
+          ),
+        );
+
+      const rows = await db
+        .select({
+          stockItemId: parcelLines.stockItemId,
+          required: sum(parcelLines.quantity),
+        })
+        .from(parcelLines)
+        .innerJoin(parcels, eq(parcels.id, parcelLines.parcelId))
+        .where(
+          and(
+            inArray(parcels.pickListId, earlierPickLists),
+            eq(parcels.attendance, 'pending'),
             ne(parcelLines.quantity, NEEDS_ATTENTION_QUANTITY),
           ),
         )

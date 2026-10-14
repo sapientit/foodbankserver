@@ -268,6 +268,7 @@ export interface StockRequirementResponse {
   readonly shelfNumber: string;
   readonly isActive: boolean;
   readonly requiredQuantity: number;
+  readonly earlierSessionsQuantity: number;
   readonly quantityOnHand: number;
   readonly shortfall: number;
 }
@@ -281,6 +282,7 @@ export function toStockRequirementResponse(line: StockRequirementLine): StockReq
     shelfNumber: line.item.shelfNumber,
     isActive: line.item.isActive === 1,
     requiredQuantity: line.requiredQuantity,
+    earlierSessionsQuantity: line.earlierSessionsQuantity,
     quantityOnHand: line.quantityOnHand,
     shortfall: line.shortfall,
   };

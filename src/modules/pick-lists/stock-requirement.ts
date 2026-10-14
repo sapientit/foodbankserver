@@ -3,6 +3,11 @@ import type { StockItem } from '../../db/schema/stock.ts';
 /**
  * What one stock item costs a session, beside what is on the shelf for it.
  *
+ * `earlierSessionsQuantity` is what earlier sessions the same day are still
+ * going to take off that shelf first — back-to-back sessions over Christmas.
+ * Kept apart from `requiredQuantity` so a team leader can see why a shortage
+ * appears that this session alone does not explain.
+ *
  * `shortfall` is the number that is missing and never negative: a surplus is
  * not a shortfall, and a screen highlighting "not enough" must not have to
  * work out which sign means trouble.
@@ -10,6 +15,7 @@ import type { StockItem } from '../../db/schema/stock.ts';
 export interface StockRequirementLine {
   readonly item: StockItem;
   readonly requiredQuantity: number;
+  readonly earlierSessionsQuantity: number;
   readonly quantityOnHand: number;
   readonly shortfall: number;
 }
@@ -23,21 +29,27 @@ export interface StockRequirementLine {
  * client. `levels` must be the *whole* catalogue, inactive items included — an
  * item deactivated after generation is still sitting in parcels and still has
  * to be picked, and leaving it out would silently understate the session.
+ *
+ * `earlierByItem` only ever adds to an item this session needs: an item only
+ * an earlier session calls for belongs on that session's comparison.
  */
 export function stockRequirementLines(
   levels: readonly { item: StockItem; quantityOnHand: number }[],
   requiredByItem: ReadonlyMap<string, number>,
+  earlierByItem: ReadonlyMap<string, number>,
 ): StockRequirementLine[] {
   return levels.flatMap((level) => {
     const requiredQuantity = requiredByItem.get(level.item.id);
     if (requiredQuantity === undefined) return [];
+    const earlierSessionsQuantity = earlierByItem.get(level.item.id) ?? 0;
 
     return [
       {
         item: level.item,
         requiredQuantity,
+        earlierSessionsQuantity,
         quantityOnHand: level.quantityOnHand,
-        shortfall: Math.max(0, requiredQuantity - level.quantityOnHand),
+        shortfall: Math.max(0, requiredQuantity + earlierSessionsQuantity - level.quantityOnHand),
       },
     ];
   });

@@ -51,6 +51,7 @@ interface StockRequirementItem {
   readonly shelfNumber: string;
   readonly isActive: boolean;
   readonly requiredQuantity: number;
+  readonly earlierSessionsQuantity: number;
   readonly quantityOnHand: number;
   readonly shortfall: number;
 }
@@ -89,6 +90,35 @@ async function createItem(
     method: 'POST',
     headers: json(token),
     body: JSON.stringify({ name, category, shelfNumber }),
+  });
+  expect(response.status).toBe(201);
+  const { id }: { id: string } = await response.json();
+  return id;
+}
+
+/**
+ * A second session, on the same date as `setUpReferralWorld`'s own
+ * (`2026-08-11`) unless told otherwise, so tests can build the back-to-back
+ * pairs `INITIAL_SPEC1.txt` describes — "two sessions run back to back on the
+ * same day". Capacity and duration are irrelevant to every test that uses
+ * this, so they are fixed rather than threaded through as parameters.
+ */
+async function createSession(
+  testApp: TestApp,
+  token: string,
+  overrides: { sessionDate?: string; startTime?: string } = {},
+): Promise<string> {
+  const response = await testApp.request('/api/v1/sessions', {
+    method: 'POST',
+    headers: json(token),
+    body: JSON.stringify({
+      sessionDate: overrides.sessionDate ?? '2026-08-11',
+      startTime: overrides.startTime ?? '13:00',
+      durationMinutes: 120,
+      location: 'Church Hall',
+      capacity: 25,
+      deliveryCapacity: 0,
+    }),
   });
   expect(response.status).toBe(201);
   const { id }: { id: string } = await response.json();
@@ -209,6 +239,198 @@ describe('the required quantity', () => {
     expect(beans?.requiredQuantity).toBe(2);
     expect(beans?.quantityOnHand).toBe(-2);
     expect(beans?.shortfall).toBe(4);
+  });
+});
+
+describe('earlier sessions the same day', () => {
+  // `INITIAL_SPEC1.txt`, the paragraph beginning "Sometimes - over Christmas
+  // especially": a later session's comparison also counts what an earlier
+  // session the same day is still going to take off the shelf.
+
+  it('adds a pending earlier parcel to earlierSessionsQuantity and raises the shortfall', async () => {
+    const { testApp, token, world: w } = await world();
+    const earlierSessionId = w.sessionId; // 10:00
+    const laterSessionId = await createSession(testApp, token, { startTime: '13:00' });
+
+    // Earlier session: one household, left pending and unreviewed — earlier
+    // sessions carry no review gate.
+    await submitReferral(testApp, w, { adults: 1, children: 0 }); // Beans x2
+    await generatePickList(testApp, token, earlierSessionId);
+
+    // Later session: the one we ask about, fully reviewed as its own gates require.
+    const laterWorld = { ...w, sessionId: laterSessionId };
+    await submitReferral(testApp, laterWorld, { adults: 1, children: 0 }); // Beans x2
+    const { id: laterPickListId } = await generatePickList(testApp, token, laterSessionId);
+    await reviewEveryParcel(testApp, token, laterPickListId);
+
+    const { items } = await stockRequirement(testApp, token, laterSessionId);
+    const beans = items.find((item) => item.name === 'Beans');
+
+    // requiredQuantity 2 (this session) + earlierSessionsQuantity 2 (the
+    // 10:00 session's still-pending household) against quantityOnHand 0.
+    expect(beans).toMatchObject({
+      requiredQuantity: 2,
+      earlierSessionsQuantity: 2,
+      quantityOnHand: 0,
+      shortfall: 4,
+    });
+  });
+
+  it('counts nothing for an earlier attended, no-show or cancelled parcel', async () => {
+    const { testApp, token, world: w } = await world();
+    const earlierSessionId = w.sessionId; // 10:00
+    const laterSessionId = await createSession(testApp, token, { startTime: '13:00' });
+
+    const attended = await submitReferral(testApp, w, { adults: 1, children: 0 });
+    const noShow = await submitReferral(testApp, w, { adults: 1, children: 0 });
+    const cancelled = await submitReferral(testApp, w, { adults: 1, children: 0 });
+
+    const { id: earlierPickListId } = await generatePickList(testApp, token, earlierSessionId);
+    await reviewEveryParcel(testApp, token, earlierPickListId);
+    const { parcels: earlierParcels } = await readPickList(testApp, token, earlierPickListId);
+    const parcelFor = (referralId: string) =>
+      earlierParcels.find((parcel) => parcel.referralId === referralId)?.id ?? '';
+
+    await testApp.request(`/api/v1/parcels/${parcelFor(attended.id)}/attendance`, {
+      method: 'POST',
+      headers: json(token),
+      body: JSON.stringify({ attendance: 'attended' }),
+    });
+    await testApp.request(`/api/v1/parcels/${parcelFor(noShow.id)}/attendance`, {
+      method: 'POST',
+      headers: json(token),
+      body: JSON.stringify({ attendance: 'no_show' }),
+    });
+    const cancelledResponse = await testApp.request(`/api/v1/referrals/${cancelled.id}/cancel`, {
+      method: 'POST',
+      headers: authHeaders(token),
+    });
+    expect(cancelledResponse.status).toBe(200);
+
+    const laterWorld = { ...w, sessionId: laterSessionId };
+    await submitReferral(testApp, laterWorld, { adults: 1, children: 0 }); // Beans x2
+    const { id: laterPickListId } = await generatePickList(testApp, token, laterSessionId);
+    await reviewEveryParcel(testApp, token, laterPickListId);
+
+    const { items } = await stockRequirement(testApp, token, laterSessionId);
+    const beans = items.find((item) => item.name === 'Beans');
+
+    // None of the three contribute: attended has already left the shelf (hence
+    // quantityOnHand -2, not counted again here), no-show took nothing, and
+    // cancelled is not coming.
+    expect(beans).toMatchObject({
+      requiredQuantity: 2,
+      earlierSessionsQuantity: 0,
+      quantityOnHand: -2,
+      shortfall: 4,
+    });
+  });
+
+  it('excludes an earlier needs-attention line, and an unreviewed earlier parcel does not block the answer', async () => {
+    const { testApp, token, world: w } = await world();
+    const earlierSessionId = w.sessionId; // 10:00
+    const laterSessionId = await createSession(testApp, token, { startTime: '13:00' });
+
+    const earlierReferral = await submitReferral(testApp, w, { adults: 1, children: 0 });
+    await generatePickList(testApp, token, earlierSessionId, [
+      {
+        referralId: earlierReferral.id,
+        lines: [{ stockItemId: w.stockItems.Beans, quantity: NEEDS_ATTENTION_QUANTITY }],
+      },
+    ]);
+    // Left exactly as generation produced it: unreviewed, and still holding a
+    // `-1` nobody has settled. Nothing about this session's own gates applies
+    // to an *earlier* session, so neither should block the later one's answer.
+
+    const laterWorld = { ...w, sessionId: laterSessionId };
+    await submitReferral(testApp, laterWorld, { adults: 1, children: 0 }); // Beans x2
+    const { id: laterPickListId } = await generatePickList(testApp, token, laterSessionId);
+    await reviewEveryParcel(testApp, token, laterPickListId);
+
+    const { items } = await stockRequirement(testApp, token, laterSessionId);
+    const beans = items.find((item) => item.name === 'Beans');
+
+    expect(beans).toMatchObject({ requiredQuantity: 2, earlierSessionsQuantity: 0 });
+  });
+
+  it('does not count a later session, a session at the same start time, or one on the day before', async () => {
+    const { testApp, token, world: w } = await world();
+    const tenOClock = w.sessionId;
+    const thirteenHundred = await createSession(testApp, token, { startTime: '13:00' });
+    const anotherTenOClock = await createSession(testApp, token, { startTime: '10:00' });
+    const dayBefore = await createSession(testApp, token, {
+      sessionDate: '2026-08-10',
+      startTime: '09:00',
+    });
+
+    // A pending household needing Beans on each of the three sessions that
+    // must not count towards the 10:00 session's comparison.
+    for (const sessionId of [thirteenHundred, anotherTenOClock, dayBefore]) {
+      const otherWorld = { ...w, sessionId };
+      await submitReferral(testApp, otherWorld, { adults: 1, children: 0 });
+      await generatePickList(testApp, token, sessionId);
+    }
+
+    // The 10:00 session itself needs Beans too, so there is a line to inspect.
+    await submitReferral(testApp, w, { adults: 1, children: 0 });
+    const { id: tenOClockPickListId } = await generatePickList(testApp, token, tenOClock);
+    await reviewEveryParcel(testApp, token, tenOClockPickListId);
+
+    const { items } = await stockRequirement(testApp, token, tenOClock);
+    const beans = items.find((item) => item.name === 'Beans');
+
+    expect(beans).toMatchObject({ requiredQuantity: 2, earlierSessionsQuantity: 0, shortfall: 2 });
+  });
+
+  it('does not count a session whose own status is cancelled, even with a parcel still pending', async () => {
+    const { testApp, token, world: w } = await world();
+    const earlierSessionId = w.sessionId; // 10:00
+    const laterSessionId = await createSession(testApp, token, { startTime: '13:00' });
+
+    await submitReferral(testApp, w, { adults: 1, children: 0 }); // Beans x2, left pending
+    await generatePickList(testApp, token, earlierSessionId);
+
+    // Cancelling the session through the API refuses while it still holds a
+    // pending household, and cancelling that household would cancel the
+    // parcel along with it — which this test must not do, since it is
+    // specifically proving the session's own `status` is what is checked, not
+    // the parcel's attendance (already covered above). So the status is
+    // written directly, the same way the file already reaches a `-1` line
+    // that generation alone can produce but the API cannot otherwise set.
+    await db.update(sessions).set({ status: 'cancelled' }).where(eq(sessions.id, earlierSessionId));
+
+    const laterWorld = { ...w, sessionId: laterSessionId };
+    await submitReferral(testApp, laterWorld, { adults: 1, children: 0 }); // Beans x2
+    const { id: laterPickListId } = await generatePickList(testApp, token, laterSessionId);
+    await reviewEveryParcel(testApp, token, laterPickListId);
+
+    const { items } = await stockRequirement(testApp, token, laterSessionId);
+    const beans = items.find((item) => item.name === 'Beans');
+
+    expect(beans).toMatchObject({ requiredQuantity: 2, earlierSessionsQuantity: 0, shortfall: 2 });
+  });
+
+  it('leaves off an item only the earlier session needs', async () => {
+    const { testApp, token, world: w } = await world();
+    const earlierSessionId = w.sessionId; // 10:00
+    const laterSessionId = await createSession(testApp, token, { startTime: '13:00' });
+    const rice = await createItem(testApp, token, 'Rice', 'A5', 'Dried Goods');
+
+    const earlierReferral = await submitReferral(testApp, w, { adults: 1, children: 0 });
+    await generatePickList(testApp, token, earlierSessionId, [
+      { referralId: earlierReferral.id, lines: [{ stockItemId: rice, quantity: 3 }] },
+    ]);
+
+    const laterWorld = { ...w, sessionId: laterSessionId };
+    await submitReferral(testApp, laterWorld, { adults: 1, children: 0 }); // Beans x2 only
+    const { id: laterPickListId } = await generatePickList(testApp, token, laterSessionId);
+    await reviewEveryParcel(testApp, token, laterPickListId);
+
+    const { items } = await stockRequirement(testApp, token, laterSessionId);
+
+    // Rice is wholly the earlier session's business — it never appears here,
+    // even though the earlier parcel calling for it is still pending.
+    expect(items.map((item) => item.name)).toEqual(['Beans']);
   });
 });
 
@@ -488,7 +710,11 @@ describe('stockRequirementLines (pure)', () => {
   it('returns nothing for an empty requirement map, whatever levels are on the shelf', () => {
     const beans = stockItem();
 
-    const result = stockRequirementLines([{ item: beans, quantityOnHand: 10 }], new Map());
+    const result = stockRequirementLines(
+      [{ item: beans, quantityOnHand: 10 }],
+      new Map(),
+      new Map(),
+    );
 
     expect(result).toEqual([]);
   });
@@ -507,6 +733,7 @@ describe('stockRequirementLines (pure)', () => {
         { item: apple, quantityOnHand: 1 },
       ],
       required,
+      new Map(),
     );
 
     // Alphabetically 'Apple Sauce' precedes 'Zebra Feed'; the levels array
@@ -514,6 +741,76 @@ describe('stockRequirementLines (pure)', () => {
     // the caller's chosen order (shelf or category) is what it is trusted to
     // preserve.
     expect(result.map((line) => line.item.id)).toEqual(['item-zebra', 'item-apple']);
+  });
+
+  it('defaults earlierSessionsQuantity to 0 for an item with no earlier-session demand', () => {
+    const beans = stockItem();
+
+    const result = stockRequirementLines(
+      [{ item: beans, quantityOnHand: 10 }],
+      new Map([['item-1', 2]]),
+      new Map(),
+    );
+
+    expect(result).toEqual([
+      {
+        item: beans,
+        requiredQuantity: 2,
+        earlierSessionsQuantity: 0,
+        quantityOnHand: 10,
+        shortfall: 0,
+      },
+    ]);
+  });
+
+  it('produces a shortfall from earlier-session demand alone, even though this session is fully met', () => {
+    const beans = stockItem();
+
+    // requiredQuantity and quantityOnHand are equal: with no earlier demand
+    // this would be a shortfall of 0, the exact-match case the other describe
+    // block above already covers.
+    const result = stockRequirementLines(
+      [{ item: beans, quantityOnHand: 1 }],
+      new Map([['item-1', 1]]),
+      new Map([['item-1', 3]]),
+    );
+
+    expect(result).toEqual([
+      {
+        item: beans,
+        requiredQuantity: 1,
+        earlierSessionsQuantity: 3,
+        quantityOnHand: 1,
+        shortfall: 3,
+      },
+    ]);
+  });
+
+  it('adds earlierSessionsQuantity only for an item this session also requires', () => {
+    const beans = stockItem();
+
+    // The map carries demand for an item ('item-other') that is not in
+    // `levels` paired with a requirement at all — mirroring an item only an
+    // earlier session calls for, which must never surface on this session's
+    // comparison.
+    const result = stockRequirementLines(
+      [{ item: beans, quantityOnHand: 5 }],
+      new Map([['item-1', 2]]),
+      new Map([
+        ['item-1', 1],
+        ['item-other', 99],
+      ]),
+    );
+
+    expect(result).toEqual([
+      {
+        item: beans,
+        requiredQuantity: 2,
+        earlierSessionsQuantity: 1,
+        quantityOnHand: 5,
+        shortfall: 0,
+      },
+    ]);
   });
 });
 

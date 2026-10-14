@@ -299,8 +299,11 @@ export function createPickListsService(deps: PickListsServiceDeps) {
    * are required before attendance can be recorded), so this can never mask
    * either of those — it is simply the cheaper, more final reason to refuse.
    *
-   * Five queries: the session, the pick list, its parcels, the totals, and the
-   * catalogue.
+   * Earlier sessions the same day are counted too, as a separate figure —
+   * see `sumPendingEarlierSameDay`. None of the gates above applies to them.
+   *
+   * Six queries: the session, the pick list, its parcels, the totals, the
+   * earlier sessions' totals, and the catalogue.
    */
   async function stockRequirement(
     sessionId: string,
@@ -342,6 +345,11 @@ export function createPickListsService(deps: PickListsServiceDeps) {
       );
     }
 
+    const earlier = await repository.sumPendingEarlierSameDay(
+      session.sessionDate,
+      session.startTime,
+    );
+
     // The whole catalogue, inactive items included: an item deactivated after
     // generation is still in parcels and still has to be found on a shelf.
     const levels = await stock.listLevels(false, order);
@@ -351,6 +359,7 @@ export function createPickListsService(deps: PickListsServiceDeps) {
       lines: stockRequirementLines(
         levels,
         new Map(required.map((entry) => [entry.stockItemId, entry.requiredQuantity])),
+        new Map(earlier.map((entry) => [entry.stockItemId, entry.requiredQuantity])),
       ),
     };
   }
