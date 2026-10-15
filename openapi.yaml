@@ -1230,9 +1230,13 @@ paths:
         unlike `POST /sessions/{sessionId}/pick-list`, which refuses while the
         grid is incomplete.
 
+        **It also carries** each household's `collectionMethod` and its
+        `answers` whole — the server never looks inside them; what the screen
+        shows from them is yours to decide.
+
         **What it leaves out:** the grid, any model parcel's contents, stock
-        lines, preferences, addresses, phone numbers, dates of birth, the
-        reason for referral and the answers.
+        lines, addresses, phone numbers, dates of birth and the reason for
+        referral.
 
         **Who is on it:** the same households as
         `GET /sessions/{sessionId}/referral-details` — every household holding
@@ -6618,8 +6622,19 @@ components:
       type: object
       description: >-
         One household and the model parcel the current household grid gives
-        it. Nothing else about the referral, the grid or the model parcel.
-      required: [pickNumber, modelParcelName, refereeFirstName, refereeSurname, adults, children]
+        it, with the household's collection method and answers. Nothing
+        about the grid or the model parcel beyond the name.
+      required:
+        [
+          pickNumber,
+          modelParcelName,
+          refereeFirstName,
+          refereeSurname,
+          adults,
+          children,
+          collectionMethod,
+          answers,
+        ]
       properties:
         pickNumber:
           type: [integer, 'null']
@@ -6642,6 +6657,16 @@ components:
           type: integer
           minimum: 0
           description: The count the client sent, as stored — not clamped to the grid.
+        collectionMethod:
+          type: string
+          enum: [collection, delivery, referrer_collect]
+          description: As `Referral.collectionMethod`.
+        answers:
+          type: object
+          additionalProperties: true
+          description: >-
+            The referral's dynamic answers, whole, exactly as stored. The
+            server does not read or filter them.
 
     ReferralDetailsHousehold:
       type: object

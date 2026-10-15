@@ -2217,7 +2217,8 @@ all, not a sheet that has to line up against the picking sheets.
 GET /api/v1/sessions/{sessionId}/model-summary
   → 200 { sessionId,
           households: [ { pickNumber, modelParcelName, refereeFirstName,
-                          refereeSurname, adults, children } ] }
+                          refereeSurname, adults, children,
+                          collectionMethod, answers } ] }
 ```
 
 Admin **and team lead**, for the model-summary screen within running a session.
@@ -2236,12 +2237,15 @@ server does the lookup so you never need them.
   incomplete. Generation still refuses in that state — this endpoint does not.
 - **`pickNumber: null`** until the household has a parcel. Show a blank.
 - `adults` and `children` are the counts as stored, not clamped.
+- `collectionMethod` is as on the referral; `answers` is the referral's answer
+  JSON whole. The server never looks inside it — take from it what the screen
+  needs.
 
 Same households as **5h**: every household holding a place, deliveries
 included, cancelled and rejected left off. **No order is promised** — sort
 them as the screen needs. Nothing else is on
-it: no grid, no model contents, no stock lines, preferences, addresses, phones,
-dates of birth, reasons or answers. `404` for an unknown session.
+it: no grid, no model contents, no stock lines, addresses, phones, dates of
+birth or reasons. `404` for an unknown session.
 
 ---
 

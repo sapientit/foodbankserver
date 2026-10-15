@@ -706,9 +706,9 @@ export interface ReferralDetailsHousehold {
    */
   readonly picklistAdmin: string | null;
   /**
-   * `collectionMethod === 'delivery'`. From `collectionMethod` rather than
-   * the `isDelivery` column, which is itself derived from it — see the
-   * schema.
+   * `collectionMethod === 'delivery'`, through `collectionMethodOf` like
+   * every other response, rather than the `isDelivery` column, which is
+   * itself derived from it — see the schema.
    */
   readonly isDelivery: boolean;
   /** Identical to `Parcel.firstTimeMarker`; see `derivations.ts#firstTimeMarkerFor`. */
@@ -734,7 +734,7 @@ export function toReferralDetailsHousehold(
     referrerPhone: referral.referrerPhone,
     pickNumber,
     picklistAdmin: referral.picklistAdmin,
-    isDelivery: referral.collectionMethod === 'delivery',
+    isDelivery: collectionMethodOf(referral) === 'delivery',
     firstTimeMarker: firstTimeMarkerFor(referral.firstTimeReviewStatus),
     voucherInstruction: voucherInstructionFor(voucher.sessionDate, voucher.voucherRange, {
       status: referral.firstTimeReviewStatus,
@@ -781,8 +781,12 @@ export function toReferralDetailsResponse(
  *
  * The one place a team leader is told anything about the grid, so it is
  * narrow on purpose: a name and the two counts it was looked up from, never
- * the grid, a model parcel's contents or anything else on the referral.
- * `adults` and `children` are the stored counts, unclamped; the lookup clamps.
+ * the grid or a model parcel's contents. `adults` and `children` are the
+ * stored counts, unclamped; the lookup clamps.
+ *
+ * `answers` is the referral's answer JSON whole, as on the listener sheet:
+ * what the screen shows from it is the client's business, and the server
+ * never looks inside it.
  */
 export interface ModelSummaryHousehold {
   /** `null` until the household has a parcel, as on the Run Sheet. */
@@ -796,6 +800,8 @@ export interface ModelSummaryHousehold {
   readonly refereeSurname: string | null;
   readonly adults: number;
   readonly children: number;
+  readonly collectionMethod: CollectionMethod;
+  readonly answers: Record<string, unknown>;
 }
 
 export interface ModelSummaryResponse {
@@ -820,6 +826,8 @@ export function toModelSummaryResponse(
       refereeSurname: referral.refereeSurname,
       adults: referral.adults,
       children: referral.children,
+      collectionMethod: collectionMethodOf(referral),
+      answers: parseAnswers(referral.answersJson),
     })),
   };
 }

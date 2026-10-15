@@ -51,6 +51,8 @@ interface ModelSummaryHouseholdBody {
   readonly refereeSurname: string | null;
   readonly adults: number;
   readonly children: number;
+  readonly collectionMethod: string;
+  readonly answers: Record<string, unknown>;
 }
 
 interface ModelSummaryResponseBody {
@@ -307,7 +309,7 @@ describe('modelParcelName', () => {
     expect(result.text).not.toContain('quantity');
     expect(result.text).not.toContain('stockItemId');
 
-    // And no field beyond the six per household, plus the two top-level keys.
+    // And no field beyond the eight per household, plus the two top-level keys.
     const parsed = JSON.parse(result.text) as {
       sessionId: unknown;
       households: Record<string, unknown>[];
@@ -318,7 +320,9 @@ describe('modelParcelName', () => {
     expect(Object.keys(theHousehold ?? {}).sort()).toEqual(
       [
         'adults',
+        'answers',
         'children',
+        'collectionMethod',
         'modelParcelName',
         'pickNumber',
         'refereeFirstName',
@@ -346,5 +350,37 @@ describe('clamping', () => {
     expect(household?.modelParcelName).toBe('Family parcel');
     expect(household?.adults).toBe(7);
     expect(household?.children).toBe(0);
+  });
+});
+
+describe('collectionMethod and answers', () => {
+  it("carries each household's collection method and its answers whole, unfiltered", async () => {
+    const { testApp, token, world } = await pickingWorld();
+    const answers = {
+      'Household Components': { '0-2': { Female: 1 }, '18 to State Pension age': { Male: 1 } },
+      'Other information': 'Ring the side door',
+      Dietary: 'no pork',
+    };
+    await submitReferral(
+      testApp,
+      world,
+      { refereeSurname: 'Collector', collectionMethod: 'referrer_collect', answers },
+      { clientIp: nextClientIp() },
+    );
+    await submitReferral(
+      testApp,
+      world,
+      { refereeSurname: 'Walkin', collectionMethod: 'collection' },
+      { clientIp: nextClientIp() },
+    );
+
+    const result = await readModelSummary(testApp, token, world.sessionId);
+    expect(result.status).toBe(200);
+    const collector = result.body.households?.find((h) => h.refereeSurname === 'Collector');
+    const walkin = result.body.households?.find((h) => h.refereeSurname === 'Walkin');
+
+    expect(collector?.collectionMethod).toBe('referrer_collect');
+    expect(collector?.answers).toEqual(answers);
+    expect(walkin?.collectionMethod).toBe('collection');
   });
 });
