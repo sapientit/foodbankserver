@@ -16,12 +16,14 @@ import { createReferralsRepository } from './referrals.repository.ts';
 import { createReferralsService, type ReferralsService } from './referrals.service.ts';
 import {
   toReferralDetailsResponse,
+  toModelSummaryResponse,
   toReferralResponse,
   toReferralSearchResponse,
   toRepeatReferralListResponse,
   toRepeatReferralSummary,
   type ListenerSheetHousehold,
   type ReferralDetailsResponse,
+  type ModelSummaryResponse,
   type ReferralResponse,
   type ReferralSearchResponse,
   type RepeatReferralSummaryResponse,
@@ -39,6 +41,8 @@ import {
   rejectReferralSchema,
   repeatReferralsQuerySchema,
 } from './referrals.schema.ts';
+import { createRulesRepository } from '../rules/rules.repository.ts';
+import { createRulesService } from '../rules/rules.service.ts';
 
 /**
  * Reads are open to any account — a team lead needs the list to run a session,
@@ -107,6 +111,18 @@ export function referralRoutes(): Hono<AppEnv> {
     return c.json<ReferralDetailsResponse>(
       toReferralDetailsResponse(session, referrals, pickNumberByReferral, voucher),
     );
+  });
+
+  /**
+   * Which model parcel the current household grid gives each household on a
+   * session, for the team leader's model summary — the only grid answer a
+   * team leader is given. See `modelSummary` in the service and
+   * `ModelSummaryHousehold` for what it withholds.
+   */
+  routes.get('/sessions/:sessionId/model-summary', ...readers, async (c) => {
+    const { session, households } = await serviceFor(c).modelSummary(c.req.param('sessionId'));
+
+    return c.json<ModelSummaryResponse>(toModelSummaryResponse(session.id, households));
   });
 
   routes.get('/referrals/:id', ...readers, async (c) => {
@@ -375,5 +391,6 @@ function serviceFor(c: Context<AppEnv>) {
       clock,
       repository: createConfigurationReleasesRepository(db),
     }),
+    householdGrid: createRulesService({ repository: createRulesRepository(db), clock }),
   });
 }

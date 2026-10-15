@@ -14,6 +14,8 @@ import { createReferralsRepository } from './referrals.repository.ts';
 import { createReferralsService } from './referrals.service.ts';
 import { toReceiptResponse, type ReferralReceiptResponse } from './referrals.mapper.ts';
 import { referralSubmissionSchema } from './referrals.schema.ts';
+import { createRulesRepository } from '../rules/rules.repository.ts';
+import { createRulesService } from '../rules/rules.service.ts';
 
 /**
  * The unauthenticated referral route. There is exactly one.
@@ -75,5 +77,6 @@ function serviceFor(c: Context<AppEnv>) {
       clock,
       repository: createConfigurationReleasesRepository(db),
     }),
+    householdGrid: createRulesService({ repository: createRulesRepository(db), clock }),
   });
 }

@@ -667,13 +667,17 @@ export function toReferralSearchResponse(result: {
  * reason, no date of birth, no review comment, no referrer email. It exists so
  * the team can ring a household, not so they can read the referral.
  *
- * `answers`, `firstTimeMarker` and `voucherInstruction` are there because the
- * Run Sheet shows the household's "other information" answer, whether it is
- * new and what to do about a voucher, for **every** household — including one
- * not yet picked for, which has no parcel to read them from. They are built
- * exactly as `toListenerSheetHousehold` builds them: the answers whole (which
- * one is "other information" is the form's business), the two derived values
- * fresh on every read.
+ * `picklistAdmin`, `isDelivery`, `firstTimeMarker` and `voucherInstruction`
+ * are there because the Run Sheet shows the administrators' line for the
+ * picker, whether the household is a delivery, whether it is new and what to
+ * do about a voucher, for **every** household — including one not yet picked
+ * for, which has no parcel to read them from. All four are read or derived
+ * afresh on every read, never copied.
+ *
+ * **No `answers`.** The Run Sheet used to carry the referral's answers whole
+ * so the client could pick out "other information"; it no longer shows that
+ * answer, and the whole map is every dynamic answer the referrer gave. Do not
+ * add it back for one field.
  */
 export interface ReferralDetailsHousehold {
   readonly referralId: string;
@@ -695,9 +699,18 @@ export interface ReferralDetailsHousehold {
    * before picking happens at all.
    */
   readonly pickNumber: number | null;
-  readonly answers: Record<string, unknown>;
-  /** The form release the answers were given to; see `ListenerSheetHousehold.formId`. */
-  readonly formId: string | null;
+  /**
+   * The referral's line for the picker, **current, not snapshotted** — the
+   * same value `Parcel.picklistAdmin` reads, so an amendment shows on the
+   * next read without a pick list being regenerated.
+   */
+  readonly picklistAdmin: string | null;
+  /**
+   * `collectionMethod === 'delivery'`. From `collectionMethod` rather than
+   * the `isDelivery` column, which is itself derived from it — see the
+   * schema.
+   */
+  readonly isDelivery: boolean;
   /** Identical to `Parcel.firstTimeMarker`; see `derivations.ts#firstTimeMarkerFor`. */
   readonly firstTimeMarker: FirstTimeMarker | null;
   /** Identical to `Parcel.voucherInstruction`; see `derivations.ts#voucherInstructionFor`. */
@@ -720,8 +733,8 @@ export function toReferralDetailsHousehold(
     referrerOrganisation: referral.referrerOrganisation,
     referrerPhone: referral.referrerPhone,
     pickNumber,
-    answers: parseAnswers(referral.answersJson),
-    formId: referral.formId,
+    picklistAdmin: referral.picklistAdmin,
+    isDelivery: referral.collectionMethod === 'delivery',
     firstTimeMarker: firstTimeMarkerFor(referral.firstTimeReviewStatus),
     voucherInstruction: voucherInstructionFor(voucher.sessionDate, voucher.voucherRange, {
       status: referral.firstTimeReviewStatus,
@@ -758,5 +771,55 @@ export function toReferralDetailsResponse(
     referrals: referrals.map((referral) =>
       toReferralDetailsHousehold(referral, pickNumberByReferral.get(referral.id) ?? null, voucher),
     ),
+  };
+}
+
+/**
+ * One household on `GET /sessions/{sessionId}/model-summary`: which model
+ * parcel the **current** household grid gives it. `INITIAL_SPEC1.txt`,
+ * `#Model parcels and the household grid`.
+ *
+ * The one place a team leader is told anything about the grid, so it is
+ * narrow on purpose: a name and the two counts it was looked up from, never
+ * the grid, a model parcel's contents or anything else on the referral.
+ * `adults` and `children` are the stored counts, unclamped; the lookup clamps.
+ */
+export interface ModelSummaryHousehold {
+  /** `null` until the household has a parcel, as on the Run Sheet. */
+  readonly pickNumber: number | null;
+  /**
+   * `null` when the current grid has no entry for this household's size.
+   * Never an earlier grid's answer: the screen shows the lookup as it stands.
+   */
+  readonly modelParcelName: string | null;
+  readonly refereeFirstName: string | null;
+  readonly refereeSurname: string | null;
+  readonly adults: number;
+  readonly children: number;
+}
+
+export interface ModelSummaryResponse {
+  readonly sessionId: string;
+  readonly households: readonly ModelSummaryHousehold[];
+}
+
+export function toModelSummaryResponse(
+  sessionId: string,
+  households: readonly {
+    readonly referral: Referral;
+    readonly pickNumber: number | null;
+    readonly modelParcelName: string | null;
+  }[],
+): ModelSummaryResponse {
+  return {
+    sessionId,
+    households: households.map(({ referral, pickNumber, modelParcelName }) => ({
+      pickNumber,
+      modelParcelName,
+      refereeFirstName: referral.refereeFirstName,
+      refereeSurname: referral.refereeSurname,
+      adults: referral.adults,
+      children: referral.children,
+    })),
   };
 }

@@ -22,6 +22,8 @@ import {
   type CompleteResponse,
   type ExtractConfigResponse,
 } from './exports.service.ts';
+import { createRulesRepository } from '../rules/rules.repository.ts';
+import { createRulesService } from '../rules/rules.service.ts';
 
 /**
  * Extracting confirmed sessions to the charity's Google spreadsheet.
@@ -119,6 +121,7 @@ function serviceFor(c: Context<AppEnv>) {
         clock,
         repository: createConfigurationReleasesRepository(db),
       }),
+      householdGrid: createRulesService({ repository: createRulesRepository(db), clock }),
     }),
     referrersService,
     stockService: createStockService({

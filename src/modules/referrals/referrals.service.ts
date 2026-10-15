@@ -26,6 +26,7 @@ import type { PickListsRepository } from '../pick-lists/pick-lists.repository.ts
 import type { SessionsRepository } from '../sessions/sessions.repository.ts';
 import type { VoucherConfigRepository } from '../voucher-config/voucher-config.repository.ts';
 import { firstOfferableDate } from '../sessions/public-window.ts';
+import { modelParcelNameFor, type ParcelGrid } from '../rules/engine.ts';
 import {
   hasAnythingToMatchOn,
   matchKinds,
@@ -73,6 +74,8 @@ export interface ReferralsServiceDeps {
    */
   readonly voucherConfig: VoucherConfigRepository;
   readonly releases: ReleaseLookup;
+  /** Read by `modelSummary` only — the rules module's service, not its table. */
+  readonly householdGrid: HouseholdGridLookup;
   readonly clock: Clock;
   readonly logger: Logger;
 }
@@ -85,6 +88,11 @@ export interface ReferralsServiceDeps {
 export interface ReleaseLookup {
   currentFormId(): Promise<string>;
   assertSubmittable(formId: string): Promise<void>;
+}
+
+/** What `modelSummary` needs from `rules`: the grid as it stands now. */
+export interface HouseholdGridLookup {
+  getGrid(): Promise<ParcelGrid>;
 }
 
 /**
@@ -148,6 +156,7 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     clock,
     logger,
     releases,
+    householdGrid,
   } = deps;
 
   async function getReferral(id: string): Promise<Referral> {
@@ -443,15 +452,74 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     pickNumberByReferral: Map<string, number>;
     voucher: ListenerSheetVoucherContext;
   }> {
+    const [{ session, referrals: holdingAPlace, pickNumberByReferral }, voucherRow] =
+      await Promise.all([householdsOnSession(sessionId), voucherConfig.find()]);
+
+    const voucher: ListenerSheetVoucherContext = {
+      sessionDate: session.sessionDate,
+      voucherRange:
+        voucherRow === undefined
+          ? undefined
+          : { startDate: voucherRow.startDate, endDate: voucherRow.endDate },
+    };
+
+    return { session, referrals: holdingAPlace, pickNumberByReferral, voucher };
+  }
+
+  /**
+   * Which model parcel the **current** household grid gives each household
+   * on a session — the team leader's model summary. `INITIAL_SPEC1.txt`,
+   * `#Model parcels and the household grid`.
+   *
+   * The same households, order and pick numbers as `referralDetails`. The
+   * grid is read on every call and nothing is stored, so an administrator's
+   * grid edit shows on the next read even for a parcel generated under the
+   * old one — that is what was asked for, not a historical record.
+   *
+   * A size the grid has no entry for is `null`, not a refusal: unlike
+   * generation, this screen is still useful with the lookup incomplete. A
+   * name in the grid always exists as a model parcel — `saveGrid` and
+   * `deleteModelParcel` both guarantee it — so the name alone is enough.
+   */
+  async function modelSummary(sessionId: string): Promise<{
+    session: Session;
+    households: { referral: Referral; pickNumber: number | null; modelParcelName: string | null }[];
+  }> {
+    const [{ session, referrals: holdingAPlace, pickNumberByReferral }, grid] = await Promise.all([
+      householdsOnSession(sessionId),
+      householdGrid.getGrid(),
+    ]);
+
+    return {
+      session,
+      households: holdingAPlace.map((referral) => ({
+        referral,
+        pickNumber: pickNumberByReferral.get(referral.id) ?? null,
+        modelParcelName:
+          modelParcelNameFor(grid, { adults: referral.adults, children: referral.children }) ??
+          null,
+      })),
+    };
+  }
+
+  /**
+   * Everybody holding a place on a session, surname then first name, with
+   * the pick number of each one already picked for. Behind both
+   * `referralDetails` and `modelSummary`.
+   */
+  async function householdsOnSession(sessionId: string): Promise<{
+    session: Session;
+    referrals: Referral[];
+    pickNumberByReferral: Map<string, number>;
+  }> {
     const session = await sessions.findById(sessionId);
     if (session === undefined) {
       throw new NotFoundError('Session not found');
     }
 
-    const [households, pickList, voucherRow] = await Promise.all([
+    const [households, pickList] = await Promise.all([
       repository.list({ sessionId }),
       pickLists.findBySession(sessionId),
-      voucherConfig.find(),
     ]);
 
     const holdingAPlace = households
@@ -465,15 +533,7 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
       parcels.map((parcel) => [parcel.referralId, parcel.pickNumber]),
     );
 
-    const voucher: ListenerSheetVoucherContext = {
-      sessionDate: session.sessionDate,
-      voucherRange:
-        voucherRow === undefined
-          ? undefined
-          : { startDate: voucherRow.startDate, endDate: voucherRow.endDate },
-    };
-
-    return { session, referrals: holdingAPlace, pickNumberByReferral, voucher };
+    return { session, referrals: holdingAPlace, pickNumberByReferral };
   }
 
   /**
@@ -1693,6 +1753,7 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     submit,
     listenerSheet,
     referralDetails,
+    modelSummary,
     getReferral,
     viewReferral,
     listReferrals,

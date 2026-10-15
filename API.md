@@ -237,6 +237,7 @@ Three roles. Use them for menus; **never for access control.**
 | Create or amend sessions and referrals                    | ✅      | ❌          | ❌           |
 | Maintain the stock item list                              | ✅      | ❌          | ❌           |
 | Model parcels and the household grid (**incl. reading**)  | ✅      | ❌          | ❌           |
+| A session's model summary (current model name only, §5q)  | ✅      | ✅          | ❌           |
 | Target stock lists: maintain (create / amend / delete)    | ✅      | ❌          | ❌           |
 | Target stock lists: read                                  | ✅      | ✅          | ❌           |
 | Referral form releases: upload, publish, roll back, list  | ✅      | ❌          | ❌           |
@@ -291,8 +292,9 @@ open the referral.
 
 **`picklistAdmin` follows `adminInfo` exactly on a referral** — admin-only, the
 same one-referral responses, absent from the list and from the search rows. A
-team lead receives it on the **parcel** instead (`Parcel.picklistAdmin`), which
-is the one place it goes beyond `adminInfo`: see **5i**.
+team lead receives it on the **parcel** instead (`Parcel.picklistAdmin`, see
+**5i**) and on the Run Sheet (`ReferralDetailsHousehold.picklistAdmin`, see
+**5h**) — the two places it goes beyond `adminInfo`.
 
 **`outcome` is optional for a different reason and is not admin-only.** A team
 lead receives it. It is on the same one-referral responses as `adminInfo` and
@@ -2150,8 +2152,9 @@ GET /api/v1/sessions/{sessionId}/referral-details
           referrals: [ { referralId, refereeFirstName, refereeSurname,
                          refereeAddress, refereePostcode, refereePhone,
                          referrerName, referrerOrganisation,
-                         referrerPhone, pickNumber, answers, formId,
-                         firstTimeMarker, voucherInstruction } ] }
+                         referrerPhone, pickNumber, picklistAdmin,
+                         isDelivery, firstTimeMarker,
+                         voucherInstruction } ] }
 ```
 
 Admin **and team lead**, for the _Run Sheet_ screen. **You own the print
@@ -2164,16 +2167,21 @@ number, so whoever is running the session can find a door, ring a household
 that has not arrived, ring the professional who sent them and know where they
 are ringing, or give a picker the household's number over the same call.
 
-**It also carries the Run Sheet's First?, Voucher and Referrer comments
-columns**, for every household:
+**It also carries the Run Sheet's operational columns**, for every household:
 
 - `firstTimeMarker` and `voucherInstruction` — **identical to the `Parcel`
   fields of the same name** (section on the derived values below), same rule,
   worked out fresh on every read.
-- `answers`, whole, with `formId` naming the release they were given to. The
-  Referrer comments column is the "other information" answer; which key that
-  is belongs to the form, exactly as on the listener sheet, so take it out
-  client-side.
+- `picklistAdmin` — the administrators' one line for the picker, **the
+  referral's current value**, the same one `Parcel.picklistAdmin` reads. An
+  amendment shows on the next read; no pick list needs generating again.
+- `isDelivery` — `true` only where `collectionMethod` is `delivery`; `false`
+  for `collection` and `referrer_collect`. The compact delivery marker.
+
+**`answers` and `formId` are gone — breaking.** The Run Sheet no longer shows
+the "other information" answer (Referrer comments); `picklistAdmin` takes its
+place. The whole answer map was every dynamic answer on a team-lead payload for
+the sake of one, so it has been removed rather than kept unused.
 
 These come with the referral, not the parcel, so a household not yet picked
 for has them too. **Read them from here for the Run Sheet**, not from
@@ -2181,8 +2189,8 @@ for has them too. **Read them from here for the Run Sheet**, not from
 
 **What it does not otherwise carry**, and must not be padded with from other
 endpoints: date of birth, the reason for referral, the review comment, the
-administrators' note, the parcel contents, and the referrer's email address. The
-reason stays where it was — a team leader gets it on the listener sheet and
+administrators' note, the form's answers, the parcel contents, and the
+referrer's email address. The reason stays where it was — a team leader gets it on the listener sheet and
 nowhere else, and putting it on a second sheet quietly undoes that.
 
 **Deliveries are included here**, unlike the listener sheet. That drops them
@@ -2200,6 +2208,40 @@ been generated for the session or because the household was referred after
 one was. Unlike the listener sheet, this endpoint is never refused over a
 missing pick number — it is a contact list open before picking happens at
 all, not a sheet that has to line up against the picking sheets.
+
+---
+
+## 5q. Session model summary
+
+```
+GET /api/v1/sessions/{sessionId}/model-summary
+  → 200 { sessionId,
+          households: [ { pickNumber, modelParcelName, refereeFirstName,
+                          refereeSurname, adults, children } ] }
+```
+
+Admin **and team lead**, for the model-summary screen within running a session.
+It is the **only** grid answer a team lead is given: the grid and model parcels
+stay admin-only (`/rules/...` still answers `403` to a team lead), and the
+server does the lookup so you never need them.
+
+- **`modelParcelName` is the _current_ grid's answer, on every request.** It is
+  not stored anywhere. After an administrator edits the grid, the next read
+  shows the new name — even for a household whose parcel was generated under
+  the old grid. That is the requested behaviour; it is not a record of what a
+  parcel was copied from. Counts are clamped into the grid exactly as pick-list
+  generation clamps them.
+- **`modelParcelName: null`** means the current grid has no entry for that
+  household's size. The household is still listed; show that the lookup is
+  incomplete. Generation still refuses in that state — this endpoint does not.
+- **`pickNumber: null`** until the household has a parcel. Show a blank.
+- `adults` and `children` are the counts as stored, not clamped.
+
+Same households as **5h**: every household holding a place, deliveries
+included, cancelled and rejected left off. **No order is promised** — sort
+them as the screen needs. Nothing else is on
+it: no grid, no model contents, no stock lines, preferences, addresses, phones,
+dates of birth, reasons or answers. `404` for an unknown session.
 
 ---
 
