@@ -288,12 +288,15 @@ export function createAttendanceService(deps: AttendanceDeps) {
     if (session === undefined) {
       throw new NotFoundError('Session not found');
     }
-    // Before the idempotent path: a team lead's first confirm succeeds, but a
-    // repeat now finds the session closed to them and gets a 404. Intended.
-    assertCanSeeSession(actor, session);
+    // Idempotent for everyone, team leads included, even though a confirmed
+    // session is otherwise hidden from them: a double press of Confirm is just
+    // done twice (Pete, closed Q53). The repeat returns only the session's own
+    // fields, never a household's.
     if (session.status === 'confirmed') {
-      return session; // Idempotent.
+      return session;
     }
+    // Still refused for what is left — a cancelled session — before the 409.
+    assertCanSeeSession(actor, session);
 
     const pickList = await repository.findBySession(sessionId);
     if (pickList !== undefined) {

@@ -342,10 +342,11 @@ What this means for the client:
   confirm itself returns `200` with the confirmed session; anything you fetch
   for it afterwards is a `404`. Treat that `404` as "gone", not as an error to
   show.
-- **A team lead's second confirm is a `404`**, not the old idempotent `200`.
-  Guard the button against a double press, and treat a `404` on a retried
-  confirm as success-already-happened. This is an assumption — see
-  `OPEN-QUESTIONS.md` Q53.
+- **Confirm stays idempotent, for a team lead too.** A second press, or a
+  retry, of `POST /sessions/{id}/confirm` on a session that is already confirmed
+  returns `200` with the session, exactly as the first did. It is the one route
+  that still answers a team lead about a closed session. A cancelled session is
+  still a `404`.
 - **Status only, never the date.** A session whose day has gone by but which
   nobody has confirmed is still on a team lead's list and fully usable, because
   marking and confirming it is their job. Do not hide past sessions

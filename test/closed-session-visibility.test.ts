@@ -357,6 +357,12 @@ describe.each(['confirmed', 'cancelled'] as const)(
     let built: Built;
     let ids: Ids;
     let before: string;
+    // Confirming a session that is already confirmed is a double press, and is
+    // accepted for a team lead like any other (see the confirming tests below).
+    // A cancelled one still refuses them.
+    const routes = SESSION_REACHING_ROUTES.filter(
+      (route) => !(closedStatus === 'confirmed' && route.name === 'POST /sessions/:id/confirm'),
+    );
 
     // Built once: every request here is a refusal, and the snapshot test below
     // is what proves none of them changed anything.
@@ -368,7 +374,7 @@ describe.each(['confirmed', 'cancelled'] as const)(
       before = await snapshot();
     });
 
-    it.each(SESSION_REACHING_ROUTES.map((route) => [route.name, route] as const))(
+    it.each(routes.map((route) => [route.name, route] as const))(
       'gets 404 NOT_FOUND, not 403 or 409, from %s',
       async (_name, route) => {
         const result = await call(built.testApp, built.lead, route, ids);
@@ -378,7 +384,7 @@ describe.each(['confirmed', 'cancelled'] as const)(
       },
     );
 
-    it.each(SESSION_REACHING_ROUTES.map((route) => [route.name, route] as const))(
+    it.each(routes.map((route) => [route.name, route] as const))(
       'gets the same 404 from %s as for ids that do not exist',
       async (_name, route) => {
         const real = await call(built.testApp, built.lead, route, ids);
@@ -392,7 +398,7 @@ describe.each(['confirmed', 'cancelled'] as const)(
     );
 
     it('changes nothing in the ledger, parcels, messages, referrals or sessions however many routes it tries', async () => {
-      for (const route of SESSION_REACHING_ROUTES) {
+      for (const route of routes) {
         await call(built.testApp, built.lead, route, ids);
       }
 
@@ -573,7 +579,7 @@ describe('an admin and a closed session', () => {
 describe('confirming', () => {
   beforeEach(wipe);
 
-  it('lets a team lead confirm once, then 404s their repeat, while an admin repeat is still 200', async () => {
+  it('accepts a team lead pressing confirm twice, and an admin doing the same', async () => {
     const built = await build();
     const confirm = (token: string) =>
       built.testApp.request(`${API}/sessions/${built.sessionId}/confirm`, {
@@ -582,7 +588,10 @@ describe('confirming', () => {
       });
 
     expect((await confirm(built.lead)).status).toBe(200);
-    expect((await confirm(built.lead)).status).toBe(404);
+    const repeat = await confirm(built.lead);
+    expect(repeat.status).toBe(200);
+    const repeatBody: { id: string; status: string } = await repeat.json();
+    expect(repeatBody).toMatchObject({ id: built.sessionId, status: 'confirmed' });
     expect((await confirm(built.admin)).status).toBe(200);
     expect((await confirm(built.admin)).status).toBe(200);
   });
@@ -634,7 +643,11 @@ describe('a session whose date has passed but is not confirmed', () => {
         headers: authHeaders(lead),
       });
     expect((await confirm()).status).toBe(200);
-    // Only now is it closed to them.
-    expect((await confirm()).status).toBe(404);
+    // Only now is it closed to them, though a second press of confirm is still accepted.
+    expect((await confirm()).status).toBe(200);
+    const byIdAfter = await later.request(`${API}/sessions/${built.sessionId}`, {
+      headers: authHeaders(lead),
+    });
+    expect(byIdAfter.status).toBe(404);
   });
 });

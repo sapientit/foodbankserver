@@ -193,7 +193,9 @@ service, so a check living only in `SessionsService` would reach almost none of 
 `404` in the addressed resource's own words, and it runs **before** any state check: a `409` saying
 "this session has been confirmed" would itself tell a team lead the session is there. The lists filter
 in SQL (`SessionListFilter.excludeStatuses`, `ReferralListFilter.excludeSessionStatuses`) rather than
-after the fetch. **Status only, not date**, which is deliberately narrower than the SMS `isSessionClosed`
+after the fetch. The one exception is `POST /sessions/:id/confirm`, whose idempotent repeat on an
+already-confirmed session still answers a team lead `200` — a double press is just done twice (Pete,
+closed Q53); it returns the session's own fields only. **Status only, not date**, which is deliberately narrower than the SMS `isSessionClosed`
 below: an unconfirmed session whose day has passed is still the team lead's to mark and confirm.
 
 **A session's `deliveryCapacity` is a number within its overall `capacity`, not a boolean.** It
