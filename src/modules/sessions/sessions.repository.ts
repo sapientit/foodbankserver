@@ -9,6 +9,7 @@ import {
   isNull,
   lt,
   lte,
+  notInArray,
   or,
   sql,
   type SQL,
@@ -41,6 +42,8 @@ export interface SessionListFilter {
   readonly from?: PlainDate | undefined;
   readonly to?: PlainDate | undefined;
   readonly status?: SessionStatus | undefined;
+  /** Statuses to leave out, in SQL, so a hidden session never leaves the database. */
+  readonly excludeStatuses?: readonly SessionStatus[] | undefined;
 }
 
 /**
@@ -143,6 +146,9 @@ export function createSessionsRepository(db: Database) {
       if (filter.from !== undefined) conditions.push(gte(sessions.sessionDate, filter.from));
       if (filter.to !== undefined) conditions.push(lte(sessions.sessionDate, filter.to));
       if (filter.status !== undefined) conditions.push(eq(sessions.status, filter.status));
+      if (filter.excludeStatuses !== undefined && filter.excludeStatuses.length > 0) {
+        conditions.push(notInArray(sessions.status, [...filter.excludeStatuses]));
+      }
 
       return db
         .select({

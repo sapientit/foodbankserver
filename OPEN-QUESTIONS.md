@@ -43,3 +43,22 @@ its types from it. Five slices later it was still wrong. The cost of the guess w
 was making it invisibly.
 
 ---
+
+## Q53 — Should a team leader's second press of Confirm succeed or be told the session is gone?
+
+`Status: open`
+`Raised by: server assistant (2026-10-18)`
+
+The spec now says a team leader cannot see a closed session at all, and confirming is what closes
+it. The first `POST /sessions/{id}/confirm` from a team leader succeeds and returns the confirmed
+session. A second one — a double tap, or a retry after a dropped connection — now gets a `404`,
+because by then the session is closed and the team leader may not see it. Before this change it was
+accepted and returned the session unchanged, the same way marking an outcome twice is.
+
+Assumed: the `404`. It follows the rule as written and leaks nothing, but it means the client sees
+an error for something that worked. The alternative is to let a team leader's repeat confirm return
+`200` with the session's own fields (no household data), as an exception to "not at all".
+
+**A:**
+
+---

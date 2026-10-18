@@ -41,13 +41,13 @@ export function smsRoutes(): Hono<AppEnv> {
   });
 
   routes.get('/sessions/:sessionId/sms-summary', ...staff, async (c) => {
-    const result = await serviceFor(c).summaryForSession(c.req.param('sessionId'));
+    const result = await serviceFor(c).summaryForSession(c.req.param('sessionId'), actorOf(c));
     return c.json(result);
   });
 
   routes.get('/referrals/:id/sms-messages', ...staff, async (c) => {
     const referralId = c.req.param('id');
-    const messages = await serviceFor(c).getThread(referralId);
+    const messages = await serviceFor(c).getThread(referralId, actorOf(c));
 
     return c.json<{ referralId: string; messages: SmsMessageResponse[] }>({
       referralId,
@@ -56,7 +56,7 @@ export function smsRoutes(): Hono<AppEnv> {
   });
 
   routes.post('/referrals/:id/sms-messages/read', ...staff, async (c) => {
-    await serviceFor(c).markThreadRead(c.req.param('id'));
+    await serviceFor(c).markThreadRead(c.req.param('id'), actorOf(c));
     return c.body(null, 204);
   });
 

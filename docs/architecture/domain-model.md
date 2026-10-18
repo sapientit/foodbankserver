@@ -185,6 +185,17 @@ session is closed by the same rule, not only a loose one) touches only the one r
 
 ## Rules the code must enforce, not merely document
 
+**A team lead cannot see a confirmed or cancelled session, by any route.** The rule is
+`modules/sessions/visibility.ts` (`canSeeSession` / `assertCanSeeSession`), and every team-lead route
+that reaches a session calls it — sessions, pick lists, parcels, attendance, referrals and SMS alike —
+because those modules load the session through their own repository access rather than the sessions
+service, so a check living only in `SessionsService` would reach almost none of them. The refusal is a
+`404` in the addressed resource's own words, and it runs **before** any state check: a `409` saying
+"this session has been confirmed" would itself tell a team lead the session is there. The lists filter
+in SQL (`SessionListFilter.excludeStatuses`, `ReferralListFilter.excludeSessionStatuses`) rather than
+after the fetch. **Status only, not date**, which is deliberately narrower than the SMS `isSessionClosed`
+below: an unconfirmed session whose day has passed is still the team lead's to mark and confirm.
+
 **A session's `deliveryCapacity` is a number within its overall `capacity`, not a boolean.** It
 replaced `deliveriesAllowed` outright (migration `0025`) — a session that takes no deliveries at all
 is simply one with `deliveryCapacity = 0`, there is no separate flag. `POST /public/referrals` refuses

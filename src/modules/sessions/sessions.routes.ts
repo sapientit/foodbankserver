@@ -30,8 +30,9 @@ import {
  * How far ahead a read reaches is not the same question as who may read: the
  * list is capped at six days for a team lead and uncapped for an admin, and
  * that cap lives in the service, from the `Actor`. Fetching one session by id
- * is deliberately not capped: the horizon decides which sessions a team lead is
- * shown, not which ones they may open to prepare.
+ * is deliberately not capped by the horizon: that decides which sessions a team
+ * lead is shown, not which ones they may open to prepare. A closed (confirmed
+ * or cancelled) session is hidden from them on both routes, as a 404.
  */
 export function sessionRoutes(): Hono<AppEnv> {
   const routes = new Hono<AppEnv>();
@@ -63,7 +64,7 @@ export function sessionRoutes(): Hono<AppEnv> {
   });
 
   routes.get('/sessions/:id', ...readers, async (c) => {
-    const session = await serviceFor(c).getSessionWithBooked(c.req.param('id'));
+    const session = await serviceFor(c).getSessionWithBooked(actorOf(c), c.req.param('id'));
     return c.json(toSessionResponse(session));
   });
 

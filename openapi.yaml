@@ -12,6 +12,24 @@ info:
     unrecognised address, or why a team lead receives fewer fields than an
     admin. Those are the parts most likely to be got wrong.
 
+    ## Closed sessions are invisible to a team lead
+
+    A session whose `status` is `confirmed` or `cancelled` does not exist as
+    far as a `team_lead` token is concerned. It is left out of
+    `GET /api/v1/sessions`, and **every** route that reaches it — the session
+    itself, its pick list, parcels, stock requirement, listener sheet,
+    referral details, model summary, SMS reminders and summary, any referral
+    booked onto it (`GET /api/v1/referrals/{id}`, its SMS thread) — answers
+    `404` exactly as for an id that was never issued, never `403`.
+    `GET /api/v1/referrals` leaves such referrals out. The check runs before
+    any other, so a `409` that would have described the session's state is
+    a `404` for a team lead instead. Admins are unaffected.
+
+    **Status only, not date**: a session whose day has passed but which
+    nobody has confirmed is still visible, because marking and confirming it
+    is the team lead's job. This is narrower than the SMS inbox's notion of
+    a closed session (`SmsMessageLocation`), which also counts the date.
+
     ## Generating a client
 
     ```
@@ -693,7 +711,11 @@ paths:
         cannot widen it — a `to` beyond the horizon is silently **clamped** back
         to it rather than refused, and a `from` beyond it simply returns an
         empty list. A narrower `to` still applies. Only the far end is capped:
-        a team lead can still list sessions in the past.
+        a team lead can still list sessions in the past — **but never a
+        `confirmed` or `cancelled` one**, which is left out of a team lead's
+        list whatever the dates (see "Closed sessions are invisible to a team
+        lead" at the top). A team lead asking for `status=confirmed` or
+        `status=cancelled` gets an empty list.
 
         Note the unauthenticated `GET /api/v1/public/sessions` window is
         fourteen days, so it reaches further ahead than a team lead's list.
@@ -707,7 +729,8 @@ paths:
         however far out it is. That is preparation, not a hole: the charity
         does not want a team lead stopped from getting a fortnight's picking
         ready, and does not need the server enforcing a window nobody works
-        outside anyway.
+        outside anyway. Closed sessions are the exception: those routes
+        answer a team lead `404` for one.
       parameters:
         - { in: query, name: from, schema: { type: string, format: date } }
         - in: query
@@ -891,7 +914,18 @@ paths:
         session closed with people unaccounted for has wrong stock figures.
         Once confirmed, the session and its pick list can no longer be changed.
         There is no override.
+
+        Confirming closes the session, so **from then on a team lead cannot
+        see it**. The confirming call itself returns `200`; a team lead's
+        repeat of it (a double tap, a retry) gets `404`. An admin's repeat is
+        still accepted and returns the session unchanged. A team lead also
+        gets `404` for a cancelled session.
+      x-assumed: >-
+        A team lead's repeated confirm is a 404 rather than an idempotent 200,
+        following "a team leader cannot see a closed session at all" literally.
+        OPEN-QUESTIONS.md Q53.
       responses:
+        '404': { $ref: '#/components/responses/NotFound' }
         '200':
           description: Confirmed
           content:
@@ -2354,6 +2388,7 @@ paths:
         what the food bank sent. A count that went up when staff answered a
         message would be counting their own work back at them.
       responses:
+        '404': { $ref: '#/components/responses/NotFound' }
         '200':
           description: Counts
           content:
@@ -3980,6 +4015,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/GeneratePickListRequest' }
       responses:
+        '404': { $ref: '#/components/responses/NotFound' }
         '200':
           description: Generated, reconciled, or already complete
           content:
@@ -4146,6 +4182,7 @@ paths:
       tags: [Pick lists]
       summary: A pick list with its parcels
       responses:
+        '404': { $ref: '#/components/responses/NotFound' }
         '200':
           description: The pick list
           content:
@@ -4184,6 +4221,7 @@ paths:
         are still returned by `GET /sessions/{sessionId}/pick-list`, reading
         `attendance: "cancelled"`.
       responses:
+        '404': { $ref: '#/components/responses/NotFound' }
         '200':
           description: Sheets
           content:
@@ -4208,6 +4246,7 @@ paths:
         edited after printing** — the list locks only once the session is
         confirmed.
       responses:
+        '404': { $ref: '#/components/responses/NotFound' }
         '200':
           description: Marked
           content:
@@ -4227,6 +4266,7 @@ paths:
         `active` and `reviewed` alike; once the session is confirmed the list
         stays locked and can still report missing referrals.
       responses:
+        '404': { $ref: '#/components/responses/NotFound' }
         '200':
           description: Differences
           content:
@@ -4293,6 +4333,7 @@ paths:
                 stockItemId: { type: string, format: uuid }
                 quantity: { type: integer, minimum: 0, maximum: 1000 }
       responses:
+        '404': { $ref: '#/components/responses/NotFound' }
         '204': { description: Applied }
         '409': { description: The session has been confirmed }
 
@@ -4311,6 +4352,7 @@ paths:
         what keeps an unsettled item off a printed sheet and out of the stock
         ledger, since both wait on review.
       responses:
+        '404': { $ref: '#/components/responses/NotFound' }
         '200':
           description: Reviewed
           content:
@@ -4332,6 +4374,7 @@ paths:
       tags: [Pick lists]
       summary: Remove an item from a parcel
       responses:
+        '404': { $ref: '#/components/responses/NotFound' }
         '204': { description: Removed }
         '409': { description: The session has been confirmed }
 
@@ -4383,6 +4426,7 @@ paths:
               properties:
                 attendance: { type: string, enum: [attended, no_show] }
       responses:
+        '404': { $ref: '#/components/responses/NotFound' }
         '200':
           description: Recorded
           content:

@@ -87,9 +87,12 @@ export function pickListRoutes(): Hono<AppEnv> {
 
   routes.get('/sessions/:sessionId/pick-list', ...staff, async (c) => {
     const service = serviceFor(c);
-    const pickList = await service.getPickListForSession(c.req.param('sessionId'));
+    const { pickList, session } = await service.getVisiblePickListForSession(
+      c.req.param('sessionId'),
+      actorOf(c),
+    );
     const parcels = await service.listParcelsWithLines(pickList.id);
-    const voucher = await service.voucherContext(pickList);
+    const voucher = await service.voucherContext(session);
     const byId = await referralsBySession(c, pickList.sessionId);
 
     return c.json<{ pickList: ReturnType<typeof toPickListResponse>; parcels: ParcelResponse[] }>({
@@ -132,9 +135,9 @@ export function pickListRoutes(): Hono<AppEnv> {
 
   routes.get('/pick-lists/:id', ...staff, async (c) => {
     const service = serviceFor(c);
-    const pickList = await service.getPickList(c.req.param('id'));
+    const { pickList, session } = await service.getVisiblePickList(c.req.param('id'), actorOf(c));
     const parcels = await service.listParcelsWithLines(pickList.id);
-    const voucher = await service.voucherContext(pickList);
+    const voucher = await service.voucherContext(session);
     const byId = await referralsBySession(c, pickList.sessionId);
 
     return c.json({
@@ -148,7 +151,7 @@ export function pickListRoutes(): Hono<AppEnv> {
   /** What has changed since generation, so nothing is applied behind a picker. */
   routes.get('/pick-lists/:id/divergence', ...staff, async (c) => {
     const service = serviceFor(c);
-    const pickList = await service.getPickList(c.req.param('id'));
+    const { pickList } = await service.getVisiblePickList(c.req.param('id'), actorOf(c));
 
     return c.json(await service.divergence(pickList));
   });
@@ -161,7 +164,7 @@ export function pickListRoutes(): Hono<AppEnv> {
    */
   routes.get('/pick-lists/:id/print', ...staff, async (c) => {
     const service = serviceFor(c);
-    const pickList = await service.getPickList(c.req.param('id'));
+    const { pickList } = await service.getVisiblePickList(c.req.param('id'), actorOf(c));
     const parcels = await service.listParcelsForPrint(pickList.id);
 
     const byId = await referralsBySession(c, pickList.sessionId);
@@ -190,6 +193,7 @@ export function pickListRoutes(): Hono<AppEnv> {
     const { pickList, lines } = await serviceFor(c).stockRequirement(
       c.req.param('sessionId'),
       order,
+      actorOf(c),
     );
 
     return c.json<{ pickListId: string; items: StockRequirementResponse[] }>({
@@ -200,23 +204,23 @@ export function pickListRoutes(): Hono<AppEnv> {
 
   routes.put('/parcels/:id/lines', ...staff, async (c) => {
     const { stockItemId, quantity } = await parseJsonBody(c, lineSchema);
-    await serviceFor(c).setLine(c.req.param('id'), stockItemId, quantity);
+    await serviceFor(c).setLine(c.req.param('id'), stockItemId, quantity, actorOf(c));
 
     return c.body(null, 204);
   });
 
   routes.delete('/parcels/:id/lines/:stockItemId', ...staff, async (c) => {
-    await serviceFor(c).removeLine(c.req.param('id'), c.req.param('stockItemId'));
+    await serviceFor(c).removeLine(c.req.param('id'), c.req.param('stockItemId'), actorOf(c));
     return c.body(null, 204);
   });
 
   routes.post('/parcels/:id/review', ...staff, async (c) => {
-    const parcel = await serviceFor(c).markParcelReviewed(c.req.param('id'));
+    const parcel = await serviceFor(c).markParcelReviewed(c.req.param('id'), actorOf(c));
     return c.json({ id: parcel.id, reviewedAt: parcel.reviewedAt });
   });
 
   routes.post('/pick-lists/:id/print', ...staff, async (c) => {
-    const updated = await serviceFor(c).markPrinted(c.req.param('id'));
+    const updated = await serviceFor(c).markPrinted(c.req.param('id'), actorOf(c));
     return c.json(toPickListResponse(updated));
   });
 

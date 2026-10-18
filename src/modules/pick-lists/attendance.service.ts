@@ -6,6 +6,7 @@ import type { Database } from '../../db/client.ts';
 import type { AttendanceStatus, Parcel } from '../../db/schema/pick-lists.ts';
 import { isUniqueViolation } from '../../db/unique-violation.ts';
 import type { SessionsRepository } from '../sessions/sessions.repository.ts';
+import { assertCanSeeSession } from '../sessions/visibility.ts';
 import type { PickListsRepository } from './pick-lists.repository.ts';
 
 export interface AttendanceDeps {
@@ -78,6 +79,19 @@ export function createAttendanceService(deps: AttendanceDeps) {
     if (parcel === undefined) {
       throw new NotFoundError('Parcel not found');
     }
+    // Read and checked before any state check: a team lead is refused a closed
+    // session's parcel as a 404 ahead of the repeat and the 409s below, which
+    // would each reveal that it exists.
+    const pickList = await repository.findById(parcel.pickListId);
+    if (pickList === undefined) {
+      throw new NotFoundError('Pick list not found');
+    }
+    const session = await sessions.findById(pickList.sessionId);
+    if (session === undefined) {
+      throw new NotFoundError('Session not found');
+    }
+    assertCanSeeSession(actor, session, 'Parcel not found');
+
     if (parcel.attendance === attendance) {
       // Already in this state: nothing to do, and saying so is kinder than
       // a conflict when someone taps twice.
@@ -100,15 +114,9 @@ export function createAttendanceService(deps: AttendanceDeps) {
       throw new ConflictError('Review this pick list before recording attendance');
     }
 
-    const pickList = await repository.findById(parcel.pickListId);
-    if (pickList === undefined) {
-      throw new NotFoundError('Pick list not found');
-    }
-
     // Confirming the session is the end of it. Everything above this line can
     // be changed and nothing below it can.
-    const session = await sessions.findById(pickList.sessionId);
-    if (session?.status === 'confirmed') {
+    if (session.status === 'confirmed') {
       throw new ConflictError(
         'This session has been confirmed, so its outcomes can no longer be changed',
         { details: { parcelId, currentAttendance: parcel.attendance } },
@@ -280,6 +288,9 @@ export function createAttendanceService(deps: AttendanceDeps) {
     if (session === undefined) {
       throw new NotFoundError('Session not found');
     }
+    // Before the idempotent path: a team lead's first confirm succeeds, but a
+    // repeat now finds the session closed to them and gets a 404. Intended.
+    assertCanSeeSession(actor, session);
     if (session.status === 'confirmed') {
       return session; // Idempotent.
     }

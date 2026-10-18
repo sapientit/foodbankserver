@@ -85,7 +85,7 @@ export function referralRoutes(): Hono<AppEnv> {
    */
   routes.get('/sessions/:sessionId/listener-sheet', ...readers, async (c) => {
     const sessionId = c.req.param('sessionId');
-    const households = await serviceFor(c).listenerSheet(sessionId);
+    const households = await serviceFor(c).listenerSheet(sessionId, actorOf(c));
 
     return c.json<{ sessionId: string; households: ListenerSheetHousehold[] }>({
       sessionId,
@@ -106,7 +106,7 @@ export function referralRoutes(): Hono<AppEnv> {
   routes.get('/sessions/:sessionId/referral-details', ...readers, async (c) => {
     const { session, referrals, pickNumberByReferral, voucher } = await serviceFor(
       c,
-    ).referralDetails(c.req.param('sessionId'));
+    ).referralDetails(c.req.param('sessionId'), actorOf(c));
 
     return c.json<ReferralDetailsResponse>(
       toReferralDetailsResponse(session, referrals, pickNumberByReferral, voucher),
@@ -120,7 +120,10 @@ export function referralRoutes(): Hono<AppEnv> {
    * `ModelSummaryHousehold` for what it withholds.
    */
   routes.get('/sessions/:sessionId/model-summary', ...readers, async (c) => {
-    const { session, households } = await serviceFor(c).modelSummary(c.req.param('sessionId'));
+    const { session, households } = await serviceFor(c).modelSummary(
+      c.req.param('sessionId'),
+      actorOf(c),
+    );
 
     return c.json<ModelSummaryResponse>(toModelSummaryResponse(session.id, households));
   });

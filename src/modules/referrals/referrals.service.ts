@@ -25,6 +25,10 @@ import type { ReferrersService } from '../referrers/referrers.service.ts';
 import type { PickListsRepository } from '../pick-lists/pick-lists.repository.ts';
 import type { SessionsRepository } from '../sessions/sessions.repository.ts';
 import type { VoucherConfigRepository } from '../voucher-config/voucher-config.repository.ts';
+import {
+  assertCanSeeSession,
+  SESSION_STATUSES_HIDDEN_FROM_TEAM_LEADS,
+} from '../sessions/visibility.ts';
 import { firstOfferableDate } from '../sessions/public-window.ts';
 import { modelParcelNameFor, type ParcelGrid } from '../rules/engine.ts';
 import {
@@ -446,14 +450,17 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
    * The voucher-config row is read for the same reason `listenerSheet` reads
    * it: each household's `voucherInstruction` is derived fresh, never stored.
    */
-  async function referralDetails(sessionId: string): Promise<{
+  async function referralDetails(
+    sessionId: string,
+    actor: Actor,
+  ): Promise<{
     session: Session;
     referrals: Referral[];
     pickNumberByReferral: Map<string, number>;
     voucher: ListenerSheetVoucherContext;
   }> {
     const [{ session, referrals: holdingAPlace, pickNumberByReferral }, voucherRow] =
-      await Promise.all([householdsOnSession(sessionId), voucherConfig.find()]);
+      await Promise.all([householdsOnSession(sessionId, actor), voucherConfig.find()]);
 
     const voucher: ListenerSheetVoucherContext = {
       sessionDate: session.sessionDate,
@@ -481,12 +488,15 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
    * name in the grid always exists as a model parcel — `saveGrid` and
    * `deleteModelParcel` both guarantee it — so the name alone is enough.
    */
-  async function modelSummary(sessionId: string): Promise<{
+  async function modelSummary(
+    sessionId: string,
+    actor: Actor,
+  ): Promise<{
     session: Session;
     households: { referral: Referral; pickNumber: number | null; modelParcelName: string | null }[];
   }> {
     const [{ session, referrals: holdingAPlace, pickNumberByReferral }, grid] = await Promise.all([
-      householdsOnSession(sessionId),
+      householdsOnSession(sessionId, actor),
       householdGrid.getGrid(),
     ]);
 
@@ -507,7 +517,10 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
    * the pick number of each one already picked for. Behind both
    * `referralDetails` and `modelSummary`.
    */
-  async function householdsOnSession(sessionId: string): Promise<{
+  async function householdsOnSession(
+    sessionId: string,
+    actor: Actor,
+  ): Promise<{
     session: Session;
     referrals: Referral[];
     pickNumberByReferral: Map<string, number>;
@@ -516,6 +529,9 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     if (session === undefined) {
       throw new NotFoundError('Session not found');
     }
+    // Before any referral is read: a closed session's households are not a
+    // team lead's to see.
+    assertCanSeeSession(actor, session);
 
     const [households, pickList] = await Promise.all([
       repository.list({ sessionId }),
@@ -546,25 +562,46 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
    * reason it was rejected lives in `reviewComment`, which is admin-only; the
    * screen could show the refusal without ever being able to explain it.
    *
+   * **Nor a referral booked onto a closed session** (confirmed or cancelled):
+   * a team lead cannot see a closed session at all, so neither can they see
+   * who was booked onto it. See `sessions/visibility.ts`. The session is only
+   * loaded for a non-admin, so an administrator's read costs no extra query.
+   *
    * `404`, not `403`: a team lead has no business learning that a rejected
    * referral exists, and a refusal that distinguishes the two says so.
    */
   async function viewReferral(id: string, actor: Actor): Promise<Referral> {
     const referral = await getReferral(id);
-    if (referral.status === 'rejected' && actor.role !== 'admin') {
+    if (actor.role === 'admin') return referral;
+
+    if (referral.status === 'rejected') {
       throw new NotFoundError('Referral not found');
     }
+    const session = await sessions.findById(referral.sessionId);
+    // A referral whose session is gone cannot happen (the column is NOT NULL
+    // and keyed), but refusing is the safe reading if it ever did.
+    if (session === undefined) {
+      throw new NotFoundError('Referral not found');
+    }
+    assertCanSeeSession(actor, session, 'Referral not found');
     return referral;
   }
 
-  /** The list, with the same visibility rule applied in SQL. */
+  /**
+   * The list, with the same visibility rules applied in SQL: no rejected
+   * referral, and none booked onto a closed session (see `viewReferral`).
+   */
   async function listReferrals(filter: ReferralListFilter, actor: Actor): Promise<Referral[]> {
     if (actor.role === 'admin') return repository.list(filter);
 
     // A team lead asking for rejected referrals by name gets an empty list
     // rather than an error: the status simply is not one of theirs.
     if (filter.status === 'rejected') return [];
-    return repository.list({ ...filter, excludeStatuses: ['rejected'] });
+    return repository.list({
+      ...filter,
+      excludeStatuses: ['rejected'],
+      excludeSessionStatuses: SESSION_STATUSES_HIDDEN_FROM_TEAM_LEADS,
+    });
   }
 
   /**
@@ -608,11 +645,14 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
    * the listener sheet used to be available whether or not pick lists had
    * been made at all.
    */
-  async function listenerSheet(sessionId: string): Promise<ListenerSheetHousehold[]> {
+  async function listenerSheet(sessionId: string, actor: Actor): Promise<ListenerSheetHousehold[]> {
     const session = await sessions.findById(sessionId);
     if (session === undefined) {
       throw new NotFoundError('Session not found');
     }
+    // Before any referral is read: a closed session's households are not a
+    // team lead's to see.
+    assertCanSeeSession(actor, session);
 
     const [households, reasons, pickList, voucherRow] = await Promise.all([
       repository.list({ sessionId }),

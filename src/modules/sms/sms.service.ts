@@ -1,4 +1,4 @@
-import type { Actor } from '../../core/actor.ts';
+import { isAdmin, type Actor } from '../../core/actor.ts';
 import type { Clock } from '../../core/clock.ts';
 import { NotFoundError, UnprocessableError } from '../../core/errors.ts';
 import type { Logger } from '../../core/log.ts';
@@ -8,6 +8,7 @@ import type { Session } from '../../db/schema/sessions.ts';
 import type { SmsMessage, SmsRecipientRole } from '../../db/schema/sms.ts';
 import { isUniqueViolation } from '../../db/unique-violation.ts';
 import type { SessionsRepository } from '../sessions/sessions.repository.ts';
+import { assertCanSeeSession } from '../sessions/visibility.ts';
 import { normalisePhone, phonesMatch } from '../../core/phone.ts';
 import { instantToLondonWallClock } from '../../core/time/london.ts';
 import { composeReferrerReminder, composeReminder } from './messages.ts';
@@ -135,6 +136,7 @@ export function createSmsService(deps: SmsServiceDeps) {
     if (session === undefined) {
       throw new NotFoundError('Session not found');
     }
+    assertCanSeeSession(actor, session);
 
     // One read, partitioned in memory, rather than a second query to count the
     // households that were already done — the screen needs both numbers and
@@ -286,11 +288,15 @@ export function createSmsService(deps: SmsServiceDeps) {
   }
 
   /** The counts and per-household state the run-session screen shows. */
-  async function summaryForSession(sessionId: string): Promise<SmsSessionSummaryResponse> {
+  async function summaryForSession(
+    sessionId: string,
+    actor: Actor,
+  ): Promise<SmsSessionSummaryResponse> {
     const session = await sessions.findById(sessionId);
     if (session === undefined) {
       throw new NotFoundError('Session not found');
     }
+    assertCanSeeSession(actor, session);
 
     const households = await repository.referralsHoldingAPlace(sessionId);
     const counts = await repository.inboundCountsFor(households.map((referral) => referral.id));
@@ -313,14 +319,14 @@ export function createSmsService(deps: SmsServiceDeps) {
   }
 
   /** The whole conversation for a household. Read-only — see `sms.routes.ts`. */
-  async function getThread(referralId: string): Promise<SmsMessage[]> {
-    await requireReferral(referralId);
+  async function getThread(referralId: string, actor: Actor): Promise<SmsMessage[]> {
+    await requireReferral(referralId, actor);
     return repository.threadForReferral(referralId);
   }
 
   /** Marks a household's inbound messages read. The separate action `getThread` does not do itself. */
-  async function markThreadRead(referralId: string): Promise<void> {
-    await requireReferral(referralId);
+  async function markThreadRead(referralId: string, actor: Actor): Promise<void> {
+    await requireReferral(referralId, actor);
     await repository.markThreadRead(referralId, clock.nowIso());
   }
 
@@ -366,7 +372,7 @@ export function createSmsService(deps: SmsServiceDeps) {
     body: string,
     actor: Actor,
   ): Promise<SmsMessage> {
-    const referral = await requireReferral(referralId);
+    const referral = await requireReferral(referralId, actor);
 
     const recipient = recipientFor(referral);
     const normalised = recipient.phone === null ? null : normalisePhone(recipient.phone);
@@ -746,10 +752,20 @@ export function createSmsService(deps: SmsServiceDeps) {
     await repository.markPhoneThreadRead(anchor.phone, today, now);
   }
 
-  async function requireReferral(referralId: string): Promise<Referral> {
+  async function requireReferral(referralId: string, actor: Actor): Promise<Referral> {
     const referral = await repository.findReferralById(referralId);
     if (referral === undefined) {
       throw new NotFoundError('Referral not found');
+    }
+    // A team lead cannot see a closed session, nor the texts of a referral
+    // booked onto one. Refused in the referral's own words so it reads as a
+    // wrong id. Admins see everything, so they skip the extra read.
+    if (!isAdmin(actor)) {
+      const session = await sessions.findById(referral.sessionId);
+      if (session === undefined) {
+        throw new NotFoundError('Referral not found');
+      }
+      assertCanSeeSession(actor, session, 'Referral not found');
     }
     return referral;
   }

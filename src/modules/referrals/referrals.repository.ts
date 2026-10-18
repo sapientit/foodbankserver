@@ -26,7 +26,7 @@ import {
   type Referral,
   type ReferralStatus,
 } from '../../db/schema/referrals.ts';
-import { sessions } from '../../db/schema/sessions.ts';
+import { sessions, type SessionStatus } from '../../db/schema/sessions.ts';
 import type { Patch } from '../../core/types.ts';
 import type { MatchableFields } from './matching.ts';
 
@@ -41,6 +41,12 @@ export interface ReferralListFilter {
   readonly statuses?: readonly ReferralStatus[] | undefined;
   /** Statuses the caller is not allowed to know exist. See the service. */
   readonly excludeStatuses?: readonly ReferralStatus[] | undefined;
+  /**
+   * Referrals booked onto a session in any of these statuses are left out —
+   * the caller is not allowed to know the session exists. Done as a subquery
+   * so the row shape and the single query are unchanged.
+   */
+  readonly excludeSessionStatuses?: readonly SessionStatus[] | undefined;
 }
 
 /**
@@ -265,6 +271,17 @@ export function createReferralsRepository(db: Database) {
       }
       if (filter.excludeStatuses !== undefined && filter.excludeStatuses.length > 0) {
         conditions.push(notInArray(referrals.status, [...filter.excludeStatuses]));
+      }
+      if (filter.excludeSessionStatuses !== undefined && filter.excludeSessionStatuses.length > 0) {
+        conditions.push(
+          notInArray(
+            referrals.sessionId,
+            db
+              .select({ id: sessions.id })
+              .from(sessions)
+              .where(inArray(sessions.status, [...filter.excludeSessionStatuses])),
+          ),
+        );
       }
 
       return db

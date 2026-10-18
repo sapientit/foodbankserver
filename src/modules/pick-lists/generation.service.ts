@@ -11,6 +11,7 @@ import { parseContents, parseGrid } from '../rules/rules.service.ts';
 import type { RulesRepository } from '../rules/rules.repository.ts';
 import type { ReferralsRepository } from '../referrals/referrals.repository.ts';
 import type { SessionsRepository } from '../sessions/sessions.repository.ts';
+import { assertCanSeeSession } from '../sessions/visibility.ts';
 import type { StockRepository } from '../stock/stock.repository.ts';
 import type { PickListsRepository } from './pick-lists.repository.ts';
 import { mergePreferenceLines, type ParcelContentLine } from './preference-lines.ts';
@@ -114,6 +115,8 @@ export async function generatePickList(
   if (session === undefined) {
     throw new NotFoundError('Session not found');
   }
+  // Before the 409s below, which would tell a team lead the session exists.
+  assertCanSeeSession(actor, session);
   if (session.status === 'cancelled') {
     throw new ConflictError('That session has been cancelled');
   }

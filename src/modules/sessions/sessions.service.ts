@@ -5,6 +5,7 @@ import type { Patch } from '../../core/types.ts';
 import { ConflictError, NotFoundError, UnprocessableError } from '../../core/errors.ts';
 import { instantToLondonWallClock, londonWallClockToInstant } from '../../core/time/london.ts';
 import { addDays, comparePlainDates, type PlainDate } from '../../core/time/plain-date.ts';
+import { assertCanSeeSession, SESSION_STATUSES_HIDDEN_FROM_TEAM_LEADS } from './visibility.ts';
 import type { RecurringSession, Session } from '../../db/schema/sessions.ts';
 import type {
   SessionListFilter,
@@ -175,12 +176,24 @@ export function createSessionsService({ repository, clock }: SessionsServiceDeps
    * window cannot be widened with a query parameter. Only the far end is
    * capped: "six days in advance" is a limit on looking forward, and a team
    * lead still needs the session just gone.
+   *
+   * A team lead also never sees a closed session (confirmed or cancelled): there
+   * is nothing left for them to do with one. Status only, never the date — see
+   * `visibility.ts`. The statuses are excluded in SQL, and asking for one by name
+   * is an empty list rather than a refusal, so the list does not reveal them.
    */
   async function listSessions(
     actor: Actor,
     filter: SessionListFilter,
   ): Promise<SessionWithBooked[]> {
     if (isAdmin(actor)) return repository.list(filter);
+
+    if (
+      filter.status !== undefined &&
+      SESSION_STATUSES_HIDDEN_FROM_TEAM_LEADS.some((hidden) => hidden === filter.status)
+    ) {
+      return [];
+    }
 
     // London's date, not UTC's: at 00:30 on a summer morning they differ, and
     // taking the wrong one moves the whole horizon by a day.
@@ -189,6 +202,7 @@ export function createSessionsService({ repository, clock }: SessionsServiceDeps
 
     return repository.list({
       ...filter,
+      excludeStatuses: SESSION_STATUSES_HIDDEN_FROM_TEAM_LEADS,
       to: filter.to === undefined ? horizonEnd : earlierOf(filter.to, horizonEnd),
     });
   }
@@ -244,7 +258,13 @@ export function createSessionsService({ repository, clock }: SessionsServiceDeps
   return {
     /** The raw row, for callers that need the record rather than a response. */
     getSession,
-    getSessionWithBooked: async (id: string) => withBooked(await getSession(id)),
+    // Checked before the booked-count query: a hidden session costs no more
+    // than a missing one, and answers the same way.
+    getSessionWithBooked: async (actor: Actor, id: string) => {
+      const session = await getSession(id);
+      assertCanSeeSession(actor, session);
+      return withBooked(session);
+    },
     listSessions,
     listRecurring: () => repository.listRecurring(),
     createRecurring,

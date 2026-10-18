@@ -322,6 +322,37 @@ list rather than an error), and `GET /referrals/{id}` on one is a `404`. Pending
 referrals they do see, marked by `status`: the household may well turn up, and
 the team lead is the person in the hall when they do.
 
+### A team lead cannot see a closed session at all — breaking
+
+A session whose `status` is `confirmed` or `cancelled` is invisible to a
+`team_lead` token. It is missing from `GET /sessions` (asking for
+`status=confirmed` or `status=cancelled` returns an empty list), and every route
+that reaches it answers **`404`**, the same as for an id that never existed:
+the session itself, its pick list and parcels, stock requirement, listener
+sheet, referral details, model summary, SMS reminders and summary, and any
+referral booked onto it — `GET /referrals/{id}` and its SMS thread. Those
+referrals are also missing from `GET /referrals`. The check comes first, so
+where a team lead used to get a `409` describing a closed session's state
+(editing a confirmed pick list, recording attendance on a confirmed session,
+generating for a cancelled one) they now get the `404`. Admins are unaffected.
+
+What this means for the client:
+
+- After a team lead confirms a session, **drop it from their screens**. The
+  confirm itself returns `200` with the confirmed session; anything you fetch
+  for it afterwards is a `404`. Treat that `404` as "gone", not as an error to
+  show.
+- **A team lead's second confirm is a `404`**, not the old idempotent `200`.
+  Guard the button against a double press, and treat a `404` on a retried
+  confirm as success-already-happened. This is an assumption — see
+  `OPEN-QUESTIONS.md` Q53.
+- **Status only, never the date.** A session whose day has gone by but which
+  nobody has confirmed is still on a team lead's list and fully usable, because
+  marking and confirming it is their job. Do not hide past sessions
+  client-side.
+
+Settled by Pete on 2026-10-18.
+
 ### How far ahead each role sees
 
 `GET /api/v1/sessions` returns a different window depending on who asks:
@@ -368,7 +399,7 @@ in front of them.
 pick-list route. A team lead holding a session id can still open it and its pick
 list however far out it is. Preparing a fortnight's picking in advance is the
 job, so the horizon shapes the list a team lead is shown and is not a wall
-around the sessions beyond it.
+around the sessions beyond it. Closed sessions are the one wall: see above.
 
 ---
 

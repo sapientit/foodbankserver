@@ -10,6 +10,8 @@ import {
 import { REFERRAL_STATUSES_HOLDING_A_PLACE, type Referral } from '../../db/schema/referrals.ts';
 import { instantToLondonWallClock } from '../../core/time/london.ts';
 import { startOfWeek, type PlainDate } from '../../core/time/plain-date.ts';
+import { assertCanSeeSession } from '../sessions/visibility.ts';
+import type { Session } from '../../db/schema/sessions.ts';
 import type { VoucherConfigRepository } from '../voucher-config/voucher-config.repository.ts';
 import type { VoucherDateRange } from '../voucher-config/derivations.ts';
 import {
@@ -81,6 +83,46 @@ export function createPickListsService(deps: PickListsServiceDeps) {
   }
 
   /**
+   * A pick list and its session, refused as a 404 when the caller may not see
+   * the session (`assertCanSeeSession`). Every staff read and write goes through
+   * here or `requireEditable`, so the check lands before any parcel is read and
+   * before any state check that would answer with a different error.
+   *
+   * Refuses in the pick list's own words so a closed session's list reads
+   * exactly like a wrong id.
+   */
+  async function getVisiblePickList(
+    id: string,
+    actor: Actor,
+    hiddenMessage = 'Pick list not found',
+  ): Promise<{ pickList: PickList; session: Session }> {
+    const pickList = await getPickList(id);
+    return { pickList, session: await sessionOf(pickList, actor, hiddenMessage) };
+  }
+
+  async function sessionOf(
+    pickList: PickList,
+    actor: Actor,
+    hiddenMessage: string,
+  ): Promise<Session> {
+    const session = await sessions.findById(pickList.sessionId);
+    if (session === undefined) {
+      throw new NotFoundError('Session not found');
+    }
+    assertCanSeeSession(actor, session, hiddenMessage);
+    return session;
+  }
+
+  /** The session's pick list by session id, with the same visibility refusal. */
+  async function getVisiblePickListForSession(
+    sessionId: string,
+    actor: Actor,
+  ): Promise<{ pickList: PickList; session: Session }> {
+    const pickList = await getPickListForSession(sessionId);
+    return { pickList, session: await sessionOf(pickList, actor, 'Pick list not found') };
+  }
+
+  /**
    * The pick list for a session, generating it on first view and reconciling
    * any active referral that arrived since.
    */
@@ -104,13 +146,20 @@ export function createPickListsService(deps: PickListsServiceDeps) {
     return generatePickList(deps, sessionId, actor, { preferenceLines, pickListInformation });
   }
 
-  /** Editing is allowed while draft and after printing — locked once the session is confirmed. */
-  async function requireEditable(pickListId: string): Promise<PickList> {
-    const pickList = await getPickList(pickListId);
-    const session = await sessions.findById(pickList.sessionId);
-    if (session === undefined) {
-      throw new NotFoundError('Session not found');
-    }
+  /**
+   * Editing is allowed while draft and after printing — locked once the session is confirmed.
+   *
+   * `hiddenMessage` is the addressed resource's own not-found text: a route
+   * reached by parcel id must refuse a closed session's parcel as "Parcel not
+   * found", exactly as for a wrong parcel id, or the message itself says the
+   * parcel exists.
+   */
+  async function requireEditable(
+    pickListId: string,
+    actor: Actor,
+    hiddenMessage = 'Pick list not found',
+  ): Promise<PickList> {
+    const { pickList, session } = await getVisiblePickList(pickListId, actor, hiddenMessage);
     if (session.status === 'confirmed') {
       throw new ConflictError('This session has been confirmed and can no longer be changed');
     }
@@ -133,9 +182,14 @@ export function createPickListsService(deps: PickListsServiceDeps) {
    * removes it. There is no way to *create* a `-1` from here — those arrive
    * from the client's preference rules at generation and nowhere else.
    */
-  async function setLine(parcelId: string, stockItemId: string, quantity: number): Promise<void> {
+  async function setLine(
+    parcelId: string,
+    stockItemId: string,
+    quantity: number,
+    actor: Actor,
+  ): Promise<void> {
     const parcel = await getParcel(parcelId);
-    await requireEditable(parcel.pickListId);
+    await requireEditable(parcel.pickListId, actor, 'Parcel not found');
 
     const now = clock.nowIso();
     if (quantity <= 0) {
@@ -154,9 +208,9 @@ export function createPickListsService(deps: PickListsServiceDeps) {
     await repository.updateParcel(parcelId, { updatedAt: now });
   }
 
-  async function removeLine(parcelId: string, stockItemId: string): Promise<void> {
+  async function removeLine(parcelId: string, stockItemId: string, actor: Actor): Promise<void> {
     const parcel = await getParcel(parcelId);
-    await requireEditable(parcel.pickListId);
+    await requireEditable(parcel.pickListId, actor, 'Parcel not found');
 
     await repository.deleteLine(parcelId, stockItemId);
     await repository.updateParcel(parcelId, { updatedAt: clock.nowIso() });
@@ -174,9 +228,9 @@ export function createPickListsService(deps: PickListsServiceDeps) {
    * reaches `buildParcelIssue`, which negates the quantity — so a line meaning
    * "somebody must decide" would silently *add* one to stock.
    */
-  async function markParcelReviewed(parcelId: string): Promise<Parcel> {
+  async function markParcelReviewed(parcelId: string, actor: Actor): Promise<Parcel> {
     const parcel = await getParcel(parcelId);
-    await requireEditable(parcel.pickListId);
+    await requireEditable(parcel.pickListId, actor, 'Parcel not found');
 
     const lines = await repository.listLinesFor(parcelId);
     if (lines.some((line) => line.quantity === NEEDS_ATTENTION_QUANTITY)) {
@@ -222,12 +276,8 @@ export function createPickListsService(deps: PickListsServiceDeps) {
    * the pick list.
    */
   async function voucherContext(
-    pickList: PickList,
+    session: Session,
   ): Promise<{ sessionDate: PlainDate; voucherRange: VoucherDateRange | undefined }> {
-    const session = await sessions.findById(pickList.sessionId);
-    if (session === undefined) {
-      throw new NotFoundError('Session not found');
-    }
     const config = await voucherConfig.find();
 
     return {
@@ -245,8 +295,8 @@ export function createPickListsService(deps: PickListsServiceDeps) {
    * review check still runs on a reprint: a late referral reconciled in since
    * the first print arrives unreviewed, and it must not reach paper either.
    */
-  async function markPrinted(pickListId: string): Promise<PickList> {
-    const pickList = await requireEditable(pickListId);
+  async function markPrinted(pickListId: string, actor: Actor): Promise<PickList> {
+    const pickList = await requireEditable(pickListId, actor);
 
     const parcelRows = await repository.listParcels(pickListId);
     // Cancelled parcels are excluded for the same reason they are left off the
@@ -308,13 +358,10 @@ export function createPickListsService(deps: PickListsServiceDeps) {
   async function stockRequirement(
     sessionId: string,
     order: StockOrder,
+    actor: Actor,
   ): Promise<{ pickList: PickList; lines: StockRequirementLine[] }> {
-    const pickList = await getPickListForSession(sessionId);
-
-    const session = await sessions.findById(pickList.sessionId);
-    if (session === undefined) {
-      throw new NotFoundError('Session not found');
-    }
+    // Visibility first, ahead of the confirmed 409 below.
+    const { pickList, session } = await getVisiblePickListForSession(sessionId, actor);
     if (session.status === 'confirmed') {
       throw new ConflictError(
         'This session has been confirmed, so it can no longer be compared against stock',
@@ -444,8 +491,8 @@ export function createPickListsService(deps: PickListsServiceDeps) {
   }
 
   return {
-    getPickList,
-    getPickListForSession,
+    getVisiblePickList,
+    getVisiblePickListForSession,
     getOrGenerate,
     listParcelsWithLines: (pickListId: string): Promise<ParcelWithLines[]> =>
       repository.listParcelsWithLines(pickListId),
