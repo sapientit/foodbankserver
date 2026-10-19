@@ -74,10 +74,12 @@ client commit from its `client-version.json`, checks both out into temporary wor
 normal check → migrate → deploy → verify there. It refuses if the target already runs a server or
 client commit that the promoted one does not contain, so a promotion never takes a tier backwards;
 an unreadable live version refuses too. This lets a fix proven in UAT go to production while
-other work carries on in test. Test → UAT is the rehearsal. UAT → production still needs a
-production tier in `deploy-foodbank-client` before `deploy_foodbank` can offer it. Promotion carries
-code and migrations only: a secret set on the source environment must be set on the target by hand
-first.
+other work carries on in test. Test → UAT is the rehearsal;
+`deploy_foodbank --production --promote-from uat` takes what UAT runs to production, and nothing
+else promotes to production. `deploy_foodbank --production` asks for the typed `production` once,
+before any check runs, and the two helpers accept that in place of their own prompts — so a missed
+second prompt cannot leave the new server live behind the old client. Promotion carries code and
+migrations only: a secret set on the source environment must be set on the target by hand first.
 
 **The databases are separate on purpose**, for exactly the reason the Google vars differ per tier: no
 deployment should be able to write into another's data. All are EU-jurisdiction, which is permanent.
