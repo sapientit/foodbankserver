@@ -308,11 +308,11 @@ describe('picklistAdmin validation — the same rules as adminInfo', () => {
     expect(response.status).toBe(400);
   });
 
-  it('accepts exactly 80 characters and refuses 81, storing it trimmed', async () => {
+  it('accepts exactly 400 characters and refuses 401, storing it trimmed', async () => {
     const { testApp, token, world: w } = await adminWorld();
     const { id } = await submitReferral(testApp, w, {}, { clientIp: nextClientIp() });
 
-    expect(MAX_PICKLIST_ADMIN_LENGTH).toBe(80);
+    expect(MAX_PICKLIST_ADMIN_LENGTH).toBe(400);
 
     const atLimit = await patchReferral(testApp, token, id, {
       picklistAdmin: `  ${'a'.repeat(MAX_PICKLIST_ADMIN_LENGTH)}  `,

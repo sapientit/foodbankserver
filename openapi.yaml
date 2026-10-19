@@ -5410,12 +5410,12 @@ components:
         picklistAdmin:
           type: [string, 'null']
           minLength: 1
-          maxLength: 80
+          maxLength: 400
           description: >
             The administrators' one line for the picker. Exactly the rules of
             `adminInfo`: a string sets it, explicit `null` clears it, omitting
             the key leaves it alone; **an empty or whitespace-only string is a
-            `400`, not a clearance**, and so is one over 80 characters. Refused
+            `400`, not a clearance**, and so is one over 400 characters. Refused
             with a `409` on the same terms as the rest of an amendment — a
             cancelled or rejected referral, or one on a confirmed session — so
             a completed session's sheets cannot change after they were
@@ -6243,7 +6243,7 @@ components:
             Null when there is no note.
         picklistAdmin:
           type: [string, 'null']
-          maxLength: 80
+          maxLength: 400
           description: >
             **Admin only, on exactly the responses `adminInfo` is on** — one
             referral at a time — and absent everywhere `adminInfo` is absent,
@@ -6773,7 +6773,7 @@ components:
             missing pick number — it is open before picking happens at all.
         picklistAdmin:
           type: [string, 'null']
-          maxLength: 80
+          maxLength: 400
           description: >-
             The referral's current administrators' line for the picker — the
             same value as `Parcel.picklistAdmin`, read on every request rather
@@ -7457,7 +7457,7 @@ components:
             purge, in the same run as `answers`.
         picklistAdmin:
           type: [string, 'null']
-          maxLength: 80
+          maxLength: 400
           description: >
             The referral's `picklistAdmin` — the administrators' one line for
             the picker — **as it reads now**, not as it read when the parcel

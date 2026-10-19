@@ -907,7 +907,7 @@ never held it. Include `adminInfo` in that same `PATCH` when the note changed;
 leave the key out when it did not.
 
 **`picklistAdmin` is the administrators' one line for the picker**, amended the
-same way: a string sets it (trimmed, at most **80** characters), `null` clears
+same way: a string sets it (trimmed, at most **400** characters), `null` clears
 it, omitting it leaves it, and **an empty string is a `400`**. It is locked with
 the rest of the referral — a `409` once the referral is cancelled or rejected
 or its session is confirmed. It is printed on the picking sheet, so the edit
