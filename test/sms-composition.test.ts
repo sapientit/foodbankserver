@@ -33,11 +33,29 @@ function session(overrides: Partial<Session> = {}): Session {
 }
 
 describe('composeReminder', () => {
-  it('gives a collecting household the date, time and place, and no more', () => {
+  it('gives a collecting household the weekday, the session hours and place, and no date', () => {
     const message = composeReminder(session(), false, 'Alice');
 
+    // 10:00 plus the fixture's 120-minute duration.
     expect(message).toBe(
-      'Hi Alice this is Guildford Food Bank. Please collect your parcel on Fri 14 Aug at 10:00 from Church Hall. Any problems let us know.',
+      'Hi Alice this is the Foodbank. Please collect your food parcel on Friday 10:00 - 12:00 from Church Hall. Any problems let us know.',
+    );
+  });
+
+  it('reads the charity example word for word', () => {
+    const message = composeReminder(
+      session({
+        sessionDate: '2026-10-22', // a Thursday
+        startTime: '10:30',
+        durationMinutes: 60,
+        location: "St Clare's Church, GU2 8LZ",
+      }),
+      false,
+      'Rose',
+    );
+
+    expect(message).toBe(
+      "Hi Rose this is the Foodbank. Please collect your food parcel on Thursday 10:30 - 11:30 from St Clare's Church, GU2 8LZ. Any problems let us know.",
     );
   });
 
@@ -78,7 +96,7 @@ describe('composeReminder', () => {
     const message = composeReminder(session(), false, null);
 
     expect(message).toBe(
-      'This is Guildford Food Bank. Please collect your parcel on Fri 14 Aug at 10:00 from Church Hall. Any problems let us know.',
+      'This is the Foodbank. Please collect your food parcel on Friday 10:00 - 12:00 from Church Hall. Any problems let us know.',
     );
     expect(message).not.toContain('Hi ');
   });
@@ -102,7 +120,7 @@ describe('composeReminder', () => {
 
     expect(message.length).toBeLessThanOrEqual(160);
     expect(message).toContain(
-      'Hi Alice this is Guildford Food Bank. Please collect your parcel on Fri 14 Aug at 10:00 from',
+      'Hi Alice this is the Foodbank. Please collect your food parcel on Friday 10:00 - 12:00 from',
     );
   });
 
@@ -115,7 +133,7 @@ describe('composeReminder', () => {
       false,
       'Alice',
     );
-    expect(message).toContain('Tue 27 Oct');
+    expect(message).toContain('Tuesday 10:00');
   });
 });
 
@@ -124,7 +142,7 @@ describe('composeReferrerReminder', () => {
     const message = composeReferrerReminder(session(), 'Jane Fieldsworth');
 
     expect(message).toBe(
-      "Hi Jane this is Guildford Food Bank. Please collect your client's parcel as arranged on Fri 14 Aug at 10:00 from Church Hall. Any problems let us know.",
+      "Hi Jane this is Guildford Food Bank. Please collect your client's parcel as arranged on Friday 10:00 - 12:00 from Church Hall. Any problems let us know.",
     );
   });
 
@@ -132,7 +150,7 @@ describe('composeReferrerReminder', () => {
     const message = composeReferrerReminder(session(), null);
 
     expect(message).toBe(
-      "This is Guildford Food Bank. Please collect your client's parcel as arranged on Fri 14 Aug at 10:00 from Church Hall. Any problems let us know.",
+      "This is Guildford Food Bank. Please collect your client's parcel as arranged on Friday 10:00 - 12:00 from Church Hall. Any problems let us know.",
     );
     expect(message).not.toContain('Hi ');
   });
