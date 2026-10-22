@@ -16,6 +16,7 @@ and nothing here may change or block it.
 | ----------- | ---------------- | --------------- | ----------------- | ------------------------------------------------ |
 | test        | `""` (top level) | Pete's personal | `foodbank-server` | `https://foodbank-server.losttemple.workers.dev` |
 | UAT         | `uat`            | The charity's   | `api-test`        | `https://api-test.guildfordfoodbank.workers.dev` |
+| production  | `production`     | The charity's   | `api`             | `https://api.guildfordfoodbank.workers.dev`      |
 
 - **test** is Pete's personal Cloudflare account, reached through his own `wrangler login`. It is
   there so Pete can try the route on his own; nobody else has access, and it stops being relevant
@@ -23,9 +24,13 @@ and nothing here may change or block it.
 - **UAT** is reached with the charity's API token. Set **both** `CLOUDFLARE_API_TOKEN` and
   `CLOUDFLARE_ACCOUNT_ID` — with the token alone, `wrangler d1` can resolve to a cached personal
   login instead (see [`production.md`](./production.md)).
-- **Production is not on this route yet.** Before it can be, its first migration has to be run by
-  hand and its `AUTH_MODE` set to `google` — the Worker refuses to start in production otherwise.
-- Both databases are named `foodbank-test` (on different accounts). The `--env` decides which.
+- **Production is reached by promotion from UAT only** —
+  `deploy_foodbank --production --promote-from uat`, see [`production.md`](./production.md) — with
+  the charity's token as for UAT. Its `AUTH_MODE` is `google` in `wrangler.jsonc`; the Worker
+  refuses to start in production otherwise.
+- The test and UAT databases are both named `foodbank-test` (on different accounts); production's is
+  `foodbank`. The `--env` decides which, so for production every `foodbank-test --env <""|uat>`
+  below reads `foodbank --env production`.
 
 ## Every server setting is already in `wrangler.jsonc`
 
@@ -40,7 +45,7 @@ From `foodbankserver`, checked out at the tested commit:
 
 ```bash
 npm ci
-npm run build:<test|uat>
+npm run build:<test|uat|production>
 ```
 
 `build:<env>` refuses an uncommitted working tree, writes the Worker exactly as it will be uploaded
@@ -57,8 +62,8 @@ What the preparation also needs from the server:
 
 ```bash
 npx wrangler d1 time-travel info foodbank-test --env <""|uat> --json   # only if migrations are pending; keep the bookmark
-npm run db:migrate:<test|uat>
-npm run deploy:<test|uat>:built
+npm run db:migrate:<test|uat|production>
+npm run deploy:<test|uat|production>:built
 ```
 
 - **`deploy:<env>:built` uploads `dist/<env>/worker.js` without rebuilding** — byte for byte what
