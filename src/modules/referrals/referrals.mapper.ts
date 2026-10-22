@@ -43,10 +43,10 @@ function collectionMethodOf(referral: Referral): CollectionMethod {
  *
  * **`adminInfo` is admin-only and narrower still** — it is only emitted when a
  * caller asks for it, which is what keeps it off the referral list. See
- * `ReferralResponseOptions`. `ReferralSearchResult` is the one response
- * carrying more than one referral that does carry the note, settled by the
- * charity on 2026-08-15 and explained there; every other list still withholds
- * it.
+ * `ReferralResponseOptions`. `ReferralSearchResult` (2026-08-15) and
+ * `RepeatReferralMatchResponse` (2026-10-22) are the only responses carrying
+ * more than one referral that do carry the note, each settled by the charity
+ * and explained there; every other list still withholds it.
  *
  * That rule is enforced here rather than by hoping each query forgets to
  * select the column, because adding a column to a table must never widen an
@@ -451,7 +451,12 @@ export function toRepeatReferralSummary(summary: {
  *
  * **No reason, no answers, no review comment, no normalised columns, no
  * status.** The spec names what the button shows and this is it, plus the
- * session date and outcome. This is more sensitive than `reviewComment`
+ * session date and outcome.
+ *
+ * **It does carry `adminInfo`**, by the charity's decision of 2026-10-22: the
+ * administrator deciding what to do about a household that keeps coming back
+ * wants what the office wrote about it last time. Always present, `null` for
+ * "no note" — the route is admin-only outright, so it is never withheld. This is more sensitive than `reviewComment`
  * (already admin-only) — it carries another household's name, address,
  * phone number and date of birth — so it is only ever reached through
  * `GET /referrals/{id}/repeat-referrals`, which is admin-only.
@@ -470,6 +475,8 @@ export interface RepeatReferralMatchResponse {
   readonly refereeAddress: string | null;
   readonly refereePostcode: string | null;
   readonly refereePhone: string | null;
+  /** The administrators' own note on that earlier referral. */
+  readonly adminInfo: string | null;
 }
 
 /**
@@ -491,6 +498,7 @@ interface RepeatReferralMatchInput {
   readonly refereeAddress: string | null;
   readonly refereePostcode: string | null;
   readonly refereePhone: string | null;
+  readonly adminInfo: string | null;
 }
 
 export function toRepeatReferralMatch(
@@ -508,6 +516,7 @@ export function toRepeatReferralMatch(
     refereeAddress: match.refereeAddress,
     refereePostcode: match.refereePostcode,
     refereePhone: match.refereePhone,
+    adminInfo: match.adminInfo,
   };
 }
 

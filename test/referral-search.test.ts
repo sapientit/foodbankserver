@@ -100,8 +100,9 @@ interface ReferralSearchResultBody {
   readonly referrerOrganisation: string;
   /**
    * The administrators' own note about the household. Settled 2026-08-15,
-   * `INITIAL_SPEC1.txt` `#Searching for a referral`: this is the one
-   * multi-referral response that carries it, because the route is admin-only
+   * `INITIAL_SPEC1.txt` `#Searching for a referral`: one of the two
+   * multi-referral responses that carry it (the repeat-referral list is the
+   * other), because the route is admin-only
    * outright — a team lead gets `403`, not a thinner row — so it is always
    * present here, `null` meaning there is no note rather than absent.
    */
@@ -465,8 +466,9 @@ describe('each identifier finds a referral on its own', () => {
 describe("the administrators' note on a search result row", () => {
   /**
    * Settled 2026-08-15, `INITIAL_SPEC1.txt` `#Searching for a referral`:
-   * `POST /referrals/search` is the one response carrying more than one
-   * referral that returns `adminInfo`, because the route is admin-only
+   * `POST /referrals/search` is one of the two responses carrying more than
+   * one referral that return `adminInfo` (the repeat-referral list is the
+   * other), because the route is admin-only
    * outright — a team lead gets `403` rather than a thinner row, so there is
    * no recipient to withhold the field from. Written through
    * `PATCH /referrals/{id}`, the same route `test/referral-admin-info.test.ts`

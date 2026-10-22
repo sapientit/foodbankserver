@@ -69,6 +69,8 @@ export interface RepeatReferralCandidate {
   readonly refereePhone: string | null;
   readonly postcodeNormalised: string | null;
   readonly phoneNormalised: string | null;
+  /** The administrators' own note — see `ReferralSearchCandidate.adminInfo`. */
+  readonly adminInfo: string | null;
 }
 
 /**
@@ -136,13 +138,14 @@ function repeatReferralPredicate(
  * than mapping them away afterwards, and `referrals.mapper.ts` is still the
  * allowlist that decides what leaves.
  *
- * **It does select `adminInfo`, and this is the only multi-referral response
- * that does.** The charity settled it on 2026-08-15: the search screen is an
- * administrator on the phone to a household, and what the office learned the
- * last time it rang them is wanted at the same moment the causes are. The
- * exception is bounded by the route being admin-only outright — a team lead
- * gets a `403` here rather than a narrower row — so widening it to any other
- * list needs the charity, not an analogy.
+ * **It does select `adminInfo`, one of only two multi-referral responses
+ * that do** (the other is `RepeatReferralCandidate`, 2026-10-22). The charity
+ * settled this one on 2026-08-15: the search screen is an administrator on the
+ * phone to a household, and what the office learned the last time it rang
+ * them is wanted at the same moment the causes are. Each exception is bounded
+ * by its route being admin-only outright — a team lead gets a `403` rather
+ * than a narrower row — so widening it to any other list needs the charity,
+ * not an analogy.
  */
 export interface ReferralSearchCandidate {
   readonly id: string;
@@ -440,6 +443,7 @@ export function createReferralsRepository(db: Database) {
           refereePhone: referrals.refereePhone,
           postcodeNormalised: referrals.refereePostcodeNormalised,
           phoneNormalised: referrals.refereePhoneNormalised,
+          adminInfo: referrals.adminInfo,
         })
         .from(referrals)
         .innerJoin(sessions, eq(sessions.id, referrals.sessionId))

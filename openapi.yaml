@@ -1821,10 +1821,10 @@ paths:
         referral status, first name, surname, postcode, phone number, the main
         reason id, the referrer's name and organisation, the dynamic `answers`
         whole, and `adminInfo` — the administrators' own note about the
-        household. **This is the one response carrying more than one referral
-        that carries the note**, and that exception is deliberate: this screen
-        is an administrator on the phone to a household. Every other list still
-        withholds it. It is required and nullable rather than optional, because
+        household. **This and `GET /referrals/{id}/repeat-referrals` are the
+        only responses carrying more than one referral that carry the note**,
+        and the exception is deliberate: this screen is an administrator on the
+        phone to a household. Every other list still withholds it. It is required and nullable rather than optional, because
         the endpoint is admin-only outright, so `null` means there is no note.
         Resolve `reasonId` using the admin-only referral-reasons lookup. The
         secondary cause and the additional crisis detail are answers, so they
@@ -5972,7 +5972,8 @@ components:
         One earlier referral from what looks like the same household. Carries
         that household's own details, which is why the route returning it is
         admin-only. No reason for referral, no answers and no review comment —
-        the charity named what this shows and this is it.
+        the charity named what this shows and this is it. It does carry
+        `adminInfo`, the administrators' own note on that earlier referral.
       required:
         [
           referralId,
@@ -5986,6 +5987,7 @@ components:
           refereeAddress,
           refereePostcode,
           refereePhone,
+          adminInfo,
         ]
       properties:
         referralId: { type: string, format: uuid }
@@ -6030,6 +6032,17 @@ components:
             returned; putting a value into a settled form never rewrites the
             value itself.
         refereePhone: { type: [string, 'null'] }
+        adminInfo:
+          type: [string, 'null']
+          maxLength: 2000
+          description: >-
+            The administrators' own note on that earlier referral — the same
+            column and limit as `Referral.adminInfo`. Here by the charity's
+            decision of 2026-10-22: the administrator deciding what to do about
+            a household that keeps coming back wants what the office wrote
+            about it last time. Required and nullable, as on
+            `ReferralSearchResult`: the route is admin-only outright, so `null`
+            means there is no note rather than "you may not see it".
 
     RepeatReferralList:
       allOf:
@@ -6218,20 +6231,21 @@ components:
           type: [string, 'null']
           maxLength: 2000
           description: >
-            **Admin only, and — with one settled exception — only on a response
+            **Admin only, and — with two settled exceptions — only on a response
             carrying one referral** — `GET /referrals/{id}`,
             `PATCH /referrals/{id}`, and the accept, reject, review and cancel
             routes. **Absent from the `GET /referrals` list rows**, and absent
             from every printed, exported or messaged payload: the listener
-            sheet, the referral-details list, the repeat-referral list, the
-            pick list, the fuel help list, SMS and the spreadsheet extract.
+            sheet, the referral-details list, the pick list, the fuel help
+            list, SMS and the spreadsheet extract.
 
-            **The exception is `ReferralSearchResult`**, where the note is on
-            every row — the only response carrying more than one referral that
-            has it, settled by the charity on 2026-08-15 because that screen is
-            an administrator on the phone to a household. See that schema for
-            why it is required-and-nullable there rather than optional as it is
-            here. It is not a licence to expect the note on any other list.
+            **The exceptions are `ReferralSearchResult` and
+            `RepeatReferralMatch`**, where the note is on every row — the only
+            responses carrying more than one referral that have it, each settled
+            by the charity (2026-08-15 and 2026-10-22). Both are admin-only
+            outright, which is why the field is required-and-nullable there
+            rather than optional as it is here. It is not a licence to expect
+            the note on any other list.
 
             The administrators' own free-text note about the household — what
             the office learned from ringing them. It is **not** one of
@@ -6933,9 +6947,9 @@ components:
           description: >-
             The administrators' own note about the household — free text
             written by the office, not by the referrer. The same column and the
-            same 2,000-character limit as `Referral.adminInfo`. **This is the only
-            response carrying more than one referral that has it**, and the
-            exception is deliberate: an administrator on the phone to a
+            same 2,000-character limit as `Referral.adminInfo`. **This and
+            `RepeatReferralMatch` are the only responses carrying more than one
+            referral that have it**, and the exception is deliberate: an administrator on the phone to a
             household wants what the office learned last time it rang them at
             the same moment it wants the causes. Everything else still
             withholds it — see `API.md`, "Field-level visibility".

@@ -382,17 +382,18 @@ re-timed or cancelled occurrence safe by construction.
 Enforce both in the response mapper, not by hoping a query forgets to select them.
 
 **`adminInfo` — the administrators' own note about a household — is admin-only and single-referral
-only, with one settled exception.** The mapper emits it when the route asks for it, so
+only, with two settled exceptions.** The mapper emits it when the route asks for it, so
 `GET /referrals` never carries it and `GET /referrals/{id}` does. Opt-in rather than opt-out because
 the list is the response somebody widens by accident.
 
-The exception is `POST /referrals/search`, where every result row carries the note — the only
-response holding more than one referral that does. The charity settled it on 2026-08-15
-(`INITIAL_SPEC1.txt`, `#Searching for a referral`): that screen is an administrator on the phone to a
-household, and the note is wanted at the same moment the causes are. It stays bounded because the
-route is admin-only outright — a team lead gets a `403`, not a thinner row — which is why the field
-is required-and-nullable there rather than optional. Do not extend it to another list by analogy;
-the reasoning is about that one screen.
+The first is `POST /referrals/search`, where every result row carries the note. The charity
+settled it on 2026-08-15 (`INITIAL_SPEC1.txt`, `#Referral maintenance`): that screen is an
+administrator on the phone to a household, and the note is wanted at the same moment the causes are.
+The second is `GET /referrals/{id}/repeat-referrals`, settled 2026-10-22: the administrator deciding
+what to do about a household that keeps coming back wants what the office wrote about it last time.
+Both stay bounded because the route is admin-only outright — a team lead gets a `403`, not a thinner
+row — which is why the field is required-and-nullable there rather than optional. Do not extend it
+to another list by analogy; each was the charity's decision about one screen.
 
 **A team lead sees `pending_review` referrals but never `rejected` ones** — absent from the list, and
 `404` rather than `403` by id, because a team lead has no business learning that one exists.

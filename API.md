@@ -302,19 +302,21 @@ absent from the list rows, but because deriving it costs a query rather than
 because anybody is being withheld from — see "A referral now says what became of
 the household".
 
-**`POST /referrals/search` is the single exception**, settled by the charity on
-2026-08-15: a search result row carries `adminInfo`, and it is the only response
-carrying more than one referral that does. The reason is that screen's whole
-purpose — an administrator on the phone to a household wants what the office
-learned the last time it rang them at the same moment it wants the causes. On
-that row it is `string | null` and always present, not optional: the endpoint is
+**There are two exceptions, each settled by the charity.** `POST
+/referrals/search` (2026-08-15): a search result row carries `adminInfo`,
+because an administrator on the phone to a household wants what the office
+learned the last time it rang them at the same moment it wants the causes.
+`GET /referrals/{id}/repeat-referrals` (2026-10-22): each match carries its own
+`adminInfo`, because the administrator deciding what to do about a household
+that keeps coming back wants what the office wrote about it last time. On both
+it is `string | null` and always present, not optional: the endpoints are
 admin-only outright, a team lead gets a `403` rather than a thinner row, so
 `null` means there is no note and nothing else.
 
-Apart from that one row it is on nothing else at all: not the repeat-referral
-list, not the listener sheet, the referral-details list, the pick list, the fuel
-help list, an SMS payload or the spreadsheet extract. Do not read the search
-exception as permission to put the note on any of them.
+Apart from those two it is on no other list at all: not the listener sheet, the
+referral-details list, the pick list, the fuel help list, an SMS payload or the
+spreadsheet extract. Do not read the exceptions as permission to put the note on
+any of them.
 
 A team lead also **does not see rejected referrals at all**. They are missing
 from `GET /referrals` whatever you filter by (`status=rejected` returns an empty
@@ -713,13 +715,17 @@ the only place another household's details are returned:
       "refereeDateOfBirth": "1990-03-02",
       "refereeAddress": "…",
       "refereePostcode": "…",
-      "refereePhone": "…"
+      "refereePhone": "…",
+      "adminInfo": "Office note here"
     }
   ]
 }
 ```
 
-Ordered most recent session first. `outcome` is `attended`, `no_show` or
+Ordered most recent session first. `adminInfo` is the administrators' own note
+on that earlier referral — `string | null`, always present (the route is
+admin-only outright, so `null` is "no note"). It is here by the charity's
+decision of 2026-10-22; see _Field-level visibility_. `outcome` is `attended`, `no_show` or
 `booked`; `matchedOn` is a non-empty subset of `date_of_birth`, `postcode` and
 `phone`.
 
@@ -823,11 +829,12 @@ first name, surname, postcode, phone number, the main reason id, the referrer's
 name and organisation, `answers` whole, and `adminInfo`. Resolve `reasonId`
 using the admin-only referral-reasons lookup, including retired reasons.
 
-**`adminInfo` is here and nowhere else that carries more than one referral.**
-The administrators' own note about the household rides the search row by the
-charity's decision of 2026-08-15 — see _Field-level visibility_ above for the
-rule and the reason. It is `string | null` and always present, because this
-endpoint is admin-only outright, so `null` is "no note" rather than "not for
+**`adminInfo` is here, and on the repeat-referral list, and nowhere else that
+carries more than one referral.** The administrators' own note about the
+household rides the search row by the charity's decision of 2026-08-15, and the
+repeat-referral matches by its decision of 2026-10-22 — see _Field-level
+visibility_ above for the rule and the reasons. It is `string | null` and always
+present, because both endpoints are admin-only outright, so `null` is "no note" rather than "not for
 you".
 
 **`referrerOrganisation` is the one field here that is never null.** It is

@@ -374,7 +374,7 @@ describe('absent from every list, export and print-oriented payload', () => {
     expect(text).toContain(id);
   });
 
-  // The one deliberate exception, settled 2026-08-15 (`INITIAL_SPEC1.txt`,
+  // The first deliberate exception, settled 2026-08-15 (`INITIAL_SPEC1.txt`,
   // `#Searching for a referral`): the search route is admin-only outright, so
   // there is no thinner-row recipient to withhold the note from, and it rides
   // every result row. Full coverage of the shape (the null case, the role
@@ -383,7 +383,7 @@ describe('absent from every list, export and print-oriented payload', () => {
   // assertion in this describe block, so a change that put the note back
   // behind a role check here would be visible right where the rest of the
   // exceptions are.
-  it('is present on POST /referrals/search — the one list of households that carries it', async () => {
+  it('is present on POST /referrals/search — one of the two lists of households that carry it', async () => {
     const { testApp, token, world: w } = await adminWorld();
     const { id } = await submitReferral(
       testApp,
@@ -406,10 +406,14 @@ describe('absent from every list, export and print-oriented payload', () => {
     expect(text).toContain(id);
   });
 
-  it('is absent from GET /referrals/{id}/repeat-referrals', async () => {
+  // The charity's second exception, 2026-10-22. Each match carries its own
+  // note; the referral under review is never a match, so its note must not
+  // appear — that is what tells "the match's note" from "a note".
+  it('is present on GET /referrals/{id}/repeat-referrals — each match carrying its own note, null where there is none', async () => {
     const { testApp, token, world: w } = await adminWorld();
     const shared = { refereePostcode: 'GU46 2BB' };
     const first = await submitReferral(testApp, w, shared, { clientIp: nextClientIp() });
+    const noNote = await submitReferral(testApp, w, shared, { clientIp: nextClientIp() });
     const second = await submitReferral(testApp, w, shared, { clientIp: nextClientIp() });
     await patchReferral(testApp, token, first.id, { adminInfo: NOTE });
     await patchReferral(testApp, token, second.id, { adminInfo: 'A different note entirely' });
@@ -419,12 +423,13 @@ describe('absent from every list, export and print-oriented payload', () => {
     });
     expect(response.status).toBe(200);
     const text = await response.text();
+    const body = JSON.parse(text) as {
+      matches: { referralId: string; adminInfo: string | null }[];
+    };
 
-    expect(text).not.toContain('adminInfo');
-    expect(text).not.toContain(NOTE);
+    const notes = Object.fromEntries(body.matches.map((m) => [m.referralId, m.adminInfo]));
+    expect(notes).toEqual({ [first.id]: NOTE, [noNote.id]: null });
     expect(text).not.toContain('A different note entirely');
-    // Positive control: the match really is in there.
-    expect(text).toContain(first.id);
   });
 
   it('is absent from GET /sessions/{id}/referral-details', async () => {

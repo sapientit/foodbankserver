@@ -144,6 +144,7 @@ interface RepeatReferralMatchBody {
   readonly refereeAddress: string | null;
   readonly refereePostcode: string | null;
   readonly refereePhone: string | null;
+  readonly adminInfo: string | null;
 }
 
 interface RepeatReferralListBody extends RepeatReferralSummaryBody {
@@ -885,8 +886,10 @@ describe('repeat-referral detection at review', () => {
         'refereeAddress',
         'refereePostcode',
         'refereePhone',
+        'adminInfo',
       ].sort(),
     );
+    expect(row?.adminInfo).toBeNull();
 
     const text = JSON.stringify(list.body);
     for (const absent of [
