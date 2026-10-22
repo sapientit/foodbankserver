@@ -50,10 +50,10 @@ Workers `ratelimits` binding (that's provisioned as part of the script deploy it
 Scripts); don't confuse it with the unrelated Zone WAF / Account Rulesets permissions, which are for
 Cloudflare's WAF Rate Limiting Rules product, not this binding.
 
-Production is **built but not live** (2026-10-12): `api` is deployed, its `foodbank` database holds
-UAT's configuration, the frontend answers at `referrals.guildfordfoodbank.org`, and Google sign-in is
-configured for both frontend addresses. Go-live itself is still to do. See "Standing production up"
-below.
+Production is **live** (2026-10-22): `api` is deployed by promotion from UAT, Pete ran its
+migrations by hand, its `foodbank` database holds UAT's configuration, the frontend answers at
+`referrals.guildfordfoodbank.org`, and Google sign-in is configured for both frontend addresses. The
+items still unticked under "Standing production up" below remain to do.
 
 `~/bin/foodbank-deploy-server` drives all three deployed tiers: test by default, `--uat` for the
 charity-account UAT system, and `--production` behind a typed confirmation that also reports the

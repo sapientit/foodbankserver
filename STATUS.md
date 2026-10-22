@@ -92,12 +92,12 @@ is `env.uat` (renamed 2026-09-24 from `new-test`, a pure label change — the un
 "Migrating to the charity's own Cloudflare account") for the full history and the handful of items
 still genuinely open (a TheSMSWorks value, the platform-usage job's optional analytics token).
 
-Production has **no application deployed** and no database changes on either account. The charity
-account's `foodbank` database exists (EU jurisdiction) but hasn't been migrated yet — that step
-needs Pete to run it directly (`npm run db:migrate:production`), not an agent, per this session's
-auto-mode safety classifier. An `api` Worker does exist on that account, but only as the empty shell
-`wrangler secret put --env production` created it as, on 2026-09-21 — no code, no route. Its
-`AUTH_JWT_SECRET` and `SMS_WEBHOOK_SECRET` are already set.
+**Production is live** (2026-10-22), at `https://api.guildfordfoodbank.workers.dev`, on the
+charity account, against its own EU database, `foodbank`. Pete ran its migrations by hand; the first
+deploy was `deploy_foodbank --production --promote-from uat`, which is the only route that promotes
+to production. Its `AUTH_JWT_SECRET` and `SMS_WEBHOOK_SECRET` are set. What is still open before
+real use is in "Standing production up" in
+[`docs/operations/production.md`](./docs/operations/production.md).
 
 Deploys go through `~/bin/foodbank-deploy-server` (test by default; `--uat` for the charity-account
 UAT system; `--production` needs a typed confirmation). Reaching the charity account (`--uat` or
@@ -211,9 +211,9 @@ Tracked so it is not mistaken for finished work.
   account has been available to confirm them against. The tests pin our own behaviour, not theirs.
   **Verify both against a real account before go-live**, and simplify the parsing once they are
   known.
-- **Production is built but not live.** Google sign-in is configured for both frontend addresses
-  (2026-10-12) but not yet proved by an admin signing in. Go-live (`PII_RETENTION_DAYS`, a stock take,
-  the paid plan) is still to do. See "Standing production up" in
+- **Production is live (2026-10-22), with its go-live checklist still open.** The admin Google
+  sign-in, the SMS webhook switch, the restore rehearsals, the Sheets consent verification and the
+  first stock take are tracked in "Standing production up" in
   [`docs/operations/production.md`](./docs/operations/production.md).
 - **Deactivating a user does not revoke their access token.** They lose access at the next refresh,
   so within fifteen minutes. Immediate lockout would need a query per request — the thing stateless
