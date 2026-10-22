@@ -277,7 +277,8 @@ Production goes live on the **free plan** (Pete, 2026-10-12). Before it does
       `SMS_WEBHOOK_SECRET`, then send a controlled test reply and confirm it
       appears in the production SMS inbox. A reply number has one webhook
       destination, so **UAT no longer receives replies**.
-- [ ] A regular export of the production database, kept apart from Cloudflare's own Time Travel.
+- [x] A regular export of the production database, kept apart from Cloudflare's own Time Travel.
+      Confirmed 2026-10-22: one export a night since 2026-10-13, each a full 28-table dump.
       Decided (Pete, 2026-10-12): nightly, from the 02:17 job, into a private EU-jurisdiction R2
       bucket on the charity account, each copy deleted after 30 days by a lifecycle rule. The
       Worker calls Cloudflare's D1 export API with its own **D1 Edit** token (accepted: a Worker

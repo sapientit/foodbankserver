@@ -207,14 +207,15 @@ don't exist server-side to extract.)
 
 Tracked so it is not mistaken for finished work.
 
-- **TheSMSWorks request and webhook shapes are read defensively, not verified.** The send call and
-  the inbound payload parser accept several spellings of the provider's field names because no live
-  account has been available to confirm them against. The tests pin our own behaviour, not theirs.
-  **Verify both against a real account before go-live**, and simplify the parsing once they are
-  known.
+- **TheSMSWorks request and webhook shapes are read defensively.** The send call and the inbound
+  payload parser accept several spellings of the provider's field names. Production has sent and
+  received real texts through TheSMSWorks (confirmed 2026-10-22), so one of those spellings is right — but
+  which one has not been recorded, so the parsing cannot be simplified yet. The tests pin our own
+  behaviour, not theirs.
 - **Production is live (2026-10-22), with its go-live checklist still open.** An admin has signed
   in with Google, the SMS reply webhook points at production (so UAT no longer receives replies) and
-  the Sheets consent screen is verified. The two restore rehearsals and the first stock take are
+  the Sheets consent screen is verified; the nightly export has written one full dump a night since
+  2026-10-13. The two restore rehearsals and the first stock take are
   still to do — tracked in "Standing production up" in
   [`docs/operations/production.md`](./docs/operations/production.md).
 - **Deactivating a user does not revoke their access token.** They lose access at the next refresh,
