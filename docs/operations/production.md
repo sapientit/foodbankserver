@@ -261,8 +261,8 @@ choose. Part 1 needed only the first; part 2 waited on the second.
 - [x] **[Claude]** The `referrals` Turnstile widget's domains and `TURNSTILE_HOSTNAMES` hold both
       addresses, and `api` is redeployed with them. A token solved on a hostname missing from that
       list is refused.
-- [ ] **[Pete]** The first real test: an admin signs in with Google at
-      `referrals.guildfordfoodbank.org`. Do not run a referral round trip with made-up households on
+- [x] **[Pete]** The first real test: an admin signs in with Google at
+      `referrals.guildfordfoodbank.org` (done by 2026-10-22). Do not run a referral round trip with made-up households on
       production: SMS is live there.
 
 ### Still to do before go-live
@@ -270,13 +270,13 @@ choose. Part 1 needed only the first; part 2 waited on the second.
 Production goes live on the **free plan** (Pete, 2026-10-12). Before it does
 (`INITIAL_SPEC1.txt`, `#Backups and recovery`):
 
-- [ ] **[Pete]** In TheSMSWorks, change the reply number's incoming-message
+- [x] **[Pete]** (Done by 2026-10-22.) In TheSMSWorks, change the reply number's incoming-message
       webhook from UAT to
       `https://api.guildfordfoodbank.workers.dev/api/v1/webhooks/sms`. Keep its
       HTTP Basic username and password exactly aligned with production's
       `SMS_WEBHOOK_SECRET`, then send a controlled test reply and confirm it
       appears in the production SMS inbox. A reply number has one webhook
-      destination, so UAT will stop receiving replies once this is changed.
+      destination, so **UAT no longer receives replies**.
 - [ ] A regular export of the production database, kept apart from Cloudflare's own Time Travel.
       Decided (Pete, 2026-10-12): nightly, from the 02:17 job, into a private EU-jurisdiction R2
       bucket on the charity account, each copy deleted after 30 days by a lifecycle rule. The
@@ -295,8 +295,8 @@ Production goes live on the **free plan** (Pete, 2026-10-12). Before it does
       nightly job has written to R2 — so it waits for R2 (Pete, 2026-10-12).
 - [x] `PII_RETENTION_DAYS=456` set on production (2026-10-12, in `env.production.vars`). The purge
       deletes referrals outright in a fixed-size batch, so it is safe on the free plan.
-- [ ] Google consent-screen verification for the Sheets scope (see "The spreadsheet extract needs a
-      domain before go-live").
+- [x] Google consent-screen verification for the Sheets scope (done by 2026-10-22; see "The
+      spreadsheet extract needs a domain before go-live").
 - [ ] A stock take before the first session (every level starts at **0**).
 - [x] Platform usage monitoring on production (2026-10-12): an Account Analytics: Read **and D1: Read** token on the charity
       account set as `CF_ANALYTICS_API_TOKEN` on `api`, and R2 usage added

@@ -131,8 +131,9 @@ Three things the deployment established, all in
   `cf-connecting-ip`, or the rate limiter collapses every visitor into one bucket and the referral
   form is capped at five submissions a minute for everybody. Requirements are in `API.md`; **this
   side cannot detect a breach of them.**
-- **The extract needs a verifiable domain before go-live.** Testing-status consent works on
-  `pages.dev`, but the Sheets scope is sensitive and publishing requires a domain Google can verify.
+- **The extract's consent screen is verified** (by 2026-10-22). The Sheets scope is sensitive, so
+  publishing needed a domain Google could verify; testing-status consent on `pages.dev` was only
+  ever good for a test system.
 - **The free plan caps subrequests at 50 per invocation**, and SMS sending is one `fetch` per
   household — so a session over ~48 households cannot be texted in one go. The 10 ms CPU ceiling is
   **not yet proven**: the scheduled job has only run against an empty database.
@@ -211,9 +212,10 @@ Tracked so it is not mistaken for finished work.
   account has been available to confirm them against. The tests pin our own behaviour, not theirs.
   **Verify both against a real account before go-live**, and simplify the parsing once they are
   known.
-- **Production is live (2026-10-22), with its go-live checklist still open.** The admin Google
-  sign-in, the SMS webhook switch, the restore rehearsals, the Sheets consent verification and the
-  first stock take are tracked in "Standing production up" in
+- **Production is live (2026-10-22), with its go-live checklist still open.** An admin has signed
+  in with Google, the SMS reply webhook points at production (so UAT no longer receives replies) and
+  the Sheets consent screen is verified. The two restore rehearsals and the first stock take are
+  still to do — tracked in "Standing production up" in
   [`docs/operations/production.md`](./docs/operations/production.md).
 - **Deactivating a user does not revoke their access token.** They lose access at the next refresh,
   so within fifteen minutes. Immediate lockout would need a query per request — the thing stateless
