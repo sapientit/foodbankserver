@@ -215,8 +215,8 @@ Tracked so it is not mistaken for finished work.
 - **Production is live (2026-10-22), with its go-live checklist still open.** An admin has signed
   in with Google, the SMS reply webhook points at production (so UAT no longer receives replies) and
   the Sheets consent screen is verified; the nightly export has written one full dump a night since
-  2026-10-13. The two restore rehearsals and the first stock take are
-  still to do — tracked in "Standing production up" in
+  2026-10-13. Both restores (Time Travel, and restarting from an export) were rehearsed on a throwaway
+  database on 2026-10-22. The first stock take is still to do — tracked in "Standing production up" in
   [`docs/operations/production.md`](./docs/operations/production.md).
 - **Deactivating a user does not revoke their access token.** They lose access at the next refresh,
   so within fifteen minutes. Immediate lockout would need a query per request — the thing stateless

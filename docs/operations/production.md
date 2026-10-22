@@ -290,10 +290,13 @@ Production goes live on the **free plan** (Pete, 2026-10-12). Before it does
       `foodbank-charity-wrangler r2 object get foodbank-exports/exports/<date>.sql --jurisdiction eu --remote --file <local path>`
       — it holds every household's details, so keep the local copy only as long as the restore
       needs it.
-- [ ] Restoring to an earlier point (Time Travel) documented here and rehearsed on production,
-      while it holds no real data (Pete, 2026-10-12).
-- [ ] Restarting from an export documented here and rehearsed on production, using an export the
-      nightly job has written to R2 — so it waits for R2 (Pete, 2026-10-12).
+- [x] Restoring to an earlier point (Time Travel) documented here and rehearsed (Pete, 2026-10-12).
+      Rehearsed 2026-10-22 on a throwaway database, because production already holds real data;
+      see "Restoring to an earlier point" under "Backups".
+- [x] Restarting from an export documented here and rehearsed, using an export the nightly job has
+      written to R2 (Pete, 2026-10-12). Rehearsed 2026-10-22 into a throwaway database rather than
+      on production, because production already holds real data; see "Restarting from an export"
+      under "Backups".
 - [x] `PII_RETENTION_DAYS=456` set on production (2026-10-12, in `env.production.vars`). The purge
       deletes referrals outright in a fixed-size batch, so it is safe on the free plan.
 - [x] Google consent-screen verification for the Sheets scope (done by 2026-10-22; see "The
@@ -513,6 +516,64 @@ avoids the construct.
 **Time Travel is the backup** — **7 days on the free plan**, 30 on paid, whole-database restore
 only. You cannot restore one table. Plan any destructive migration on the basis that the rollback is
 "restore everything to a point in time".
+
+### Restoring to an earlier point (Time Travel)
+
+For when something has gone wrong in the last seven days and the database itself is still usable.
+It rewinds the **whole** database in place, losing everything written since the chosen point.
+
+1. **Take a fresh bookmark first.**
+   `foodbank-charity-wrangler d1 time-travel info foodbank --env production --json` gives one for
+   now, so the restore itself can be undone. For an earlier moment, add `--timestamp <ISO time>`.
+2. **Restore.**
+   `foodbank-charity-wrangler d1 time-travel restore foodbank --env production --bookmark <bookmark>`.
+   Wrangler prints the bookmark to restore to if this one needs undoing. Keep it.
+3. **Check it.** `PRAGMA quick_check` returns `ok`, `d1 migrations list` matches the deployed
+   server, the data that went wrong is back as it was, and `/ready` answers `200`. If the restore
+   took the schema back past a migration the running server needs, roll the server back too:
+   `foodbank-charity-wrangler rollback --env production`.
+
+**Rehearsed 2026-10-22** on the throwaway database below, not on production. A bookmark was taken,
+the database was damaged on purpose (every user's display name overwritten, a stray table created),
+and then it was restored to that bookmark. Both changes were gone, all 46 migrations were still
+recorded, and `quick_check` returned `ok`.
+
+### Restarting from an export
+
+For when the `foodbank` database itself cannot be used: load a nightly export into a new database.
+**Rehearsed 2026-10-22** with that morning's export, into a throwaway EU database on the charity
+account (`foodbank-restore-rehearsal-20261022`). Production was neither written nor read.
+
+1. **Create the new database in the EU.** `foodbank-charity-wrangler d1 create <name>
+--jurisdiction eu`. Answer no when Wrangler offers to add it to `wrangler.jsonc`.
+2. **Point every command at it alone.** Write a scratch `wrangler.jsonc` whose only database is the
+   new one, with `migrations_dir` set to this repository's `migrations`, and pass it as `--config`.
+   That way a mistyped name cannot reach `foodbank` or `foodbank-test`.
+3. **Fetch the export into a private folder** (`chmod 700`), with the `r2 object get` command
+   above. It holds every household's details.
+4. **Split it into tables and rows** with `splitExport` from `scripts/restore-local-db.mjs`, and
+   load the tables first: `d1 execute <name> --remote --yes --file schema.sql`.
+5. **Load the rows parents first.** Remote D1 does **not** honour `PRAGMA defer_foreign_keys` in an
+   uploaded file, so the export's own row order fails with `FOREIGN KEY constraint failed`. Sort the
+   `INSERT` lines so each table comes after every table its foreign keys name (no table refers to
+   itself), keep the export's order within a table, and put `sqlite_sequence` last. A failed load
+   rolls back as a whole, so it can simply be run again.
+6. **Check it before trusting it.** Compare each table's row count with the export's `INSERT`
+   count, and check that `PRAGMA foreign_key_check` returns nothing, `PRAGMA quick_check` returns
+   `ok`, and `d1 migrations list` says nothing is pending. D1 refuses a `UNION ALL` across every
+   table ("too many terms in compound SELECT"), so ask for the counts as columns of a single
+   `SELECT`.
+7. **Delete the local copies** as soon as the load is checked.
+
+The 2026-10-22 run: 289 rows, 28 tables. Every count matched, there were no foreign-key violations,
+`quick_check` returned `ok`, and all 46 migrations were recorded.
+
+**What the rehearsal did not cover.** It did not point a Worker at the restored database. In a real
+restart, production's `database_id` in `wrangler.jsonc` becomes the new database's id and the
+Worker is redeployed. Step 5 is done by hand, not by a script in this repository.
+
+**A restored copy holds every household's details**, and neither the nightly purge nor the 30-day
+R2 lifecycle reaches it. Delete a rehearsal database as soon as it has been checked.
 
 ## What the free plan costs us
 
