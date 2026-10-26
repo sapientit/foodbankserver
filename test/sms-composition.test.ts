@@ -48,14 +48,14 @@ describe('composeReminder', () => {
         sessionDate: '2026-10-22', // a Thursday
         startTime: '10:30',
         durationMinutes: 60,
-        location: "St Clare's Church, GU2 8LZ",
+        location: "St Clare's Church GU2 8JW",
       }),
       false,
       'Rose',
     );
 
     expect(message).toBe(
-      "Hi Rose this is the Foodbank. Please collect your food parcel on Thursday 10:30 - 11:30 from St Clare's Church, GU2 8LZ. Any problems let us know.",
+      "Hi Rose this is the Foodbank. Please collect your food parcel on Thursday 10:30 - 11:30 from St Clare's Church GU2 8JW. Any problems let us know.",
     );
   });
 
