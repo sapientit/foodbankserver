@@ -45,6 +45,18 @@ export function normalisePhone(input: string): string | null {
   return UK_E164_PATTERN.test(candidate) ? candidate : null;
 }
 
+/**
+ * True when a number `normalisePhone` produced is a UK mobile (`07…`).
+ *
+ * `normalisePhone` accepts any UK number, landlines included, because a
+ * landline is still a good number to match a referral on. Only a mobile can
+ * be texted, though, and TheSMSWorks answers a landline with a bare 400 that
+ * says nothing about why — so the reminder checks this first.
+ */
+export function isMobile(normalised: string): boolean {
+  return normalised.startsWith('+447');
+}
+
 /** True when both numbers normalise to the same E.164 number. */
 export function phonesMatch(a: string, b: string): boolean {
   const normalisedA = normalisePhone(a);

@@ -1153,9 +1153,11 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
    * and being fed, has to be correctable: a delivery goes to the address on the
    * referral, so a wrong one there is a parcel on the wrong doorstep.
    *
-   * **The referrer's own details are not amendable.** `referrerEmail` is what
-   * the authorisation decision was made on, and the rest is the record of who
-   * sent the referral rather than a field to tidy up.
+   * **The referrer's own details are not amendable, except their phone.**
+   * `referrerEmail` is what the authorisation decision was made on, and the
+   * name and organisation are the record of who sent the referral rather than
+   * a field to tidy up. The phone is how the food bank reaches them, and a
+   * landline cannot be texted a `referrer_collect` reminder.
    *
    * `adminInfo` — the administrators' own note about the household — and
    * `picklistAdmin` — their one line for the picker — are amended here too,
@@ -1216,6 +1218,9 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     assign('refereeAddress', input.refereeAddress, 'refereeAddress');
     assign('refereePostcode', input.refereePostcode, 'refereePostcode');
     assign('refereePhone', input.refereePhone, 'refereePhone');
+    // No normalised twin to keep in step: referrer replies are matched on
+    // the raw column through `phonesMatch`, not on a stored settled form.
+    assign('referrerPhone', input.referrerPhone, 'referrerPhone');
 
     // Derived, not amended: set directly on the patch rather than through
     // `assign`, so they never appear in `changed`. Recomputed whenever the

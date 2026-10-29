@@ -126,11 +126,14 @@ export type ReferralSubmission = z.infer<typeof referralSubmissionSchema>;
  * moved between being referred and being fed, has to be correctable — a parcel
  * delivered to the address on the form is delivered to whatever the form says.
  *
- * **The referrer's own details are not here.** `referrerEmail` above all: it is
- * what the authorisation decision was made on, so editing it would leave a
- * referral whose accepted-or-held status no longer follows from its address.
- * The name, phone and organisation stay with it, because who sent a referral is
- * a matter of record rather than a field to tidy.
+ * **The referrer's own details are not here, except their phone.**
+ * `referrerEmail` above all: it is what the authorisation decision was made on,
+ * so editing it would leave a referral whose accepted-or-held status no longer
+ * follows from its address. The name and organisation stay with it, because
+ * who sent a referral is a matter of record rather than a field to tidy. The
+ * phone is how the food bank reaches the referrer — a `referrer_collect`
+ * reminder is texted to it — so a landline they gave has to be replaceable
+ * with a mobile.
  *
  * Every field is optional and only what is sent is written, so a client can
  * send one corrected field without restating the rest. **`answers` is the
@@ -150,6 +153,12 @@ export const referralAmendSchema = z.object({
   refereePostcode: postcode.optional(),
   /** Nullable: a household may lose a number as well as gain one. */
   refereePhone: phone.nullable().optional(),
+  /**
+   * Not nullable, unlike `refereePhone`: every referral must carry the
+   * referrer's number (`referralSubmissionSchema.referrerPhone`), so a
+   * correction can replace it but never remove it.
+   */
+  referrerPhone: phone.optional(),
   adults: z.number().int().min(1).max(30).optional(),
   children: z.number().int().min(0).max(30).optional(),
   collectionMethod: z.enum(COLLECTION_METHODS).optional(),

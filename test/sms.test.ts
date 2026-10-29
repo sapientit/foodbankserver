@@ -277,6 +277,33 @@ describe('sending reminders', () => {
     expect(row?.readAt).not.toBeNull(); // a failure is recorded already read
   });
 
+  it('records a landline as a failure without asking the provider to text it', async () => {
+    // Live and configured, so only the landline check stands between this
+    // number and a call TheSMSWorks would refuse with a bare 400.
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(providerSuccess('prov-1'));
+    const testApp = buildSmsTestApp({ SMS_LIVE_NUMBERS: '01483 900123' });
+    const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });
+    const world = await setUpReferralWorld(testApp, accessToken);
+    const { id: referralId } = await submitReferral(testApp, world, {
+      refereePhone: '01483 900123',
+    });
+
+    const response = await testApp.request(
+      `${API_PREFIX}/sessions/${world.sessionId}/sms-reminders`,
+      { method: 'POST', headers: authHeaders(accessToken) },
+    );
+
+    expect(await response.json()).toMatchObject({ reminded: 0, failed: 1 });
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    const [row] = await db.select().from(smsMessages).where(eq(smsMessages.referralId, referralId));
+    expect(row).toMatchObject({
+      kind: 'failure',
+      phone: '+441483900123',
+      body: 'The number on file is a landline, not a mobile, so it cannot be texted',
+    });
+  });
+
   it('retries a household whose reminder failed on the next press', async () => {
     const testApp = buildSmsTestApp(FIXTURE_NUMBER_LIVE);
     const { accessToken } = await devLogin(testApp, { email: 'admin@foodbank.org' });

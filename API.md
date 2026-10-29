@@ -921,10 +921,14 @@ or its session is confirmed. It is printed on the picking sheet, so the edit
 dialog should say so plainly: the server cannot stop the reason for referral
 being typed into it.
 
-**The referrer's own details are still refused**: `referrerName`,
-`referrerPhone`, `referrerOrganisation` and above all `referrerEmail`, which is
-what the accept-or-hold decision was made on. The body is strict, so sending one
-is a `400` naming it rather than a `200` that silently changed nothing.
+**The referrer's phone can be corrected; the rest of their details are still
+refused.** `referrerPhone` takes a string and replaces the number — the usual
+reason is a landline, which a `referrer_collect` reminder cannot be texted to,
+swapped for a mobile. It is not nullable: every referral keeps a referrer
+number, so `null` is a `400`. `referrerName`, `referrerOrganisation` and above
+all `referrerEmail`, which is what the accept-or-hold decision was made on,
+remain refused. The body is strict, so sending one is a `400` naming it rather
+than a `200` that silently changed nothing.
 
 **There is no undo and no history.** A correction overwrites, and nothing keeps
 what the field used to say. That is deliberate: a record of every change made to

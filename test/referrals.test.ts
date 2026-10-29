@@ -1214,7 +1214,7 @@ describe('admin referral management', () => {
     expect(stored?.refereePhone).toBeNull();
   });
 
-  it("refuses the referrer's own details", async () => {
+  it("refuses the referrer's own details, other than their phone", async () => {
     const { testApp, token, world: w } = await world();
     const { id } = await submitReferral(testApp, w);
 
@@ -1224,7 +1224,6 @@ describe('admin referral management', () => {
     for (const body of [
       { referrerName: 'Someone Else' },
       { referrerEmail: 'someone@else.example' },
-      { referrerPhone: '01483 999999' },
       { referrerOrganisation: 'A Different Council' },
       { status: 'reviewed' },
     ]) {

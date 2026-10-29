@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalisePhone, phonesMatch } from '../src/core/phone.ts';
+import { isMobile, normalisePhone, phonesMatch } from '../src/core/phone.ts';
 
 describe('normalisePhone', () => {
   it('normalises the four shapes a referrer or the provider might use', () => {
@@ -19,6 +19,18 @@ describe('normalisePhone', () => {
     expect(normalisePhone('+1 555 0100')).toBeNull(); // a different country code
     expect(normalisePhone('')).toBeNull();
     expect(normalisePhone('   ')).toBeNull();
+  });
+});
+
+describe('isMobile', () => {
+  it('is true for a UK mobile, the only kind of number that can be texted', () => {
+    expect(isMobile('+447700900123')).toBe(true);
+  });
+
+  it('is false for a landline or any other non-mobile UK number', () => {
+    expect(isMobile('+441483900123')).toBe(false); // geographic landline
+    expect(isMobile('+442079460000')).toBe(false); // London landline
+    expect(isMobile('+443001234567')).toBe(false); // 03 non-geographic
   });
 });
 

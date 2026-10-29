@@ -1,5 +1,5 @@
 import { env } from 'cloudflare:workers';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { fixedClock } from '../src/core/clock.ts';
 import { MAX_ADMIN_INFO_LENGTH } from '../src/config/constants.ts';
@@ -634,15 +634,46 @@ describe('validation', () => {
   });
 });
 
+describe('PATCH corrects the referrer phone, so a landline can be replaced with a mobile', () => {
+  it('replaces the referrer phone and records only the field name', async () => {
+    const { testApp, token, world: w } = await adminWorld();
+    const { id } = await submitReferral(
+      testApp,
+      w,
+      { referrerPhone: '01483 900123' },
+      { clientIp: nextClientIp() },
+    );
+
+    const response = await patchReferral(testApp, token, id, { referrerPhone: '07700 900456' });
+    expect(response.status).toBe(200);
+
+    const [stored] = await db.select().from(referrals).where(eq(referrals.id, id));
+    expect(stored?.referrerPhone).toBe('07700 900456');
+
+    const [audit] = await db
+      .select()
+      .from(auditEvents)
+      .where(and(eq(auditEvents.entityId, id), eq(auditEvents.action, 'amended')));
+    expect(audit?.detailJson).toBe(JSON.stringify({ changedFields: ['referrerPhone'] }));
+  });
+
+  it('refuses null for the referrer phone, because every referral must keep one', async () => {
+    const { testApp, token, world: w } = await adminWorld();
+    const { id } = await submitReferral(testApp, w, {}, { clientIp: nextClientIp() });
+
+    const response = await patchReferral(testApp, token, id, { referrerPhone: null });
+    expect(response.status).toBe(400);
+  });
+});
+
 describe('PATCH still refuses the referrer identity fields, adminInfo alongside them or not', () => {
-  it('refuses referrerEmail, referrerName, referrerPhone and referrerOrganisation, each named with 400', async () => {
+  it('refuses referrerEmail, referrerName and referrerOrganisation, each named with 400', async () => {
     const { testApp, token, world: w } = await adminWorld();
     const { id } = await submitReferral(testApp, w, {}, { clientIp: nextClientIp() });
 
     for (const body of [
       { referrerEmail: 'someone@else.example' },
       { referrerName: 'Someone Else' },
-      { referrerPhone: '01483 999999' },
       { referrerOrganisation: 'A Different Council' },
     ]) {
       const response = await patchReferral(testApp, token, id, body);

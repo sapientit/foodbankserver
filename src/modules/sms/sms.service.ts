@@ -9,7 +9,7 @@ import type { SmsMessage, SmsRecipientRole } from '../../db/schema/sms.ts';
 import { isUniqueViolation } from '../../db/unique-violation.ts';
 import type { SessionsRepository } from '../sessions/sessions.repository.ts';
 import { assertCanSeeSession } from '../sessions/visibility.ts';
-import { normalisePhone, phonesMatch } from '../../core/phone.ts';
+import { isMobile, normalisePhone, phonesMatch } from '../../core/phone.ts';
 import { instantToLondonWallClock } from '../../core/time/london.ts';
 import { composeReferrerReminder, composeReminder } from './messages.ts';
 import { sendSms, type SmsProviderConfig } from './provider.ts';
@@ -233,6 +233,16 @@ export function createSmsService(deps: SmsServiceDeps) {
         success: false,
         phone: recipient.phone,
         body: 'The number on file could not be recognised',
+        recipientRole: recipient.role,
+      };
+    }
+
+    if (!isMobile(normalised)) {
+      return {
+        referralId: referral.id,
+        success: false,
+        phone: normalised,
+        body: 'The number on file is a landline, not a mobile, so it cannot be texted',
         recipientRole: recipient.role,
       };
     }
