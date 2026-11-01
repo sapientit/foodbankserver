@@ -13,10 +13,14 @@ export type ConfigurationReleaseStatus = (typeof CONFIGURATION_RELEASE_STATUSES)
  * One release of the referral form and its preference rules, together. See
  * `INITIAL_SPEC1.txt`, `#referral`.
  *
- * **The server stores both JSON documents and never reads them.** They are
- * `TEXT` holding exactly the characters the uploader sent — not parsed, not
- * re-serialised — so the uploader's hashes still describe what is stored. The
- * hashes are kept for audit and are not recomputed or checked here.
+ * **The server stores both JSON documents and, with one exception, never
+ * reads them.** They are `TEXT` holding exactly the characters the uploader
+ * sent — not parsed, not re-serialised — so the uploader's hashes still
+ * describe what is stored. The hashes are kept for audit and are not
+ * recomputed or checked here. The exception is the fuel help list, which has
+ * SQLite read which fixed questions a questionnaire marks `forFuelTeam`
+ * (`fuel-help.repository.ts#listFuelTeamKeyFields`); nothing checks or
+ * applies a release, and the rules are never read at all.
  *
  * **Content is immutable after insert.** Only `status` and the two
  * `published_*` columns ever change, and the repository has no statement that

@@ -25,9 +25,10 @@ import {
  * `INITIAL_SPEC1.txt`, `#referral`, and the doc comments on
  * `db/schema/configuration-releases.ts` and `configuration-releases.service.ts`.
  *
- * **The server stores and serves releases verbatim; it never reads one.**
- * `questionnaire` and `rules` travel as opaque strings both in and out — no
- * route here parses either.
+ * **The server stores and serves releases verbatim; no route here reads
+ * one.** `questionnaire` and `rules` travel as opaque strings both in and
+ * out — no route here parses either. The one place the server reads a
+ * release at all is the fuel help list — see `fuel-help.repository.ts`.
  *
  * **Rules never reach the public** — the spec gives the public form the
  * questions of the release in use and never its rules. That route is in

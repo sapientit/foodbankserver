@@ -80,7 +80,7 @@ this delete, or it outlives the household the charity promised to forget.
 
 `POST /sessions/:id/pick-list` accepts stock-item lines from the client. It has to: the client
 evaluates each referral against its own release's preference rules, and the server stores those
-releases but never reads them, let alone evaluates a rule. Refusing the data would not make the server the authority on parcel contents — it would
+releases but never reads their rules, let alone evaluates one. Refusing the data would not make the server the authority on parcel contents — it would
 only move the same lines to a series of `PUT /parcels/:id/lines` calls after the fact, unvalidated
 against the catalogue and outside the atomic write.
 

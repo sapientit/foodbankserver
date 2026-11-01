@@ -34,7 +34,23 @@ export function createFuelHelpService({ repository, clock }: FuelHelpServiceDeps
     const earliest = addDays(today, -(FUEL_HELP_WINDOW_DAYS - 1));
 
     const rows = await repository.listFuelHelpSince(earliest);
-    return rows.map(({ referral, session }) => toFuelHelpHousehold(referral, session));
+
+    // Which fixed fields each row carries is decided by the form that
+    // referral was filled in under, so read the flags of every form on the
+    // list once — a fortnight's referrals share a handful of releases.
+    const formIds = new Set<string>();
+    for (const { referral } of rows) if (referral.formId !== null) formIds.add(referral.formId);
+    const flagged = new Map<string, Set<string>>();
+    for (const { formId, keyField } of await repository.listFuelTeamKeyFields([...formIds])) {
+      const fields = flagged.get(formId) ?? new Set<string>();
+      fields.add(keyField);
+      flagged.set(formId, fields);
+    }
+
+    const noFields: ReadonlySet<string> = new Set();
+    return rows.map(({ referral, session }) =>
+      toFuelHelpHousehold(referral, session, flagged.get(referral.formId ?? '') ?? noFields),
+    );
   }
 
   return { list };

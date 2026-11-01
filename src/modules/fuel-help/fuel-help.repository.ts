@@ -1,4 +1,4 @@
-import { and, asc, eq, gte } from 'drizzle-orm';
+import { and, asc, eq, gte, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.ts';
 import { parcels, pickLists } from '../../db/schema/pick-lists.ts';
 import { referrals, type Referral } from '../../db/schema/referrals.ts';
@@ -11,7 +11,9 @@ export interface FuelHelpRow {
 }
 
 /**
- * The one query this module needs.
+ * The two queries this module needs: the list itself, and the fuel-team flags
+ * of the forms its referrals were filled in under (`listFuelTeamKeyFields`).
+ * Everything below is about the list.
  *
  * **It owns none of these four tables and writes to none of them.** That is
  * the same arrangement `sms.repository.ts` has with `referrals` and
@@ -38,7 +40,8 @@ export interface FuelHelpRow {
  *
  * ## Cost
  *
- * **One query whatever the row count**, against a budget of 50 per invocation.
+ * **Two queries whatever the row count** — the list, then the flags for the
+ * distinct forms on it — against a budget of 50 per invocation.
  * Driving from `sessions` gives the planner the index built for this shape:
  * `idx_sessions_status_date` on `(status, session_date)` covers the selective
  * half of the WHERE clause, `pick_lists.session_id` is unique,
@@ -68,6 +71,51 @@ export interface FuelHelpRow {
  */
 export function createFuelHelpRepository(db: Database) {
   return {
+    /**
+     * Every `keyField` each of `formIds` flags `forFuelTeam`, as one
+     * `{ formId, keyField }` pair per flagged question.
+     *
+     * **SQLite reads the questionnaire, not the Worker.** A questionnaire is
+     * tens of kilobytes; `json_tree` walks it inside D1, so the Worker only
+     * waits for a handful of short rows and spends no CPU parsing. A release's
+     * content never changes after insert, so the answer for a given form is
+     * always the same one.
+     *
+     * The questionnaire is stored exactly as uploaded and **is not validated
+     * as JSON on the way in** (`configuration-releases.schema.ts`). A malformed
+     * one is read as `{}` — that form flags nothing — rather than letting
+     * `json_tree` fail the whole list over one bad release. Only a JSON `true`
+     * counts as a flag and only a string as a `keyField`; anything looser is
+     * the uploader's mistake, not a field to send.
+     *
+     * The ids are bound as one JSON parameter and expanded with `json_each`,
+     * so the 100-parameter limit never applies whatever the count.
+     *
+     * Reads `configuration_releases`, which this module does not own, on the
+     * same terms as the list query below reads `referrals`.
+     */
+    async listFuelTeamKeyFields(
+      formIds: readonly string[],
+    ): Promise<{ formId: string; keyField: string }[]> {
+      if (formIds.length === 0) return [];
+
+      const rows = await db.all<{ formId: unknown; keyField: unknown }>(sql`
+        SELECT r.id AS formId, json_extract(t.value, '$.keyField') AS keyField
+          FROM configuration_releases r,
+               json_tree(
+                 CASE WHEN json_valid(r.questionnaire_json) THEN r.questionnaire_json ELSE '{}' END
+               ) t
+         WHERE r.id IN (SELECT value FROM json_each(${JSON.stringify(formIds)}))
+           AND t.type = 'object'
+           AND json_type(t.value, '$.keyField') = 'text'
+           AND json_type(t.value, '$.forFuelTeam') = 'true'
+      `);
+
+      return rows.flatMap(({ formId, keyField }) =>
+        typeof formId === 'string' && typeof keyField === 'string' ? [{ formId, keyField }] : [],
+      );
+    },
+
     /** `earliestSessionDate` is an inclusive London `YYYY-MM-DD`. */
     async listFuelHelpSince(earliestSessionDate: string): Promise<FuelHelpRow[]> {
       return (

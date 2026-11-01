@@ -1,8 +1,9 @@
 import { z } from 'zod';
 
 /**
- * The server stores a release exactly as the uploader sent it and never reads
- * it — see the doc comment on `db/schema/configuration-releases.ts`. So
+ * The server stores a release exactly as the uploader sent it and, bar the
+ * fuel help list's flags, never reads it — see the doc comment on
+ * `db/schema/configuration-releases.ts`. So
  * `questionnaire` and `rules` are validated only on **size**: they are not
  * parsed, not checked as JSON, and not trimmed. Storing precisely what was
  * sent is the point — the uploader's hashes describe those exact bytes.

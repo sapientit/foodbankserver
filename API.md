@@ -1985,11 +1985,33 @@ outcome is a `409`. Disable the control there rather than letting someone try.
 
 ```
 GET /api/v1/fuel-help-list
-  → 200 { households: [ { referralId, sessionDate, refereeFirstName,
-                          refereeSurname, refereeDateOfBirth, refereeAddress,
-                          refereePostcode, refereePhone, needsFuelHelp,
-                          answers } ] }
+  → 200 { households: [ { referralId, sessionDate, needsFuelHelp, answers,
+                          formId,
+                          // each present only if the row's form marks it
+                          // forFuelTeam:
+                          referrerName?, referrerEmail?, referrerOrganisation?,
+                          referrerPhone?, refereeFirstName?, refereeSurname?,
+                          refereeDateOfBirth?, refereeAddress?,
+                          refereePostcode?, refereePhone? } ] }
 ```
+
+**The form decides which fixed fields a row carries — this changed.** The row
+used to carry the same six referee fields always. Now each of ten referee and
+referrer fields is on a row only when the referral form release in that row's `formId`
+marks the question `forFuelTeam`, and the key is **absent** otherwise (absent,
+not `null` — `null` still means the referral gave none). So:
+
+- **Build the table's columns from the fields present**, not from a fixed list.
+  Rows can differ: a referral filled in under an older release carries what
+  that release marked. Today every release marks the six referee fields, and
+  releases from 22 October 2026 also mark `referrerName`, `referrerEmail` and
+  `referrerPhone` — so referrals made before that show no referrer columns.
+- The server has already applied the flag to these ten fields; you do not need
+  to filter them again. `answers` is still sent whole.
+- **Ten fields are the most there will ever be.** The reason for referral is
+  never sent, even if the form marks it, and neither is a session id.
+- A row whose release cannot be read carries none of the ten. That should not
+  happen; if it does, the row still has `answers` and `formId`.
 
 **This is the whole of a `fuel_admin`'s application.** That role reaches this
 and `GET /api/v1/auth/me` and nothing else — every other endpoint answers

@@ -6977,22 +6977,17 @@ components:
       type: object
       description: >-
         One household to ring about a fuel bill, at one session they were fed
-        at. Who is being helped, where they live, how to ring them, when it was,
-        and the form answers whole — and deliberately nothing else.
-      required:
-        [
-          referralId,
-          sessionDate,
-          refereeFirstName,
-          refereeSurname,
-          refereeDateOfBirth,
-          refereeAddress,
-          refereePostcode,
-          refereePhone,
-          needsFuelHelp,
-          answers,
-          formId,
-        ]
+        at. **The referee and referrer fields are optional, and which are
+        present is decided per row by the referral form**: a field is on the
+        row when the release in `formId` marks that question `forFuelTeam`,
+        and the key is **absent** otherwise — absent, not null, since null
+        already means the referral gave none. Two rows can differ, because a
+        referral made under an older release carries that release's choice.
+        Lay the table out from the fields actually present. Only the ten fields
+        named here can ever appear: the reason for referral is never sent,
+        whatever the form marks. A row whose release cannot be read carries
+        none of them.
+      required: [referralId, sessionDate, needsFuelHelp, answers, formId]
       properties:
         referralId: { type: string, format: uuid }
         sessionDate:
@@ -7007,6 +7002,14 @@ components:
             referrals moved before that rule can still differ. Read this as
             given rather than joining back. The list is sorted by this, oldest
             first.
+        referrerName: { type: [string, 'null'] }
+        referrerEmail: { type: [string, 'null'] }
+        referrerOrganisation: { type: [string, 'null'] }
+        referrerPhone:
+          type: [string, 'null']
+          description: >-
+            Free text as the referrer typed it — format for display rather than
+            assuming a shape.
         refereeFirstName: { type: [string, 'null'] }
         refereeSurname: { type: [string, 'null'] }
         refereeDateOfBirth:

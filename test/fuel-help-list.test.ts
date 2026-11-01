@@ -1,7 +1,8 @@
 import { env } from 'cloudflare:workers';
-import { eq } from 'drizzle-orm';
+import { eq, like } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createDatabase } from '../src/db/client.ts';
+import { configurationReleases } from '../src/db/schema/configuration-releases.ts';
 import { auditEvents, referrals } from '../src/db/schema/referrals.ts';
 import { authorisedReferrers, referralReasons } from '../src/db/schema/referrers.ts';
 import { modelParcels, parcelGrid } from '../src/db/schema/rules.ts';
@@ -164,6 +165,52 @@ async function readList(
   return { status: response.status, households: body.households ?? [] };
 }
 
+const TEST_RELEASE_PREFIX = 'fuel-test-release-';
+
+/** The questionnaire shape the flag is read from: question objects nested anywhere. */
+function question(keyField: string, forFuelTeam: unknown): Record<string, unknown> {
+  return { keyField, label: keyField, forFuelTeam };
+}
+
+/**
+ * Inserts a release directly — the server stores questionnaires and never
+ * validates them, and malformed text has no other way in. 'superseded' so the
+ * one-published unique index is left alone.
+ */
+async function insertRelease(name: string, questionnaireJson: string): Promise<string> {
+  const id = `${TEST_RELEASE_PREFIX}${name}`;
+  await db.insert(configurationReleases).values({
+    id,
+    questionnaireJson,
+    rulesJson: '{}',
+    questionnaireHash: 'test',
+    rulesHash: 'test',
+    generationId: 'test',
+    generatedAt: NOW,
+    sourceWorkbookId: 'test',
+    status: 'superseded',
+    createdAt: NOW,
+    createdByUserId: null,
+    publishedAt: null,
+    publishedByUserId: null,
+  });
+  return id;
+}
+
+async function pointReferralAtRelease(referralId: string, formId: string): Promise<void> {
+  await db.update(referrals).set({ formId }).where(eq(referrals.id, referralId));
+}
+
+const REFEREE_FIELDS = [
+  'refereeFirstName',
+  'refereeSurname',
+  'refereeDateOfBirth',
+  'refereeAddress',
+  'refereePostcode',
+  'refereePhone',
+];
+const REFERRER_FIELDS = ['referrerName', 'referrerEmail', 'referrerOrganisation', 'referrerPhone'];
+
 beforeEach(async () => {
   await db.delete(stockLedger);
   await db.delete(parcelLines);
@@ -173,6 +220,9 @@ beforeEach(async () => {
   await db.delete(modelParcels);
   await db.delete(auditEvents);
   await db.delete(referrals);
+  await db
+    .delete(configurationReleases)
+    .where(like(configurationReleases.id, `${TEST_RELEASE_PREFIX}%`));
   await db.delete(referralReasons);
   await db.delete(authorisedReferrers);
   await db.delete(stockItems);
@@ -254,6 +304,161 @@ describe('the fuel help list', () => {
     ]) {
       expect(row).not.toHaveProperty(absent);
     }
+  });
+
+  it('sends the six referee fields and none of the referrer fields under the baseline release', async () => {
+    const { testApp, token, world } = await adminWorld();
+    await fedAtSession(testApp, token, world, '2026-08-18');
+
+    const { households } = await readList(testApp, token);
+    const row = households[0];
+
+    expect(households).toHaveLength(1);
+    for (const present of REFEREE_FIELDS) expect(row).toHaveProperty(present);
+    for (const absent of REFERRER_FIELDS) expect(row).not.toHaveProperty(absent);
+  });
+
+  it("sends the referrer fields, with their real values, when the referral's release flags them", async () => {
+    const { testApp, token, world } = await adminWorld();
+    const { referralId } = await fedAtSession(testApp, token, world, '2026-08-18', {
+      referrerName: 'Pat Referrer',
+      referrerEmail: 'pat@guildford.gov.uk',
+      referrerPhone: '01483 555666',
+    });
+    const formId = await insertRelease(
+      'referrer',
+      JSON.stringify({
+        sections: [
+          {
+            questions: [
+              question('referrerName', true),
+              question('referrerEmail', true),
+              question('referrerOrganisation', true),
+              question('referrerPhone', true),
+            ],
+          },
+        ],
+      }),
+    );
+    await pointReferralAtRelease(referralId, formId);
+
+    const { households } = await readList(testApp, token);
+
+    // Exactly these keys: the release flags no referee field, so none appear.
+    expect(households).toEqual([
+      {
+        referralId,
+        sessionDate: '2026-08-18',
+        referrerName: 'Pat Referrer',
+        referrerEmail: 'pat@guildford.gov.uk',
+        referrerOrganisation: 'Guildford Borough Council',
+        referrerPhone: '01483 555666',
+        needsFuelHelp: true,
+        answers: { Dietary: 'no pork' },
+        formId,
+      },
+    ]);
+  });
+
+  it('never sends the reason or the session id, and ignores a keyField the allowlist does not name, however the release flags them', async () => {
+    const { testApp, token, world } = await adminWorld();
+    const { referralId } = await fedAtSession(testApp, token, world, '2026-08-18');
+    const formId = await insertRelease(
+      'forbidden',
+      JSON.stringify([
+        question('reasonId', true),
+        question('sessionId', true),
+        question('madeUp', true),
+        question('refereePostcode', true),
+      ]),
+    );
+    await pointReferralAtRelease(referralId, formId);
+
+    const { households } = await readList(testApp, token);
+    const row = households[0];
+
+    // The one legitimate flag proves the release was read at all; without it
+    // this would pass on a list that had flagged nothing.
+    expect(row).toHaveProperty('refereePostcode', 'GU1 4AA');
+    for (const absent of ['reasonId', 'reason', 'sessionId', 'madeUp']) {
+      expect(row).not.toHaveProperty(absent);
+    }
+    expect(Object.keys(row ?? {}).sort()).toEqual(
+      ['answers', 'formId', 'needsFuelHelp', 'referralId', 'refereePostcode', 'sessionDate'].sort(),
+    );
+  });
+
+  it.each([
+    ['the string "true"', 'true'],
+    ['the number 1', 1],
+    ['false', false],
+    ['null', null],
+  ])(
+    'does not switch a field on when its flag is %s rather than JSON true',
+    async (_name, flag) => {
+      const { testApp, token, world } = await adminWorld();
+      const { referralId } = await fedAtSession(testApp, token, world, '2026-08-18');
+      // refereeSurname is the control: genuinely flagged, so a broken release
+      // lookup cannot make the other assertions pass vacuously.
+      const formId = await insertRelease(
+        'notTrue',
+        JSON.stringify([question('referrerName', flag), question('refereeSurname', true)]),
+      );
+      await pointReferralAtRelease(referralId, formId);
+
+      const { households } = await readList(testApp, token);
+
+      expect(households[0]).toHaveProperty('refereeSurname', 'Wintergreen');
+      expect(households[0]).not.toHaveProperty('referrerName');
+    },
+  );
+
+  it("gives each household the fields of its own release, not another's", async () => {
+    const { testApp, token, world } = await adminWorld();
+    const first = await fedAtSession(testApp, token, world, '2026-08-17');
+    const second = await fedAtSession(testApp, token, world, '2026-08-18');
+    const nameOnly = await insertRelease(
+      'nameOnly',
+      JSON.stringify([question('referrerName', true)]),
+    );
+    const phoneOnly = await insertRelease(
+      'phoneOnly',
+      JSON.stringify([question('refereePhone', true)]),
+    );
+    await pointReferralAtRelease(first.referralId, nameOnly);
+    await pointReferralAtRelease(second.referralId, phoneOnly);
+
+    const { households } = await readList(testApp, token);
+
+    expect(households).toEqual([
+      expect.objectContaining({ referralId: first.referralId, referrerName: 'Jane Fieldsworth' }),
+      expect.objectContaining({ referralId: second.referralId, refereePhone: '07700 900123' }),
+    ]);
+    expect(households[0]).not.toHaveProperty('refereePhone');
+    expect(households[1]).not.toHaveProperty('referrerName');
+  });
+
+  it('lists a household whose release questionnaire is not valid JSON, with none of the optional fields', async () => {
+    const { testApp, token, world } = await adminWorld();
+    const broken = await fedAtSession(testApp, token, world, '2026-08-17');
+    const healthy = await fedAtSession(testApp, token, world, '2026-08-18');
+    const formId = await insertRelease('malformed', '{not json');
+    await pointReferralAtRelease(broken.referralId, formId);
+
+    const { status, households } = await readList(testApp, token);
+
+    expect(status).toBe(200);
+    expect(households).toHaveLength(2);
+    expect(households[0]).toEqual({
+      referralId: broken.referralId,
+      sessionDate: '2026-08-17',
+      needsFuelHelp: true,
+      answers: { Dietary: 'no pork' },
+      formId,
+    });
+    // The neighbouring row, on the baseline release, is untouched.
+    expect(households[1]?.referralId).toBe(healthy.referralId);
+    for (const present of REFEREE_FIELDS) expect(households[1]).toHaveProperty(present);
   });
 
   it('leaves out a household who did not ask for help with fuel', async () => {
