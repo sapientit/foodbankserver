@@ -608,8 +608,8 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
    * The listener sheet for a session: **one sheet, every household on it.**
    *
    * Not one per household — a listener is handed a single sheet and scans it
-   * for whoever is in front of them, so it is ordered by surname rather than by
-   * when the referral arrived.
+   * for whoever is in front of them. It is ordered by pick number, not by
+   * surname as it once was.
    *
    * **A fixed number of queries whatever the session holds**: the referrals,
    * the reason list once, the pick list, and the one voucher-config row. A
@@ -638,8 +638,9 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
    *
    * **Every household on the sheet needs a pick number**, so the sheet and
    * the picking sheets carried round the same hall can be matched against
-   * each other. A household referred since the pick list was made — or
-   * before one has ever been generated — has no parcel and so no number, and
+   * each other. A household referred or moved here since the pick list was
+   * made — or before one has ever been generated — has no parcel here and so
+   * no number, whatever it held on a session it left, and
    * this refuses the *whole* sheet with `NewClientsAssignedError` rather than
    * print one with gaps in it or numbers that do not line up. This is new:
    * the listener sheet used to be available whether or not pick lists had
@@ -704,7 +705,7 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     }
 
     return picked
-      .sort((left, right) => bySurnameThenFirstName(left.referral, right.referral))
+      .sort((left, right) => left.pickNumber - right.pickNumber)
       .map(({ referral, pickNumber }) =>
         toListenerSheetHousehold(referral, labelById.get(referral.reasonId), pickNumber, voucher),
       );

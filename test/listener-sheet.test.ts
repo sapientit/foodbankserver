@@ -342,6 +342,114 @@ describe('the listener sheet and pick numbers', () => {
     expect(sheet.status).toBe(200);
     expect(sheet.households).toHaveLength(2);
   });
+
+  it('is ordered by pick number, not by surname', async () => {
+    const { testApp, token, world } = await adminWorld();
+    // Each household is picked for before the next arrives, so the numbers
+    // run against the alphabet and a surname sort could not pass by accident.
+    const wren = await submitReferral(
+      testApp,
+      world,
+      { refereeSurname: 'Wren' },
+      { clientIp: '203.0.113.10' },
+    );
+    await generatePickList(testApp, token, world.sessionId);
+    const marsh = await submitReferral(
+      testApp,
+      world,
+      { refereeSurname: 'Marsh' },
+      { clientIp: '203.0.113.11' },
+    );
+    await generatePickList(testApp, token, world.sessionId);
+    const ashdown = await submitReferral(
+      testApp,
+      world,
+      { refereeSurname: 'Ashdown' },
+      { clientIp: '203.0.113.12' },
+    );
+    await generatePickList(testApp, token, world.sessionId);
+
+    const sheet = await readSheet(testApp, token, world.sessionId);
+
+    expect(sheet.status).toBe(200);
+    expect(sheet.households?.map((one) => [one.referralId, one.pickNumber])).toEqual([
+      [wren.id, 1],
+      [marsh.id, 2],
+      [ashdown.id, 3],
+    ]);
+  });
+
+  describe('a household moved here from another session', () => {
+    async function createSession(testApp: TestApp, token: string): Promise<string> {
+      const response = await testApp.request('/api/v1/sessions', {
+        method: 'POST',
+        headers: json(token),
+        body: JSON.stringify({
+          sessionDate: '2026-08-18',
+          startTime: '10:00',
+          durationMinutes: 120,
+          location: 'Annexe',
+          capacity: 25,
+          deliveryCapacity: 25,
+        }),
+      });
+      expect(response.status).toBe(201);
+      const body: { id: string } = await response.json();
+      return body.id;
+    }
+
+    /**
+     * Both sessions already have a pick list, so the moved household held a
+     * number on the session it left. That number must not count here.
+     */
+    async function moveInAPickedHousehold() {
+      const { testApp, token, world } = await adminWorld();
+      const moved = await submitReferral(testApp, world, {}, { clientIp: '203.0.113.13' });
+      await generatePickList(testApp, token, world.sessionId);
+
+      const destinationId = await createSession(testApp, token);
+      const alreadyThere = await submitReferral(
+        testApp,
+        { ...world, sessionId: destinationId },
+        {},
+        { clientIp: '203.0.113.14' },
+      );
+      await generatePickList(testApp, token, destinationId);
+
+      const response = await testApp.request(`/api/v1/referrals/${moved.id}`, {
+        method: 'PATCH',
+        headers: json(token),
+        body: JSON.stringify({ sessionId: destinationId }),
+      });
+      expect(response.status).toBe(200);
+
+      return { testApp, token, destinationId, moved, alreadyThere };
+    }
+
+    it('refuses the whole sheet with 409 NEW_CLIENTS_ASSIGNED until it has been picked for', async () => {
+      const { testApp, token, destinationId, moved } = await moveInAPickedHousehold();
+
+      const sheet = await readSheet(testApp, token, destinationId);
+
+      expect(sheet.status).toBe(409);
+      expect(sheet.error?.code).toBe('NEW_CLIENTS_ASSIGNED');
+      expect(sheet.error?.details?.missingParcels).toEqual([moved.id]);
+      expect(sheet.households).toBeUndefined();
+    });
+
+    it('is available again, in pick number order, once it has been picked for', async () => {
+      const { testApp, token, destinationId, moved, alreadyThere } = await moveInAPickedHousehold();
+      await generatePickList(testApp, token, destinationId);
+
+      const sheet = await readSheet(testApp, token, destinationId);
+
+      expect(sheet.status).toBe(200);
+      expect(sheet.households?.map((one) => [one.referralId, one.pickNumber])).toEqual([
+        [alreadyThere.id, 1],
+        [moved.id, 2],
+      ]);
+    });
+  });
 });
 
 describe('the listener sheet first-time marker and voucher instruction', () => {
@@ -374,8 +482,7 @@ describe('the listener sheet first-time marker and voucher instruction', () => {
 
   /**
    * Four households on the session dated 2026-08-11, one in each shape the
-   * derivation cares about. Distinct surnames so the sheet's surname sort is
-   * deterministic; results are mapped back by referral id regardless.
+   * derivation cares about. Results are mapped back by referral id.
    */
   async function seedFourStates(
     testApp: TestApp,

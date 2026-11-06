@@ -1520,8 +1520,8 @@ GET /api/v1/sessions/{sessionId}/listener-sheet
 ```
 
 **One sheet for the whole session**, not one per household. A listener is handed
-a single sheet and scans it for whoever is in front of them, so it comes ordered
-by surname.
+a single sheet and scans it for whoever is in front of them. **It comes ordered
+by `pickNumber`, lowest first. This changed** — it used to be ordered by surname.
 
 Open to a **team leader**, and this is **the only place a team leader is given
 the reason for referral**. Everywhere else it stays with administrators, and
@@ -1579,9 +1579,10 @@ list because of it**:
 and the picking sheets are carried round the same hall, and a listener has to
 be able to match a household between the two. **This changed too** — producing
 the sheet used to be independent of picking, available whether or not a pick
-list had been made. It no longer is: a household referred since the pick list
-was generated, or before one has ever been generated, has no parcel and so no
-number, and `GET /listener-sheet` now refuses the **whole** request with a
+list had been made. It no longer is: a household referred or moved to the
+session since the pick list was generated, or before one has ever been
+generated, has no parcel here and so no number, whatever it held on a session
+it left, and `GET /listener-sheet` now refuses the **whole** request with a
 `409` and the stable code `NEW_CLIENTS_ASSIGNED` rather than print a sheet
 with gaps in it or numbers that do not line up with the picking sheets.
 `error.details.missingParcels` names the referrals with no parcel yet — the
