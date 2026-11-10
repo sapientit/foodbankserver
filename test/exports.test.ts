@@ -930,6 +930,7 @@ describe('the spreadsheet extract', () => {
         'answersJson',
         'refereePostcodeNormalised',
         'refereePhoneNormalised',
+        'refereeSurnameNormalised',
         'reasonId',
         'sessionId',
         'authorisedReferrerId',

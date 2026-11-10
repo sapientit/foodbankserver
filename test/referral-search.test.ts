@@ -10,6 +10,7 @@ import { authorisedReferrers, referralReasons } from '../src/db/schema/referrers
 import { recurringSessions, sessions } from '../src/db/schema/sessions.ts';
 import { refreshTokens, users } from '../src/db/schema/users.ts';
 import { purgeExpiredReferrals } from '../src/modules/jobs/purge-referrals.ts';
+import { normaliseSurname } from '../src/modules/referrals/surname.ts';
 import { authHeaders, buildTestApp, devLogin, type TestApp } from './helpers/app.ts';
 import {
   BASELINE_FORM_ID,
@@ -285,19 +286,24 @@ describe('at least one identifier is required', () => {
   });
 
   /**
-   * `surnamePrefix` is a filter, not a fourth identifier. A surname on its own
-   * would hand back every household of that name the food bank has ever fed,
-   * which is the thing this endpoint exists not to do —
-   * `INITIAL_SPEC1.txt`, `#Searching for a referral`.
+   * The start of a surname is enough on its own, but only from three
+   * characters — `INITIAL_SPEC1.txt`, `#Searching for a referral`. The
+   * minimum holds alongside an identifier too, and leading whitespace does
+   * not count towards it, since no surname begins with a space.
    */
-  it('refuses a surnamePrefix supplied without a postcode, phone number or date of birth with 400', async () => {
+  it('refuses a surnamePrefix of fewer than three characters with 400, alone or alongside an identifier', async () => {
     const { testApp, token } = await referralWorld(NOW);
-    const response = await testApp.request('/api/v1/referrals/search', {
-      method: 'POST',
-      headers: json(token),
-      body: JSON.stringify({ surnamePrefix: 'Wintergreen' }),
-    });
-    expect(response.status).toBe(400);
+    for (const body of [
+      { surnamePrefix: 'Wi' },
+      { surnamePrefix: '  Wi' },
+      { surnamePrefix: '   ' },
+      // `é` typed as `e` plus a combining acute is one character, not two.
+      { surnamePrefix: 'e\u0301e' },
+      { postcode: 'GU40 1BB', surnamePrefix: 'Wi' },
+    ]) {
+      const response = await search(testApp, token, body);
+      expect(response.status).toBe(400);
+    }
   });
 
   it('accepts a surnamePrefix alongside an identifier', async () => {
@@ -672,10 +678,11 @@ it('returns all three referrals when a postcode, a phone and a date of birth eac
 });
 
 /**
- * `surnamePrefix` — the narrowing filter for the postcode that turns out to be
- * a hostel. It is `AND`ed around the whole identifier match, so it applies to
- * every arm, and it matches the start of the surname rather than anywhere in
- * it.
+ * `surnamePrefix` alongside an identifier — the narrowing filter for the
+ * postcode that turns out to be a hostel. It is `AND`ed around the whole
+ * identifier match, so it applies to every arm, and it matches the start of
+ * the surname rather than anywhere in it. It never widens: see the
+ * `surnamePrefix on its own` block below for the search without one.
  */
 describe('surnamePrefix narrows what the identifiers found', () => {
   /** Two households sharing one postcode — the hostel case, in miniature. */
@@ -802,9 +809,12 @@ describe('surnamePrefix narrows what the identifiers found', () => {
     const { wintergreen } = await twoAtOnePostcode(testApp, w);
 
     // A row can have a null surname — the column is nullable, though a live
-    // submission requires one — and `LIKE` against `NULL` is `NULL`, so it
-    // drops out rather than matching everything.
-    await db.update(referrals).set({ refereeSurname: null }).where(eq(referrals.id, wintergreen));
+    // submission requires one — and a comparison with `NULL` is never true,
+    // so it drops out rather than matching everything.
+    await db
+      .update(referrals)
+      .set({ refereeSurname: null, refereeSurnameNormalised: null })
+      .where(eq(referrals.id, wintergreen));
 
     const filtered = await search(testApp, token, {
       postcode: 'GU45 1AA',
@@ -820,16 +830,16 @@ describe('surnamePrefix narrows what the identifiers found', () => {
   });
 
   /**
-   * The repository escapes `%` and `_` before building the `LIKE`. A filter
-   * that silently stops filtering is worse than one that finds nothing: `%`
-   * behaving as a wildcard would hand back the whole hostel to somebody who
-   * typed a stray character.
+   * The comparison is a range, not a `LIKE`, so `%` and `_` are characters
+   * like any other. A filter that silently stops filtering is worse than one
+   * that finds nothing: `%` behaving as a wildcard would hand back the whole
+   * hostel to somebody who typed a stray character.
    */
   it('treats LIKE metacharacters as ordinary letters rather than wildcards', async () => {
     const { testApp, token, world: w } = await referralWorld(NOW);
     const { wintergreen, ashdown } = await twoAtOnePostcode(testApp, w);
 
-    for (const metacharacter of ['%', '_intergreen', 'Wintergree_']) {
+    for (const metacharacter of ['%%%', 'Win%', '_intergreen', 'Wintergree_']) {
       const response = await search(testApp, token, {
         postcode: 'GU45 1AA',
         surnamePrefix: metacharacter,
@@ -844,6 +854,201 @@ describe('surnamePrefix narrows what the identifiers found', () => {
     expect(unfiltered.body.results.map((row) => row.referralId).sort()).toEqual(
       [wintergreen, ashdown].sort(),
     );
+  });
+});
+
+/**
+ * `surnamePrefix` with none of the three identifiers — `INITIAL_SPEC1.txt`,
+ * `#Searching for a referral`: the start of a surname, three characters or
+ * more, finds every referral whose surname begins with it, whatever the case,
+ * accented capitals included.
+ */
+describe('surnamePrefix on its own', () => {
+  async function seedThree(
+    testApp: TestApp,
+    world: ReferralWorld,
+  ): Promise<{ diLima: string; dibb: string; unsal: string }> {
+    const diLima = await submitReferral(
+      testApp,
+      world,
+      { refereeSurname: 'Di Lima', refereePostcode: 'GU46 1AA', refereeDateOfBirth: '1971-01-01' },
+      { clientIp: nextClientIp() },
+    );
+    const dibb = await submitReferral(
+      testApp,
+      world,
+      { refereeSurname: 'Dibb', refereePostcode: 'GU46 2BB', refereeDateOfBirth: '1972-02-02' },
+      { clientIp: nextClientIp() },
+    );
+    const unsal = await submitReferral(
+      testApp,
+      world,
+      { refereeSurname: 'Ünsal', refereePostcode: 'GU46 3CC', refereeDateOfBirth: '1973-03-03' },
+      { clientIp: nextClientIp() },
+    );
+    return { diLima: diLima.id, dibb: dibb.id, unsal: unsal.id };
+  }
+
+  function ids(body: ReferralSearchResponseBody): string[] {
+    return body.results.map((row) => row.referralId).sort();
+  }
+
+  it('finds every referral whose surname begins with it, across postcodes and whatever the case', async () => {
+    const { testApp, token, world: w } = await referralWorld(NOW);
+    const { diLima, dibb } = await seedThree(testApp, w);
+    const dibden = await submitReferral(
+      testApp,
+      w,
+      { refereeSurname: 'Dibden', refereePostcode: 'GU46 4DD', refereeDateOfBirth: '1974-04-04' },
+      { clientIp: nextClientIp() },
+    );
+
+    for (const typed of ['dib', 'DIB', 'Dib']) {
+      const response = await search(testApp, token, { surnamePrefix: typed });
+      expect(response.status).toBe(200);
+      expect(response.body.count).toBe(2);
+      expect(ids(response.body)).toEqual([dibb, dibden.id].sort());
+      expect(ids(response.body)).not.toContain(diLima);
+    }
+  });
+
+  it('counts a trailing space as one of the three characters, so "Di " finds Di Lima and not Dibb', async () => {
+    const { testApp, token, world: w } = await referralWorld(NOW);
+    const { diLima, dibb } = await seedThree(testApp, w);
+
+    const response = await search(testApp, token, { surnamePrefix: 'Di ' });
+    expect(response.status).toBe(200);
+    expect(ids(response.body)).toEqual([diLima]);
+    expect(ids(response.body)).not.toContain(dibb);
+  });
+
+  /**
+   * SQLite's `lower()` folds ASCII only; the settled column is lowered in
+   * TypeScript, so a capital Ü is found by a lower-case ü and the other way
+   * round. Written as a precomposed letter and as `U` plus a combining
+   * diaeresis, which are the same letter to the person typing it.
+   */
+  it('folds the case of accented capitals, however the accent was typed', async () => {
+    const { testApp, token, world: w } = await referralWorld(NOW);
+    const { unsal } = await seedThree(testApp, w);
+
+    for (const typed of ['üns', 'ÜNS', 'U\u0308ns', 'u\u0308NS']) {
+      const response = await search(testApp, token, { surnamePrefix: typed });
+      expect(response.status).toBe(200);
+      expect(ids(response.body)).toEqual([unsal]);
+    }
+  });
+
+  it('finds a referral by the surname it was corrected to, and no longer by the old one', async () => {
+    const { testApp, token, world: w } = await referralWorld(NOW);
+    const { dibb } = await seedThree(testApp, w);
+
+    const patched = await testApp.request(`/api/v1/referrals/${dibb}`, {
+      method: 'PATCH',
+      headers: json(token),
+      body: JSON.stringify({ refereeSurname: 'Östberg' }),
+    });
+    expect(patched.status).toBe(200);
+
+    const byNew = await search(testApp, token, { surnamePrefix: 'öST' });
+    expect(ids(byNew.body)).toEqual([dibb]);
+    const byOld = await search(testApp, token, { surnamePrefix: 'dib' });
+    expect(byOld.body).toEqual({ count: 0, results: [] });
+  });
+
+  /**
+   * A postcode or phone the rule cannot read is not searched on — the same
+   * as leaving the box empty — so what is left is the surname alone. It does
+   * not turn the search into "nothing", and it does not let the surname widen
+   * anything either.
+   */
+  it('searches on the surname alone when the only identifier sent cannot be settled', async () => {
+    const { testApp, token, world: w } = await referralWorld(NOW);
+    const { dibb } = await seedThree(testApp, w);
+
+    const response = await search(testApp, token, {
+      postcode: 'NOTVALID',
+      surnamePrefix: 'dib',
+    });
+    expect(response.status).toBe(200);
+    expect(ids(response.body)).toEqual([dibb]);
+  });
+
+  it('never widens: alongside an identifier it finds only referrals matching both', async () => {
+    const { testApp, token, world: w } = await referralWorld(NOW);
+    const { diLima, dibb } = await seedThree(testApp, w);
+
+    // Dibb's postcode with Di Lima's surname: an `OR` would return both.
+    const response = await search(testApp, token, { postcode: 'GU46 2BB', surnamePrefix: 'di l' });
+    expect(response.body).toEqual({ count: 0, results: [] });
+
+    const control = await search(testApp, token, { postcode: 'GU46 2BB', surnamePrefix: 'dib' });
+    expect(ids(control.body)).toEqual([dibb]);
+    expect(ids(control.body)).not.toContain(diLima);
+  });
+});
+
+describe('migration 0046 backfill', () => {
+  /**
+   * Only the `UPDATE` from the real migration, read out of
+   * `env.TEST_MIGRATIONS` rather than retyped — following the `0045` backfill
+   * test in `test/picklist-admin-and-cancel.test.ts`. The column and index
+   * already exist via `test/setup.ts`.
+   */
+  async function runBackfill(): Promise<void> {
+    const migration = env.TEST_MIGRATIONS.find((entry) => entry.name.startsWith('0046'));
+    if (migration === undefined) {
+      throw new Error('migration 0046 not found in TEST_MIGRATIONS — has it been renamed?');
+    }
+    const updates = migration.queries.filter((query) =>
+      query
+        .split('\n')
+        .filter((line) => !line.trim().startsWith('--'))
+        .join('\n')
+        .trim()
+        .toUpperCase()
+        .startsWith('UPDATE'),
+    );
+    expect(updates).toHaveLength(1);
+    for (const statement of updates) {
+      await env.DB.prepare(statement).run();
+    }
+  }
+
+  it('settles an existing surname so it is found, and leaves rows that already have one alone', async () => {
+    const { testApp, token, world: w } = await referralWorld(NOW);
+    const old = await submitReferral(
+      testApp,
+      w,
+      { refereeSurname: 'Wintergreen', refereePostcode: 'GU47 1AA' },
+      { clientIp: nextClientIp() },
+    );
+    const already = await submitReferral(
+      testApp,
+      w,
+      { refereeSurname: 'Ashdown', refereePostcode: 'GU47 2BB' },
+      { clientIp: nextClientIp() },
+    );
+    // As a row written before the column existed, or by the previous server
+    // between migrating and deploying.
+    await db
+      .update(referrals)
+      .set({ refereeSurnameNormalised: null })
+      .where(eq(referrals.id, old.id));
+    expect((await search(testApp, token, { surnamePrefix: 'win' })).body.count).toBe(0);
+    // A settled value the backfill must not overwrite — it is re-run after
+    // deploy, over rows the new server has already settled.
+    await db
+      .update(referrals)
+      .set({ refereeSurnameNormalised: 'sentinel' })
+      .where(eq(referrals.id, already.id));
+
+    await runBackfill();
+
+    const found = await search(testApp, token, { surnamePrefix: 'WIN' });
+    expect(found.body.results.map((row) => row.referralId)).toEqual([old.id]);
+    const [untouched] = await db.select().from(referrals).where(eq(referrals.id, already.id));
+    expect(untouched?.refereeSurnameNormalised).toBe('sentinel');
   });
 });
 
@@ -996,6 +1201,7 @@ describe('ordering and the fifty-result cap', () => {
       referrerPhone: null,
       refereeFirstName: null,
       refereeSurname: surname,
+      refereeSurnameNormalised: surname === null ? null : normaliseSurname(surname),
       refereeDateOfBirth: null,
       refereeAddress: null,
       refereePostcode: postcode,

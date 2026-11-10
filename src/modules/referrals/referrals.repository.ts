@@ -189,20 +189,23 @@ export interface ReferralSearchCandidate {
  * exists: the nightly purge deletes it outright.
  *
  * Same "the throw is not decoration" reasoning as `repeatReferralPredicate`:
- * callers guard `hasAnythingToMatchOn` first, so `matchers` is never empty in
- * practice, but an empty `or(...)` returns `undefined` and a `WHERE undefined`
- * would return every referral the food bank has ever held.
+ * the service returns early when nothing settled, so there is always
+ * something to match on in practice, but an empty `or(...)` returns
+ * `undefined` and a `WHERE undefined` would return every referral the food
+ * bank has ever held.
  *
- * **`surnamePrefix` narrows, and is `AND`ed around the whole `or(...)`.** The
- * bracketing is the entire point: `A OR B AND C` binds as `A OR (B AND C)` in
- * SQL, so a filter written flat alongside the identifiers would leave the
+ * **`surnameStart` always narrows and never widens.** The three identifiers
+ * are `OR`ed with each other; the surname is `AND`ed around the whole of that
+ * `or(...)`, or stands alone when none of the three settled. The bracketing
+ * is the entire point: `A OR B AND C` binds as `A OR (B AND C)` in SQL, so a
+ * surname written flat alongside the identifiers would leave the
  * date-of-birth arm unfiltered and quietly return the households the
- * administrator asked to exclude. It is applied to the count and to the capped
- * rows through this one function, so the two cannot drift apart.
+ * administrator asked to exclude. Built for the count and the capped rows
+ * through this one function, so the two cannot drift apart.
  */
 function referralSearchPredicate(
   fields: MatchableFields,
-  surnamePrefix: string | null,
+  surnameStart: string | null,
 ): SQL | undefined {
   const matchers: SQL[] = [];
   if (fields.dateOfBirth !== null) {
@@ -215,46 +218,36 @@ function referralSearchPredicate(
     matchers.push(eq(referrals.refereePhoneNormalised, fields.phoneNormalised));
   }
 
-  if (matchers.length === 0) {
+  if (matchers.length === 0 && surnameStart === null) {
     throw new Error('Referral search predicate built with nothing to match on');
   }
 
-  const identifiers = or(...matchers);
-  return surnamePrefix === null ? identifiers : and(identifiers, surnameStartsWith(surnamePrefix));
+  const identifiers = matchers.length === 0 ? undefined : or(...matchers);
+  return surnameStart === null ? identifiers : and(identifiers, surnameStartsWith(surnameStart));
 }
 
 /**
- * Case-insensitive start-of-surname: the surname cut to the prefix's length,
- * compared for equality.
+ * Settled surnames beginning with `start`, as a range: at least `start`, and
+ * below `start` followed by U+10FFFF, the highest code point there is. Every
+ * string that begins with `start` sorts inside that range under SQLite's
+ * byte-wise `BINARY` comparison and nothing else does, and a range is what
+ * `idx_referrals_search_surname` can serve.
  *
- * **Deliberately not `LIKE 'prefix%'`, which is what this was first written
- * as and which was a `500` waiting for production.** SQLite refuses a `LIKE`
- * pattern over fifty characters with `LIKE or GLOB pattern too complex`, and
- * the schema allows a hundred — twice that once `%` and `_` are escaped. Worse,
- * **SQLite only evaluates the pattern once there is a row to evaluate it
- * against**, so it passed every test against a database that had not been
- * seeded yet. That is the identical trap migration `0019` fell into; see
- * `docs/engineering/d1-constraints.md`. Comparing a substring has no pattern
- * and therefore no ceiling, and it needs no metacharacter escaping at all —
- * a `%` is just a character that no surname starts with.
+ * **Deliberately not `LIKE 'start%'`.** SQLite refuses a `LIKE` pattern over
+ * fifty characters with `LIKE or GLOB pattern too complex`, the schema allows
+ * a hundred, and **SQLite only evaluates the pattern once there is a row to
+ * evaluate it against** — so it passes every test against an empty table. That
+ * is the trap migration `0019` fell into; see
+ * `docs/engineering/d1-constraints.md`. A range has no pattern, so no ceiling,
+ * and no metacharacters to escape: a `%` is just a character no surname starts
+ * with.
  *
- * A `NULL` surname still drops out: `substr(NULL, …)` is `NULL` and `NULL = x`
- * is never true. A prefix longer than the surname cuts to the whole surname,
- * which cannot equal the longer prefix, so it correctly finds nothing.
- *
- * **The case-folding is ASCII-only, and that is a real limit, not an
- * oversight.** SQLite's `lower()` folds ASCII and leaves everything else
- * alone, so a household stored as `Ünsal` is not found by `ünsal`. Fixing it
- * properly means a `referee_surname_normalised` column lowered in TypeScript,
- * where `toLowerCase()` is Unicode-aware — the same shape as
- * `refereePostcodeNormalised` — which is a migration and a backfill, not
- * something to fake here. Until the charity says it matters, an accented
- * surname is matched case-sensitively and the three identifiers still find the
- * household.
+ * A `NULL` settled surname drops out: a comparison with `NULL` is never true.
  */
-function surnameStartsWith(prefix: string): SQL {
-  const lowered = prefix.toLowerCase();
-  return sql`lower(substr(${referrals.refereeSurname}, 1, length(${lowered}))) = ${lowered}`;
+function surnameStartsWith(start: string): SQL {
+  const settled = referrals.refereeSurnameNormalised;
+  const above = `${start}\u{10FFFF}`;
+  return sql`(${settled} >= ${start} and ${settled} < ${above})`;
 }
 
 export function createReferralsRepository(db: Database) {
@@ -490,12 +483,12 @@ export function createReferralsRepository(db: Database) {
      */
     async countSearchResults(
       fields: MatchableFields,
-      surnamePrefix: string | null,
+      surnameStart: string | null,
     ): Promise<number> {
       const rows = await db
         .select({ total: count() })
         .from(referrals)
-        .where(referralSearchPredicate(fields, surnamePrefix));
+        .where(referralSearchPredicate(fields, surnameStart));
       return expectAtMostOne(rows)?.total ?? 0;
     },
 
@@ -508,7 +501,7 @@ export function createReferralsRepository(db: Database) {
      */
     async searchReferrals(
       fields: MatchableFields,
-      surnamePrefix: string | null,
+      surnameStart: string | null,
     ): Promise<ReferralSearchCandidate[]> {
       return (
         db
@@ -529,7 +522,7 @@ export function createReferralsRepository(db: Database) {
           })
           .from(referrals)
           .innerJoin(sessions, eq(sessions.id, referrals.sessionId))
-          .where(referralSearchPredicate(fields, surnamePrefix))
+          .where(referralSearchPredicate(fields, surnameStart))
           // `id` breaks the tie so the fifty are the same fifty every time. A
           // hostel postcode is exactly where the cap bites and exactly where
           // dozens of referrals share one session date, so without it "50 of

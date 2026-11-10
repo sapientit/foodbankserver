@@ -38,6 +38,7 @@ import {
   type MatchableFields,
   type MatchKind,
 } from './matching.ts';
+import { normaliseSurname } from './surname.ts';
 import type {
   ReferralSearchCandidate,
   RepeatReferralCandidate,
@@ -375,34 +376,32 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
 
   /**
    * `POST /referrals/search`: an administrator looking a household up by
-   * postcode, phone number and/or date of birth when somebody rings in.
-   * `INITIAL_SPEC1.txt`, `#Searching for a referral`.
+   * postcode, phone number and/or date of birth, by the start of a surname,
+   * or both, when somebody rings in. The surname always narrows; it is never
+   * one more way of widening the match. A postcode or phone that settles to
+   * `null` is not searched on, so one sent with a surname leaves a search on
+   * the surname alone — the same answer as leaving that box empty. `INITIAL_SPEC1.txt`, `#Searching for a referral`.
    *
-   * **Settles the three inputs itself, the same way `submit` does**, rather
-   * than trusting a client to have done it: `normalisePostcode` /
-   * `normalisePhone` are the one place that rule is written, and a value the
-   * rule cannot make sense of settles to `null` and is simply not searched
-   * on — that is not an error, unlike a value that fails the schema's shape
-   * check. Date of birth needs no settling; see `matching.ts`.
+   * **Settles every input itself, the same way `submit` does**, rather than
+   * trusting a client to have done it: `normalisePostcode`, `normalisePhone`
+   * and `normaliseSurname` are the one place each rule is written, and a
+   * postcode or phone the rule cannot make sense of settles to `null` and is
+   * simply not searched on — that is not an error, unlike a value that fails
+   * the schema's shape check. Date of birth needs no settling; see
+   * `matching.ts`.
    *
-   * **If every supplied value settles to `null`, this returns
-   * `{ count: 0, results: [] }` without touching the database** — the same
-   * short-circuit `listRepeatReferralsFor` takes, via the same
-   * `hasAnythingToMatchOn`.
+   * **If nothing settles to a value, this returns `{ count: 0, results: [] }`
+   * without touching the database.** The surname is checked alongside
+   * `hasAnythingToMatchOn` rather than added to `MatchableFields`, because
+   * those are the repeat-referral match's fields and a name is never one.
    *
    * No self-exclusion, no fifteen-month cutoff and no status filter — see
    * `referralSearchPredicate` in the repository for why this is not built by
    * generalising the repeat-referral one. Two queries issued together, the
    * same shape as `listRepeatReferralsFor`: an unbounded count and the rows
-   * capped at `REFERRAL_SEARCH_LIMIT`, ordered newest session first.
-   *
-   * **`surnamePrefix` goes to both queries or neither.** A count built from a
-   * different predicate than the rows is how "3 of 40" appears above three
-   * results that are the whole answer, so the two calls below take the same
-   * pair of arguments and the repository builds one predicate from them.
-   * Unlike the three identifiers it is not settled into a matching form: it is
-   * a prefix of what somebody typed, and lowering it is the repository's job
-   * because that is where the comparison happens.
+   * capped at `REFERRAL_SEARCH_LIMIT`, ordered newest session first, both
+   * from the one predicate so "3 of 40" cannot appear above three results
+   * that are the whole answer.
    */
   async function searchReferrals(input: ReferralSearch): Promise<ReferralSearchResults> {
     const fields: MatchableFields = {
@@ -410,15 +409,16 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
       postcodeNormalised: input.postcode === undefined ? null : normalisePostcode(input.postcode),
       phoneNormalised: input.phone === undefined ? null : normalisePhone(input.phone),
     };
-    const surnamePrefix = input.surnamePrefix ?? null;
+    const surnameStart =
+      input.surnamePrefix === undefined ? null : normaliseSurname(input.surnamePrefix);
 
-    if (!hasAnythingToMatchOn(fields)) {
+    if (!hasAnythingToMatchOn(fields) && surnameStart === null) {
       return { count: 0, results: [] };
     }
 
     const [total, results] = await Promise.all([
-      repository.countSearchResults(fields, surnamePrefix),
-      repository.searchReferrals(fields, surnamePrefix),
+      repository.countSearchResults(fields, surnameStart),
+      repository.searchReferrals(fields, surnameStart),
     ]);
 
     return { count: total, results };
@@ -886,6 +886,7 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
       // The settled forms, kept in step with the values they derive from —
       // see `matching.ts`. Both the public submission and an administrator
       // entering a referral by phone go through this one path.
+      refereeSurnameNormalised: normaliseSurname(input.refereeSurname),
       refereePostcodeNormalised: normalisePostcode(input.refereePostcode),
       refereePhoneNormalised: refereePhone === null ? null : normalisePhone(refereePhone),
       answersJson: JSON.stringify(input.answers),
@@ -1231,6 +1232,9 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     // number now", not "leave it alone"). Correcting one of these is often
     // the very thing that makes the match: a postcode typed wrongly the
     // first time is exactly how one household comes to look like two.
+    if (input.refereeSurname !== undefined) {
+      patch.refereeSurnameNormalised = normaliseSurname(input.refereeSurname);
+    }
     if (input.refereePostcode !== undefined) {
       patch.refereePostcodeNormalised = normalisePostcode(input.refereePostcode);
     }
@@ -1646,6 +1650,8 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
       // referral written before migration `0019` backfilled the two columns
       // carries `null` in them, and copying that forward would make the copy
       // invisible to repeat-referral matching.
+      refereeSurnameNormalised:
+        referral.refereeSurname === null ? null : normaliseSurname(referral.refereeSurname),
       refereePostcodeNormalised: normalisePostcode(referral.refereePostcode),
       refereePhoneNormalised: refereePhone === null ? null : normalisePhone(refereePhone),
       answersJson: referral.answersJson,
@@ -1760,6 +1766,7 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
       refereeAddress: input.refereeAddress,
       refereePostcode: input.refereePostcode,
       refereePhone,
+      refereeSurnameNormalised: normaliseSurname(input.refereeSurname),
       refereePostcodeNormalised: normalisePostcode(input.refereePostcode),
       refereePhoneNormalised: refereePhone === null ? null : normalisePhone(refereePhone),
       answersJson: JSON.stringify(input.answers),

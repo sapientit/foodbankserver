@@ -7,6 +7,7 @@ import type { NewReferral } from '../../db/schema/referrals.ts';
 import { isUniqueViolation } from '../../db/unique-violation.ts';
 import { normalisePhone } from '../../core/phone.ts';
 import { normalisePostcode } from '../referrals/matching.ts';
+import { normaliseSurname } from '../referrals/surname.ts';
 import type { ReferralsRepository } from '../referrals/referrals.repository.ts';
 import type { ReferrersRepository } from '../referrers/referrers.repository.ts';
 import type { SessionsRepository } from '../sessions/sessions.repository.ts';
@@ -190,6 +191,7 @@ export function createDevTestImportsService(deps: DevTestImportsServiceDeps) {
         refereeAddress: referral.refereeAddress,
         refereePostcode: referral.refereePostcode,
         refereePhone,
+        refereeSurnameNormalised: normaliseSurname(referral.refereeSurname),
         refereePostcodeNormalised: normalisePostcode(referral.refereePostcode),
         refereePhoneNormalised: refereePhone === null ? null : normalisePhone(refereePhone),
         answersJson: JSON.stringify(referral.answers),

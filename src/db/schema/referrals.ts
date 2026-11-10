@@ -245,6 +245,18 @@ export const referrals = sqliteTable(
      */
     refereePhoneNormalised: text('referee_phone_normalised'),
     /**
+     * The surname's settled form, for the administrators' search only — see
+     * `normaliseSurname` in `src/modules/referrals/surname.ts`. Lowered in
+     * TypeScript rather than by SQLite's `lower()`, which folds ASCII only and
+     * would leave `Ünsal` unfindable by `üns`. `refereeSurname` is untouched,
+     * for the reason the two columns above are.
+     *
+     * **Never a repeat-referral match.** Names are deliberately not matched
+     * on; see `matching.ts`. This column answers "who starts with `Di `?" and
+     * nothing else.
+     */
+    refereeSurnameNormalised: text('referee_surname_normalised'),
+    /**
      * Dynamic answers, stored exactly as the client sent them.
      *
      * The server keeps the form's releases but never reads them, so it has no
@@ -327,6 +339,10 @@ export const referrals = sqliteTable(
     index('idx_referrals_match_dob').on(table.refereeDateOfBirth),
     index('idx_referrals_match_postcode').on(table.refereePostcodeNormalised),
     index('idx_referrals_match_phone').on(table.refereePhoneNormalised),
+    // What a surname-only search is served by: the search's surname condition
+    // is a range on this column. With an identifier too, SQLite starts from
+    // the identifier's index and checks the surname on the rows it finds.
+    index('idx_referrals_search_surname').on(table.refereeSurnameNormalised),
     index('idx_referrals_form').on(table.formId),
     check(
       'referrals_status_valid',

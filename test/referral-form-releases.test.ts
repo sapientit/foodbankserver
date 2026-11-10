@@ -494,6 +494,28 @@ describe('re-referring on today’s form', () => {
     expect(status).toBe(422);
   });
 
+  it('finds the re-referral by a lower-case surname prefix, non-ASCII capital included', async () => {
+    const { testApp, token, world: w } = await world();
+    const id = await rejectedOriginal(testApp, token, w);
+
+    const { status, body: created } = await reRefer(
+      testApp,
+      token,
+      id,
+      reReferBody(w, { refereeSurname: 'Ünsal' }),
+    );
+    expect(status).toBe(201);
+
+    const response = await testApp.request('/api/v1/referrals/search', {
+      method: 'POST',
+      headers: json(token),
+      body: JSON.stringify({ surnamePrefix: 'üns' }),
+    });
+    expect(response.status).toBe(200);
+    const found: { results: { referralId: string }[] } = await response.json();
+    expect(found.results.map((row) => row.referralId)).toEqual([created.id]);
+  });
+
   it('leaves the source referral completely untouched', async () => {
     const { testApp, token, world: w } = await world();
     const id = await rejectedOriginal(testApp, token, w);

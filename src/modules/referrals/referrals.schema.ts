@@ -8,6 +8,7 @@ import {
 } from '../../config/constants.ts';
 import { COLLECTION_METHODS, REFERRAL_STATUSES } from '../../db/schema/referrals.ts';
 import { isPlainDate } from '../../core/time/plain-date.ts';
+import { SURNAME_SEARCH_MIN_LENGTH } from './surname.ts';
 
 /**
  * Required-ness for personal data lives **here**, not in the DDL.
@@ -334,9 +335,9 @@ export const repeatReferralsQuerySchema = z.object({
 /**
  * `POST /referrals/search` — an administrator looking a household up when
  * somebody rings in. `INITIAL_SPEC1.txt`, `#Searching for a referral`: any
- * one of the three, or more than one, and at least one is required — a
- * search matching on nothing would return every referral the food bank has
- * ever held.
+ * one of the three identifiers, or more than one, and/or the start of a
+ * surname — at least one of the four is required, because a search matching
+ * on nothing would return every referral the food bank has ever held.
  *
  * The three primitives are the same `postcode`, `phone` and `dateOfBirth`
  * used on submission and amendment: there is no second definition of what a
@@ -345,24 +346,34 @@ export const repeatReferralsQuerySchema = z.object({
  * not the settling into matching form, which happens once in the service via
  * `normalisePostcode` / `normalisePhone` and never here.
  *
- * **`surnamePrefix` is a filter, not a fourth identifier.** It narrows what
- * the three found and cannot be searched on alone, so the refusal below counts
- * only the three — a body carrying nothing but a surname is a `400`. The spec
- * is explicit about why: a surname on its own would return every household of
- * that name the food bank has ever fed, which is the thing this endpoint
- * exists not to do.
+ * **`surnamePrefix` always narrows and may also be used alone** — it is
+ * never `OR`ed with the three (see `referralSearchPredicate`). At least
+ * `SURNAME_SEARCH_MIN_LENGTH` characters once leading whitespace is gone.
+ * **Trailing whitespace is kept and counts**: `Di ` is three characters and is
+ * how Di Lima is asked for, so this is deliberately not `personName`, whose
+ * `.trim()` would turn it into the two-character `Di` and refuse it.
  */
 export const referralSearchSchema = z
   .object({
     postcode: postcode.optional(),
     phone: phone.optional(),
     dateOfBirth: dateOfBirth.optional(),
-    surnamePrefix: personName.optional(),
+    surnamePrefix: z
+      .string()
+      .max(100)
+      // NFC before counting, so an accent typed as a letter plus a combining
+      // mark is one character towards the three, as it is when searched.
+      .transform((value) => value.normalize('NFC').trimStart())
+      .pipe(z.string().min(SURNAME_SEARCH_MIN_LENGTH))
+      .optional(),
   })
   .refine(
     (value) =>
-      value.postcode !== undefined || value.phone !== undefined || value.dateOfBirth !== undefined,
-    'supply a postcode, a phone number or a date of birth',
+      value.postcode !== undefined ||
+      value.phone !== undefined ||
+      value.dateOfBirth !== undefined ||
+      value.surnamePrefix !== undefined,
+    'supply a postcode, a phone number, a date of birth or the start of a surname',
   );
 
 export type ReferralSearch = z.infer<typeof referralSearchSchema>;

@@ -65,6 +65,17 @@ all gone (migration `0012`). A referrer confirms what they sent and phones the f
 changing, which is what they already did once the window closed. `AUDIT_ACTOR_KINDS` still admits
 `referral_key` so audit rows written while it existed stay readable.
 
+**Surname search (2026-11-10, migration `0046`).** `POST /referrals/search` takes `surnamePrefix` on
+its own as well as narrowing the other three identifiers, through a new settled column
+`referee_surname_normalised`. **Two things to know when it goes out:** the previous server does not
+fill the column, so once after deploying — any time later is fine — re-run the migration's `UPDATE`
+to catch referrals written in between, through `~/bin/foodbank-charity-wrangler` for production:
+`d1 execute foodbank --remote --env production --command "UPDATE referrals SET
+referee_surname_normalised = lower(trim(referee_surname)) WHERE referee_surname_normalised IS NULL
+AND referee_surname IS NOT NULL"`. It only touches rows still missing the column, so running it
+twice is harmless; and the backfill is SQL, which lowers ASCII only, so an existing surname holding a
+non-ASCII capital (`Ünsal`) is not found by its surname until it is next corrected. New and
+corrected referrals are unaffected.
 ---
 
 ## Deployed
@@ -181,7 +192,7 @@ The plan lists what must change in the same commit.
 Tracked in `OPEN-QUESTIONS.md`, marked with `x-assumed` in `openapi.yaml`. **Do not answer one,
 including one this repo raised.** `grep x-assumed openapi.yaml` is the standing agenda.
 
-Open: none. Q43, Q44 and Q45 closed 2026-09-29, none needing a code change: every fresh-food item
+Open: none. Q54 and Q55 closed 2026-11-10, as raised: the three-character surname minimum holds alongside an identifier too, and an unreadable postcode or phone sent with a surname leaves a search on the surname alone. Both are in `INITIAL_SPEC1.txt`, "Searching for a referral". Q43, Q44 and Q45 closed 2026-09-29, none needing a code change: every fresh-food item
 draws on stock on hand (gone-off food is corrected by hand); 80% of each Cloudflare cap, and an
 average of 40 subrequests, counts as worrying; and a `referrer_collect` reminder stays the same
 whichever household it is for. All three are in `INITIAL_SPEC1.txt`. Q42 (the SMS wording for a referrer collecting a parcel) closed

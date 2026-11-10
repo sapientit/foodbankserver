@@ -490,6 +490,26 @@ describe('what the copy carries', () => {
   });
 });
 
+describe('finding a copy by surname', () => {
+  it('finds the copy by a lower-case surname prefix, non-ASCII capital included', async () => {
+    const { testApp, token, world: w } = await world();
+    const id = await rejectedOriginal(testApp, token, w, { refereeSurname: 'Ünsal' });
+    const target = await createSession(testApp, token);
+
+    const { status, body: copy } = await copyReferral(testApp, token, id, { sessionId: target });
+    expect(status).toBe(201);
+
+    const response = await testApp.request('/api/v1/referrals/search', {
+      method: 'POST',
+      headers: json(token),
+      body: JSON.stringify({ surnamePrefix: 'üns' }),
+    });
+    expect(response.status).toBe(200);
+    const found: { results: { referralId: string }[] } = await response.json();
+    expect(found.results.map((row) => row.referralId)).toContain(copy.id);
+  });
+});
+
 describe('the target session — the same rules as a move', () => {
   it('refuses a cancelled target session', async () => {
     const { testApp, token, world: w } = await world();

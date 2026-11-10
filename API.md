@@ -805,13 +805,22 @@ number in the URL, where they reach access logs, browser history and `Referer`
 headers. Nothing in this system puts personal data in a URL. Do not convert this
 to query parameters and do not build a bookmarkable search link.
 
-**At least one of date of birth, postcode and phone number; none is a `400`.**
+**At least one of date of birth, postcode, phone number and `surnamePrefix`;
+none is a `400`.**
 They are the same three identifiers the duplicate count matches on, settled by
 the same rule — so you do not need to normalise anything before sending it, and a
 value the rule cannot read is quietly not searched on rather than refused. A
-search whose only value is unrecognisable returns `count: 0`. `surnamePrefix` is
-an optional case-insensitive narrowing filter applied after the identifier match;
-it cannot be supplied alone.
+search whose only value is unrecognisable returns `count: 0`.
+
+**`surnamePrefix` always narrows and never widens** (changed 2026-11-10; it used
+to be refused on its own). With any of the three it is `AND`ed around their
+match; alone it finds every referral whose surname begins with it. It is
+case-insensitive, accented capitals included, and must be at least 3 characters
+after leading whitespace is removed. **Trailing whitespace is kept and counts**:
+`"Di "` finds Di Lima and not Dibb, so send the box's value untrimmed. Fewer than
+3 characters is a `400`, with or without an identifier. A postcode or phone that
+cannot be settled is not searched on, so one sent with a surname leaves a
+surname-only search.
 
 **More than one identifier widens the search.** Any one matching is enough. Say
 so on the screen if you offer more than one box, because people assume the
