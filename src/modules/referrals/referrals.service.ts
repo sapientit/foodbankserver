@@ -1131,14 +1131,26 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
    * moved off it afterwards. A move off a confirmed session is the worst of
    * the three: the household ends up recorded against two sessions, and a
    * session confirmed with one set of figures quietly acquires another.
+   *
+   * **`skipSessionConfirmedCheck` is for `adminInfo` alone.** The
+   * administrators' note is the office's own record of a household, kept
+   * for reasons that have nothing to do with what a session's figures say —
+   * Pete, 2026-11-16, `INITIAL_SPEC1.txt`, `#Referral maintenance`. It still
+   * will not reopen a cancelled or rejected referral: those are finished for
+   * a different reason, and this flag does not touch that check.
    */
-  async function assertOpenToChange(referral: Referral): Promise<void> {
+  async function assertOpenToChange(
+    referral: Referral,
+    options?: { readonly skipSessionConfirmedCheck?: boolean },
+  ): Promise<void> {
     if (referral.status === 'cancelled') {
       throw new ConflictError('That referral has been cancelled');
     }
     if (referral.status === 'rejected') {
       throw new ConflictError('That referral was rejected');
     }
+
+    if (options?.skipSessionConfirmedCheck) return;
 
     const session = await sessions.findById(referral.sessionId);
     if (session?.status === 'confirmed') {
@@ -1173,6 +1185,15 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
    * is the client's, so nothing here polices which key moved. See
    * `INITIAL_SPEC1.txt`, "Referral maintenance".
    *
+   * **`adminInfo` on its own is exempt from the confirmed-session lock.** The
+   * office goes on learning things about a household after its session is
+   * signed off, and the note is where that goes — Pete, 2026-11-16. Sent
+   * alongside any other field, the ordinary lock applies to the whole
+   * request: a session confirmed mid-way through a correction should not
+   * leave the note changed and everything else refused silently. `picklistAdmin`
+   * carries no such exemption — it is read by a parcel, and a sheet already
+   * printed for a confirmed session must not change under it.
+   *
    * The audit records **field names only, never values** — see `recordAudit`
    * below. So this overwrites: what the referrer originally sent is not kept,
    * which is the charity's decision and not an oversight.
@@ -1182,7 +1203,11 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     input: ReferralAmend,
     actor: { kind: 'user'; userId: string | null },
   ): Promise<Referral> {
-    await assertOpenToChange(referral);
+    const onlyAdminInfoChanging =
+      input.adminInfo !== undefined &&
+      Object.entries(input).every(([field, value]) => field === 'adminInfo' || value === undefined);
+
+    await assertOpenToChange(referral, { skipSessionConfirmedCheck: onlyAdminInfoChanging });
 
     // Same check the submission makes, and for the same reason: `reasonId` is a
     // foreign key, so an unknown one would surface as a raw database error —

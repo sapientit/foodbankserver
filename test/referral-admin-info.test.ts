@@ -719,3 +719,91 @@ describe('role access', () => {
     expect(stored?.adminInfo).toBe(NOTE);
   });
 });
+
+/**
+ * Pete, 2026-11-16, `INITIAL_SPEC1.txt`, `#Referral maintenance`: the note
+ * stays open for writing once the session it is on has been confirmed,
+ * unlike the rest of a referral and unlike `picklistAdmin`. Confirmed
+ * directly in the database, the same shortcut the extract test above takes,
+ * since going through the real confirm flow needs a whole picking world for
+ * a fact that does not depend on it.
+ */
+describe('the note stays open once the session has been confirmed', () => {
+  async function confirmSession(world: ReferralWorld): Promise<void> {
+    await db
+      .update(sessions)
+      .set({ status: 'confirmed', confirmedAt: NOW, updatedAt: NOW })
+      .where(eq(sessions.id, world.sessionId));
+  }
+
+  it('still accepts a PATCH setting only adminInfo, and stores it', async () => {
+    const { testApp, token, world: w } = await adminWorld();
+    const { id } = await submitReferral(testApp, w, {}, { clientIp: nextClientIp() });
+    await confirmSession(w);
+
+    const patched = await patchReferral(testApp, token, id, { adminInfo: NOTE });
+    expect(patched.status).toBe(200);
+    expect(patched.body.adminInfo).toBe(NOTE);
+
+    const [stored] = await db.select().from(referrals).where(eq(referrals.id, id));
+    expect(stored?.adminInfo).toBe(NOTE);
+  });
+
+  it('still clears adminInfo to null on an explicit null', async () => {
+    const { testApp, token, world: w } = await adminWorld();
+    const { id } = await submitReferral(testApp, w, {}, { clientIp: nextClientIp() });
+    await patchReferral(testApp, token, id, { adminInfo: NOTE });
+    await confirmSession(w);
+
+    const cleared = await patchReferral(testApp, token, id, { adminInfo: null });
+    expect(cleared.status).toBe(200);
+
+    const [stored] = await db.select().from(referrals).where(eq(referrals.id, id));
+    expect(stored?.adminInfo).toBeNull();
+  });
+
+  it('still refuses any other field on its own, with 409', async () => {
+    const { testApp, token, world: w } = await adminWorld();
+    const { id } = await submitReferral(testApp, w, {}, { clientIp: nextClientIp() });
+    await confirmSession(w);
+
+    const response = await patchReferral(testApp, token, id, { refereeSurname: 'Wintergreene' });
+    expect(response.status).toBe(409);
+
+    const [stored] = await db.select().from(referrals).where(eq(referrals.id, id));
+    expect(stored?.refereeSurname).not.toBe('Wintergreene');
+  });
+
+  it('refuses adminInfo sent together with another field, and writes neither', async () => {
+    const { testApp, token, world: w } = await adminWorld();
+    const { id } = await submitReferral(testApp, w, {}, { clientIp: nextClientIp() });
+    await patchReferral(testApp, token, id, { adminInfo: NOTE });
+    await confirmSession(w);
+
+    const response = await patchReferral(testApp, token, id, {
+      adminInfo: 'Should not be saved',
+      refereeSurname: 'Wintergreene',
+    });
+    expect(response.status).toBe(409);
+
+    const [stored] = await db.select().from(referrals).where(eq(referrals.id, id));
+    expect(stored?.adminInfo).toBe(NOTE);
+    expect(stored?.refereeSurname).not.toBe('Wintergreene');
+  });
+
+  it('does not reopen a cancelled referral: adminInfo alone still refused with 409', async () => {
+    const { testApp, token, world: w } = await adminWorld();
+    const { id } = await submitReferral(testApp, w, {}, { clientIp: nextClientIp() });
+    await patchReferral(testApp, token, id, { adminInfo: NOTE });
+    await testApp.request(`/api/v1/referrals/${id}/cancel`, {
+      method: 'POST',
+      headers: authHeaders(token),
+    });
+
+    const response = await patchReferral(testApp, token, id, { adminInfo: 'After the fact' });
+    expect(response.status).toBe(409);
+
+    const [stored] = await db.select().from(referrals).where(eq(referrals.id, id));
+    expect(stored?.adminInfo).toBe(NOTE);
+  });
+});
