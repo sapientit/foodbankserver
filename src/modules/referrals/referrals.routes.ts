@@ -38,6 +38,7 @@ import {
   reReferralSchema,
   firstTimeReviewSchema,
   referralAdminAmendSchema,
+  referralCheckQuerySchema,
   referralListQuerySchema,
   referralSearchSchema,
   rejectReferralSchema,
@@ -60,6 +61,34 @@ export function referralRoutes(): Hono<AppEnv> {
     const query = parseOrThrow(referralListQuerySchema, {
       sessionId: c.req.query('sessionId'),
       status: c.req.query('status'),
+    });
+
+    const actor = actorOf(c);
+    const referrals = await serviceFor(c).listReferrals(query, actor);
+
+    // No `includeAdminInfo`: the administrators' note belongs on the referral
+    // an administrator has open, not on every row of a list. See
+    // `ReferralResponseOptions`.
+    return c.json<{ referrals: ReferralResponse[] }>({
+      referrals: referrals.map((referral) => toReferralResponse(referral, actor)),
+    });
+  });
+
+  /**
+   * The paginated "Check referrals" screen — a second view of the same
+   * underlying list, not a replacement for `GET /referrals` above. That
+   * plain, unbounded list is also used to run a session (the Client List,
+   * the Run Sheet's `householdsOnSession` and the listener sheet all need
+   * *every* referral on a session, not a bounded, attention-ordered or
+   * aged-off page of one) and by the extract, so it keeps its original
+   * shape. This route exists because that shape is wrong for an
+   * administrator paging through every referral the food bank holds — see
+   * `INITIAL_SPEC1.txt`, `#Checking referrals`.
+   */
+  routes.get('/referrals/check', ...readers, async (c) => {
+    const query = parseOrThrow(referralCheckQuerySchema, {
+      sessionId: c.req.query('sessionId'),
+      status: c.req.query('status'),
       page: c.req.query('page'),
     });
 
@@ -70,9 +99,7 @@ export function referralRoutes(): Hono<AppEnv> {
       actor,
     );
 
-    // No `includeAdminInfo`: the administrators' note belongs on the referral
-    // an administrator has open, not on every row of a list. See
-    // `ReferralResponseOptions`.
+    // No `includeAdminInfo`, for the same reason as the plain list above.
     return c.json<ReferralListResponse>({
       referrals: referrals.map((referral) => toReferralResponse(referral, actor)),
       page: query.page,

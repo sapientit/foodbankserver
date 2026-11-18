@@ -1541,6 +1541,15 @@ paths:
       tags: [Referrals]
       summary: List referrals
       description: |
+        **The plain, unbounded list.** Every referral the filter matches,
+        with no page size and no age cutoff — this is what running a
+        session is built on (the Client List, the Run Sheet and the
+        listener sheet all need *every* referral on a session) and what the
+        extract reads. `GET /referrals/check` is a different screen's view
+        of the same data, paginated and reordered for an administrator
+        working through the whole list; it is not a replacement for this
+        route; see that operation.
+
         **A team lead does not receive `reasonId`, `referrerEmail`,
         `referrerPhone` or `reviewComment`.** Why someone is hungry is not
         picking information.
@@ -1553,22 +1562,56 @@ paths:
         filter by; asking for `status=rejected` returns an empty list rather
         than an error, because the status is simply not one of theirs. Pending
         ones they do see.
+      parameters:
+        - { in: query, name: sessionId, schema: { type: string, format: uuid } }
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [pending_review, active, reviewed, rejected, cancelled]
+      responses:
+        '200':
+          description: Referrals
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [referrals]
+                properties:
+                  referrals:
+                    type: array
+                    items: { $ref: '#/components/schemas/Referral' }
 
-        **Paginated, forty at a time, attention-first.** A referral nobody has
-        acted on yet — `pending_review` or `active` — always appears and
-        always sorts above every settled one, however old it is. A settled
-        referral (`reviewed`, `rejected` or `cancelled`) drops out once more
-        than thirty days have passed since it was referred (`referredAt`, not
-        the session date). This holds whatever `sessionId` or `status`
-        narrows the list to — the same attention-first, thirty-day-bounded
-        result, narrowed to match, never the old unbounded list. Within each
-        of the two groups the order is unchanged: oldest referred first. See
-        `INITIAL_SPEC1.txt`, "Checking referrals".
+  /api/v1/referrals/check:
+    get:
+      tags: [Referrals]
+      summary: List referrals for the "Check referrals" screen, paginated
+      description: |
+        A second view of `GET /referrals`'s data for the administrator
+        working through the whole referral list, not for running a
+        session — see that operation for who else reads the plain list and
+        why it stays unbounded.
+
+        **Paginated, forty at a time, attention-first.** A referral nobody
+        has acted on yet — `pending_review` or `active` — always appears
+        and always sorts above every settled one, however old it is. A
+        settled referral (`reviewed`, `rejected` or `cancelled`) drops out
+        once more than thirty days have passed since it was referred
+        (`referredAt`, not the session date). This holds whatever
+        `sessionId` or `status` narrows the list to — the same
+        attention-first, thirty-day-bounded result, narrowed to match.
+        Within each of the two groups the order is unchanged: oldest
+        referred first. See `INITIAL_SPEC1.txt`, "Checking referrals".
 
         `page` is 1-based and defaults to 1. The page size is fixed at forty
         and is not a request parameter; `totalCount` is every row the
         request matched, uncapped, so `totalCount` divided by `pageSize` is
         how many pages there are.
+
+        Same role-shaped rows and the same team-lead restrictions as
+        `GET /referrals` — a team lead never sees a rejected referral or
+        `reasonId`/`referrerEmail`/`referrerPhone`/`reviewComment`, and
+        nobody receives `adminInfo` here either.
       parameters:
         - { in: query, name: sessionId, schema: { type: string, format: uuid } }
         - in: query

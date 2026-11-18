@@ -55,14 +55,28 @@ async function review(testApp: TestApp, token: string, id: string): Promise<void
   expect(response.status).toBe(200);
 }
 
-interface ListPage {
+interface CheckPage {
   readonly referrals: { id: string; status: string }[];
   readonly page: number;
   readonly pageSize: number;
   readonly totalCount: number;
 }
 
-async function listReferrals(testApp: TestApp, token: string, query = ''): Promise<ListPage> {
+/** `GET /referrals/check` — the paginated "Check referrals" screen. */
+async function checkReferrals(testApp: TestApp, token: string, query = ''): Promise<CheckPage> {
+  const response = await testApp.request(`/api/v1/referrals/check${query}`, {
+    headers: authHeaders(token),
+  });
+  expect(response.status).toBe(200);
+  return response.json();
+}
+
+/** `GET /referrals` — the plain, unbounded list running a session relies on. */
+async function listReferrals(
+  testApp: TestApp,
+  token: string,
+  query = '',
+): Promise<{ referrals: { id: string; status: string }[] }> {
   const response = await testApp.request(`/api/v1/referrals${query}`, {
     headers: authHeaders(token),
   });
@@ -81,7 +95,7 @@ beforeEach(async () => {
   await db.delete(users);
 });
 
-describe('paginating the referral list', () => {
+describe('GET /referrals/check: paginating the "Check referrals" screen', () => {
   it('returns forty rows a page and reports the uncapped total', async () => {
     const { testApp, token, world: w } = await world({ capacity: 50 });
 
@@ -94,20 +108,20 @@ describe('paginating the referral list', () => {
       ids.push(id);
     }
 
-    const first = await listReferrals(testApp, token);
+    const first = await checkReferrals(testApp, token);
     expect(first.page).toBe(1);
     expect(first.pageSize).toBe(40);
     expect(first.totalCount).toBe(45);
     expect(first.referrals.map((r) => r.id)).toEqual(ids.slice(0, 40));
 
-    const second = await listReferrals(testApp, token, '?page=2');
+    const second = await checkReferrals(testApp, token, '?page=2');
     expect(second.page).toBe(2);
     expect(second.totalCount).toBe(45);
     expect(second.referrals.map((r) => r.id)).toEqual(ids.slice(40));
   });
 });
 
-describe('sorting referrals that still need attention to the top', () => {
+describe('GET /referrals/check: sorting referrals that still need attention to the top', () => {
   it('shows a referral nobody has acted on yet above a settled one, whatever their relative ages', async () => {
     const { testApp, token, world: w } = await world();
 
@@ -126,12 +140,12 @@ describe('sorting referrals that still need attention to the top', () => {
       clientIp: nextClientIp(),
     });
 
-    const { referrals: rows } = await listReferrals(testApp, token);
+    const { referrals: rows } = await checkReferrals(testApp, token);
     expect(rows.map((r) => r.id)).toEqual([pendingLate, reviewedEarly]);
   });
 });
 
-describe('the thirty-day cutoff on a settled referral', () => {
+describe('GET /referrals/check: the thirty-day cutoff on a settled referral', () => {
   it('drops a reviewed referral once it was referred over thirty days ago, but keeps one still needing attention however old', async () => {
     const { testApp, token, world: w } = await world();
 
@@ -158,7 +172,7 @@ describe('the thirty-day cutoff on a settled referral', () => {
     });
     await setReferredAt(pendingAncient, '2020-01-01T00:00:00.000Z');
 
-    const { referrals: rows, totalCount } = await listReferrals(testApp, token);
+    const { referrals: rows, totalCount } = await checkReferrals(testApp, token);
     // Attention-needing first, whatever its age, then the one settled
     // referral still inside the thirty days.
     expect(rows.map((r) => r.id)).toEqual([pendingAncient, reviewedAtCutoff]);
@@ -166,8 +180,8 @@ describe('the thirty-day cutoff on a settled referral', () => {
   });
 });
 
-describe('a session hidden from a team lead', () => {
-  it("is excluded from a team lead's paginated list too, but not an admin's", async () => {
+describe('GET /referrals/check: a session hidden from a team lead', () => {
+  it("is excluded from a team lead's paginated screen too, but not an admin's", async () => {
     const { testApp, token, world: w } = await world();
     const { id } = await submitReferral(testApp, w, {}, { clientIp: nextClientIp() });
 
@@ -182,15 +196,15 @@ describe('a session hidden from a team lead', () => {
       role: 'team_lead',
     });
 
-    const { referrals: leadRows } = await listReferrals(lead, accessToken);
+    const { referrals: leadRows } = await checkReferrals(lead, accessToken);
     expect(leadRows.map((r) => r.id)).not.toContain(id);
 
-    const { referrals: adminRows } = await listReferrals(testApp, token);
+    const { referrals: adminRows } = await checkReferrals(testApp, token);
     expect(adminRows.map((r) => r.id)).toContain(id);
   });
 });
 
-describe('narrowing the referral list', () => {
+describe('GET /referrals/check: narrowing the screen', () => {
   it('still applies the same attention-first, thirty-day-bounded rules when filtered by status', async () => {
     const { testApp, token, world: w } = await world();
 
@@ -211,7 +225,38 @@ describe('narrowing the referral list', () => {
     );
     await review(testApp, token, freshReviewed);
 
-    const { referrals: rows } = await listReferrals(testApp, token, '?status=reviewed');
+    const { referrals: rows } = await checkReferrals(testApp, token, '?status=reviewed');
     expect(rows.map((r) => r.id)).toEqual([freshReviewed]);
+  });
+});
+
+describe('GET /referrals (plain): unaffected by the "Check referrals" screen', () => {
+  it('still returns every referral on a session unbounded, for running it, whatever their status or age', async () => {
+    const { testApp, token, world: w } = await world({ capacity: 50 });
+
+    const ids: string[] = [];
+    for (let i = 0; i < 45; i += 1) {
+      const { id } = await submitReferral(testApp, w, {}, { clientIp: nextClientIp() });
+      ids.push(id);
+    }
+    // A settled, decades-old referral — `GET /referrals/check` would drop
+    // this; the plain list running a session relies on must not.
+    await review(testApp, token, ids[0] ?? '');
+    await setReferredAt(ids[0] ?? '', '2020-01-01T00:00:00.000Z');
+
+    const { referrals: rows } = await listReferrals(testApp, token, `?sessionId=${w.sessionId}`);
+    expect(rows).toHaveLength(45);
+    expect(rows.map((r) => r.id)).toEqual(expect.arrayContaining(ids));
+  });
+
+  it('has no page, pageSize or totalCount in its response', async () => {
+    const { testApp, token, world: w } = await world();
+    await submitReferral(testApp, w, {}, { clientIp: nextClientIp() });
+
+    const response = await testApp.request('/api/v1/referrals', { headers: authHeaders(token) });
+    const body: Record<string, unknown> = await response.json();
+    expect(body).not.toHaveProperty('page');
+    expect(body).not.toHaveProperty('pageSize');
+    expect(body).not.toHaveProperty('totalCount');
   });
 });

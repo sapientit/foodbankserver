@@ -312,11 +312,23 @@ export const acceptReferralSchema = rejectReferralSchema.safeExtend({
 });
 
 /**
+ * `GET /referrals`'s query — the plain, unbounded list that running a
+ * session (the Client List, the Run Sheet, the listener sheet) and the
+ * extract rely on. No `page`: that belongs to `referralCheckQuerySchema`
+ * below, a separate screen's query, not an option on this one.
+ */
+export const referralListQuerySchema = z.object({
+  sessionId: z.uuid().optional(),
+  status: z.enum(REFERRAL_STATUSES).optional(),
+});
+
+/**
+ * `GET /referrals/check`'s query — the paginated "Check referrals" screen.
  * `page` is 1-based and defaults to 1. The page size itself
  * (`REFERRAL_LIST_PAGE_SIZE`) is not a query parameter — it is a fixed shape
  * the screen is built around, not a client choice.
  */
-export const referralListQuerySchema = z.object({
+export const referralCheckQuerySchema = z.object({
   sessionId: z.uuid().optional(),
   status: z.enum(REFERRAL_STATUSES).optional(),
   page: z.coerce.number().int().min(1).default(1),

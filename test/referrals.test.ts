@@ -932,12 +932,7 @@ describe('what a team lead may see of a referral under review', () => {
       headers: authHeaders(accessToken),
     });
     expect(filtered.status).toBe(200);
-    expect(await filtered.json()).toEqual({
-      referrals: [],
-      page: 1,
-      pageSize: 40,
-      totalCount: 0,
-    });
+    expect(await filtered.json()).toEqual({ referrals: [] });
 
     // An admin still sees it.
     const asAdmin = await testApp.request(`/api/v1/referrals/${id}`, {
