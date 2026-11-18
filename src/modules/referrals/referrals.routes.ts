@@ -5,6 +5,7 @@ import { requireAuth, requireRole } from '../../http/middleware/require-auth.ts'
 import { parseJsonBody, parseOptionalJsonBody, parseOrThrow } from '../../http/validate.ts';
 import { createConfigurationReleasesRepository } from '../configuration-releases/configuration-releases.repository.ts';
 import { createConfigurationReleasesService } from '../configuration-releases/configuration-releases.service.ts';
+import { REFERRAL_LIST_PAGE_SIZE } from '../../config/constants.ts';
 import type { AppEnv } from '../../http/types.ts';
 import { createPickListsRepository } from '../pick-lists/pick-lists.repository.ts';
 import { createReferrersRepository } from '../referrers/referrers.repository.ts';
@@ -23,6 +24,7 @@ import {
   toRepeatReferralSummary,
   type ListenerSheetHousehold,
   type ReferralDetailsResponse,
+  type ReferralListResponse,
   type ModelSummaryResponse,
   type ReferralResponse,
   type ReferralSearchResponse,
@@ -58,16 +60,24 @@ export function referralRoutes(): Hono<AppEnv> {
     const query = parseOrThrow(referralListQuerySchema, {
       sessionId: c.req.query('sessionId'),
       status: c.req.query('status'),
+      page: c.req.query('page'),
     });
 
     const actor = actorOf(c);
-    const referrals = await serviceFor(c).listReferrals(query, actor);
+    const { referrals, totalCount } = await serviceFor(c).listReferralsPage(
+      { sessionId: query.sessionId, status: query.status },
+      query.page,
+      actor,
+    );
 
     // No `includeAdminInfo`: the administrators' note belongs on the referral
     // an administrator has open, not on every row of a list. See
     // `ReferralResponseOptions`.
-    return c.json<{ referrals: ReferralResponse[] }>({
+    return c.json<ReferralListResponse>({
       referrals: referrals.map((referral) => toReferralResponse(referral, actor)),
+      page: query.page,
+      pageSize: REFERRAL_LIST_PAGE_SIZE,
+      totalCount,
     });
   });
 

@@ -13,7 +13,11 @@ import {
   sql,
   type SQL,
 } from 'drizzle-orm';
-import { REFERRAL_SEARCH_LIMIT, REPEAT_REFERRAL_LIST_LIMIT } from '../../config/constants.ts';
+import {
+  REFERRAL_LIST_PAGE_SIZE,
+  REFERRAL_SEARCH_LIMIT,
+  REPEAT_REFERRAL_LIST_LIMIT,
+} from '../../config/constants.ts';
 import type { Database } from '../../db/client.ts';
 import { expectAtMostOne } from '../../db/expect.ts';
 import { parcels, type AttendanceStatus } from '../../db/schema/pick-lists.ts';
@@ -21,6 +25,7 @@ import {
   auditEvents,
   referrals,
   REFERRAL_STATUSES_HOLDING_A_PLACE,
+  REFERRAL_STATUSES_NEEDING_ATTENTION,
   type NewAuditEvent,
   type NewReferral,
   type Referral,
@@ -250,6 +255,46 @@ function surnameStartsWith(start: string): SQL {
   return sql`(${settled} >= ${start} and ${settled} < ${above})`;
 }
 
+/**
+ * The conditions shared by `list` and `listPage` — every filter but the
+ * attention/staleness one, which only `listPage` applies. Kept as one
+ * function so the two cannot drift apart on who a team lead or a closed
+ * session hides.
+ */
+function listFilterConditions(db: Database, filter: ReferralListFilter): SQL[] {
+  const conditions: SQL[] = [];
+  if (filter.sessionId !== undefined) conditions.push(eq(referrals.sessionId, filter.sessionId));
+  if (filter.status !== undefined) conditions.push(eq(referrals.status, filter.status));
+  if (filter.statuses !== undefined) {
+    conditions.push(inArray(referrals.status, [...filter.statuses]));
+  }
+  if (filter.excludeStatuses !== undefined && filter.excludeStatuses.length > 0) {
+    conditions.push(notInArray(referrals.status, [...filter.excludeStatuses]));
+  }
+  if (filter.excludeSessionStatuses !== undefined && filter.excludeSessionStatuses.length > 0) {
+    conditions.push(
+      notInArray(
+        referrals.sessionId,
+        db
+          .select({ id: sessions.id })
+          .from(sessions)
+          .where(inArray(sessions.status, [...filter.excludeSessionStatuses])),
+      ),
+    );
+  }
+  return conditions;
+}
+
+/**
+ * `0` for a referral nobody has acted on yet — still awaiting review, or
+ * accepted but not yet read through — `1` for one that is settled. Used to
+ * sort those to the top of `listPage`'s result; see `INITIAL_SPEC1.txt`,
+ * `#Checking referrals`.
+ */
+function attentionRank(): SQL<number> {
+  return sql<number>`CASE WHEN ${inArray(referrals.status, [...REFERRAL_STATUSES_NEEDING_ATTENTION])} THEN 0 ELSE 1 END`;
+}
+
 export function createReferralsRepository(db: Database) {
   return {
     async findById(id: string): Promise<Referral | undefined> {
@@ -258,33 +303,51 @@ export function createReferralsRepository(db: Database) {
     },
 
     async list(filter: ReferralListFilter): Promise<Referral[]> {
-      const conditions: SQL[] = [];
-      if (filter.sessionId !== undefined)
-        conditions.push(eq(referrals.sessionId, filter.sessionId));
-      if (filter.status !== undefined) conditions.push(eq(referrals.status, filter.status));
-      if (filter.statuses !== undefined) {
-        conditions.push(inArray(referrals.status, [...filter.statuses]));
-      }
-      if (filter.excludeStatuses !== undefined && filter.excludeStatuses.length > 0) {
-        conditions.push(notInArray(referrals.status, [...filter.excludeStatuses]));
-      }
-      if (filter.excludeSessionStatuses !== undefined && filter.excludeSessionStatuses.length > 0) {
-        conditions.push(
-          notInArray(
-            referrals.sessionId,
-            db
-              .select({ id: sessions.id })
-              .from(sessions)
-              .where(inArray(sessions.status, [...filter.excludeSessionStatuses])),
-          ),
-        );
-      }
-
+      const conditions = listFilterConditions(db, filter);
       return db
         .select()
         .from(referrals)
         .where(conditions.length === 0 ? undefined : and(...conditions))
         .orderBy(asc(referrals.referredAt));
+    },
+
+    /**
+     * The paginated `GET /referrals` list — `REFERRAL_LIST_PAGE_SIZE` rows at
+     * a time, a referral nobody has acted on yet sorted above every settled
+     * one, and a settled referral (`reviewed`, `rejected` or `cancelled`)
+     * left out once it was referred more than `REFERRAL_LIST_STALE_AFTER_DAYS`
+     * days before `staleCutoff`. `staleCutoff` is computed by the service
+     * from its `Clock`, never here. `page` is 1-based.
+     *
+     * `totalCount` is the same `WHERE` without the limit or offset, so a
+     * caller can tell how many pages there are — the same shape
+     * `countHoldingAPlace` uses for a different question.
+     */
+    async listPage(
+      filter: ReferralListFilter,
+      page: number,
+      staleCutoff: string,
+    ): Promise<{ referrals: Referral[]; totalCount: number }> {
+      const where = and(
+        ...listFilterConditions(db, filter),
+        or(
+          inArray(referrals.status, [...REFERRAL_STATUSES_NEEDING_ATTENTION]),
+          gte(referrals.referredAt, staleCutoff),
+        ),
+      );
+
+      const [rows, totalRows] = await Promise.all([
+        db
+          .select()
+          .from(referrals)
+          .where(where)
+          .orderBy(attentionRank(), asc(referrals.referredAt))
+          .limit(REFERRAL_LIST_PAGE_SIZE)
+          .offset((page - 1) * REFERRAL_LIST_PAGE_SIZE),
+        db.select({ total: count() }).from(referrals).where(where),
+      ]);
+
+      return { referrals: rows, totalCount: totalRows[0]?.total ?? 0 };
     },
 
     /**

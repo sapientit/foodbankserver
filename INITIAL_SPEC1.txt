@@ -143,6 +143,14 @@ A field that is missing is not a match either.  The phone number is optional, an
 
 The fifteen months cannot reach further back than the food bank keeps personal details for.  Once a referral's personal details have been forgotten there is nothing left to match on, and the household is not found.  That is accepted rather than worked around: the food bank is not going to hold names and addresses for longer than it otherwise would in order to make this count go back further.
 
+#Checking referrals
+
+The referral list is read forty at a time rather than in one unbounded fetch, because a food bank with enough history behind it would otherwise ask for every referral it has ever received each time the screen is opened.
+
+A referral nobody has acted on yet - one still awaiting review, or accepted but not yet read through - always appears, however old it is, and always sorts above every referral that has already been dealt with.  That is the pile this screen exists to work down.  A referral that has been reviewed, rejected or cancelled drops off the list once more than thirty days have passed since it was referred - the referredAt clock, the same one the fifteen-month purge counts from, not the date of the session it is booked onto - because once it is settled there is nothing further for anybody to do about it, and thirty days is long enough for a query or a correction to still come back about it.  Within each of those two groups the order is unchanged: oldest referred first.
+
+This holds however the list is narrowed.  Asking for one session or one status still returns the same forty-at-a-time, attention-first, thirty-day list, narrowed to match it - not the old unbounded answer with those rules applied afterwards to whatever came back.
+
 #Searching for a referral
 Administrators have a screen of their own for finding a referral when somebody rings up.  It searches on date of birth, postcode and phone number - any one of them, or more than one - and on the start of the surname, and it is administrators only.  Date of birth is the normal way to find somebody; postcode, phone number and surname are alternatives.  The start of a surname can be searched on by itself, or given alongside any of the three to separate the unlikely clients who share a date of birth.  A search with none of the four filled in is refused rather than answered, because a search that matched on nothing would return every household the food bank has ever fed.
 

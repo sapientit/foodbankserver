@@ -1553,6 +1553,22 @@ paths:
         filter by; asking for `status=rejected` returns an empty list rather
         than an error, because the status is simply not one of theirs. Pending
         ones they do see.
+
+        **Paginated, forty at a time, attention-first.** A referral nobody has
+        acted on yet — `pending_review` or `active` — always appears and
+        always sorts above every settled one, however old it is. A settled
+        referral (`reviewed`, `rejected` or `cancelled`) drops out once more
+        than thirty days have passed since it was referred (`referredAt`, not
+        the session date). This holds whatever `sessionId` or `status`
+        narrows the list to — the same attention-first, thirty-day-bounded
+        result, narrowed to match, never the old unbounded list. Within each
+        of the two groups the order is unchanged: oldest referred first. See
+        `INITIAL_SPEC1.txt`, "Checking referrals".
+
+        `page` is 1-based and defaults to 1. The page size is fixed at forty
+        and is not a request parameter; `totalCount` is every row the
+        request matched, uncapped, so `totalCount` divided by `pageSize` is
+        how many pages there are.
       parameters:
         - { in: query, name: sessionId, schema: { type: string, format: uuid } }
         - in: query
@@ -1560,18 +1576,16 @@ paths:
           schema:
             type: string
             enum: [pending_review, active, reviewed, rejected, cancelled]
+        - in: query
+          name: page
+          description: 1-based. Defaults to 1.
+          schema: { type: integer, minimum: 1, default: 1 }
       responses:
         '200':
-          description: Referrals
+          description: One page of referrals
           content:
             application/json:
-              schema:
-                type: object
-                required: [referrals]
-                properties:
-                  referrals:
-                    type: array
-                    items: { $ref: '#/components/schemas/Referral' }
+              schema: { $ref: '#/components/schemas/ReferralListResponse' }
 
   /api/v1/referrals/{id}:
     parameters: [{ $ref: '#/components/parameters/Id' }]
@@ -6082,6 +6096,30 @@ components:
                 whether there are more; there is no paging and no further page
                 to ask for.
               items: { $ref: '#/components/schemas/RepeatReferralMatch' }
+
+    ReferralListResponse:
+      type: object
+      required: [referrals, page, pageSize, totalCount]
+      description: >-
+        `GET /referrals`'s envelope. See that operation for the
+        attention-first ordering and the thirty-day cutoff on a settled
+        referral.
+      properties:
+        referrals:
+          type: array
+          maxItems: 40
+          items: { $ref: '#/components/schemas/Referral' }
+        page:
+          type: integer
+          description: Echoes the request's `page`.
+        pageSize:
+          type: integer
+          description: Always 40 today; not a request parameter.
+        totalCount:
+          type: integer
+          description: >-
+            Every referral the request matched, uncapped. Divide by
+            `pageSize` for the number of pages.
 
     Referral:
       type: object

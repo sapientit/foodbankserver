@@ -251,6 +251,20 @@ export function toReferralResponse(
 }
 
 /**
+ * `GET /referrals`'s envelope. `page` and `pageSize` echo the request back
+ * so a client need not track its own page size, and `totalCount` is every
+ * row the request matched — uncapped, so `totalCount` divided by `pageSize`
+ * is the number of pages to show. See `INITIAL_SPEC1.txt`,
+ * `#Checking referrals`.
+ */
+export interface ReferralListResponse {
+  readonly referrals: ReferralResponse[];
+  readonly page: number;
+  readonly pageSize: number;
+  readonly totalCount: number;
+}
+
+/**
  * What the referrer sees back after submitting.
  *
  * This is now the whole of the referrer's relationship with the system: there

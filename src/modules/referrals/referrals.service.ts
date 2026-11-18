@@ -11,7 +11,10 @@ import { normalisePhone } from '../../core/phone.ts';
 import { instantToLondonWallClock, londonWallClockToInstant } from '../../core/time/london.ts';
 import { addDays, comparePlainDates } from '../../core/time/plain-date.ts';
 import type { Patch } from '../../core/types.ts';
-import { REPEAT_REFERRAL_LOOKBACK_DAYS } from '../../config/constants.ts';
+import {
+  REFERRAL_LIST_STALE_AFTER_DAYS,
+  REPEAT_REFERRAL_LOOKBACK_DAYS,
+} from '../../config/constants.ts';
 import type { Database } from '../../db/client.ts';
 import type { AttendanceStatus } from '../../db/schema/pick-lists.ts';
 import {
@@ -602,6 +605,44 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
       excludeStatuses: ['rejected'],
       excludeSessionStatuses: SESSION_STATUSES_HIDDEN_FROM_TEAM_LEADS,
     });
+  }
+
+  /**
+   * `REFERRAL_LIST_STALE_AFTER_DAYS` back from now, in London, as an ISO
+   * instant comparable with `referredAt`. Same shape as
+   * `repeatReferralCutoff`, a separate function because the two cutoffs
+   * answer different questions and have no reason to move together.
+   */
+  function referralListStaleCutoff(): string {
+    const now = instantToLondonWallClock(clock.nowIso());
+    const cutoffDate = addDays(now.date, -REFERRAL_LIST_STALE_AFTER_DAYS);
+    return londonWallClockToInstant(cutoffDate, now.time);
+  }
+
+  /**
+   * The paginated `GET /referrals` list — `INITIAL_SPEC1.txt`,
+   * `#Checking referrals`. Same visibility rules as `listReferrals`: an
+   * admin sees everything the filter matches; a team lead never sees a
+   * rejected referral or one booked onto a session hidden from them.
+   */
+  async function listReferralsPage(
+    filter: ReferralListFilter,
+    page: number,
+    actor: Actor,
+  ): Promise<{ referrals: Referral[]; totalCount: number }> {
+    const staleCutoff = referralListStaleCutoff();
+    if (actor.role === 'admin') return repository.listPage(filter, page, staleCutoff);
+
+    if (filter.status === 'rejected') return { referrals: [], totalCount: 0 };
+    return repository.listPage(
+      {
+        ...filter,
+        excludeStatuses: ['rejected'],
+        excludeSessionStatuses: SESSION_STATUSES_HIDDEN_FROM_TEAM_LEADS,
+      },
+      page,
+      staleCutoff,
+    );
   }
 
   /**
@@ -1835,6 +1876,7 @@ export function createReferralsService(deps: ReferralsServiceDeps) {
     getReferral,
     viewReferral,
     listReferrals,
+    listReferralsPage,
     review,
     markReviewed,
     setFirstTimeReview,

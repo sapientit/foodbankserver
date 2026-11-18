@@ -47,6 +47,17 @@ export type ReferralStatus = (typeof REFERRAL_STATUSES)[number];
 export const REFERRAL_STATUSES_HOLDING_A_PLACE = ['pending_review', 'active', 'reviewed'] as const;
 
 /**
+ * The two statuses nobody has finished with: still waiting for a decision, or
+ * accepted but not yet read through. `GET /referrals` sorts these to the top
+ * of the list and never drops them for being old — see `INITIAL_SPEC1.txt`,
+ * `#Checking referrals`. `reviewed`, `rejected` and `cancelled` are all
+ * settled; this set is deliberately not `REFERRAL_STATUSES_HOLDING_A_PLACE`,
+ * which also counts `reviewed` towards a session's capacity and answers a
+ * different question.
+ */
+export const REFERRAL_STATUSES_NEEDING_ATTENTION = ['pending_review', 'active'] as const;
+
+/**
  * `collection`, `delivery` or `referrer_collect` — see `collectionMethod` below.
  *
  * Not a `CHECK` constraint, unlike `status`. `referrals` is a foreign-key

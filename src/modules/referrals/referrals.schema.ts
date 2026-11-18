@@ -311,9 +311,15 @@ export const acceptReferralSchema = rejectReferralSchema.safeExtend({
   authoriseReferrer: z.object({ organisationName: organisation }).optional(),
 });
 
+/**
+ * `page` is 1-based and defaults to 1. The page size itself
+ * (`REFERRAL_LIST_PAGE_SIZE`) is not a query parameter — it is a fixed shape
+ * the screen is built around, not a client choice.
+ */
 export const referralListQuerySchema = z.object({
   sessionId: z.uuid().optional(),
   status: z.enum(REFERRAL_STATUSES).optional(),
+  page: z.coerce.number().int().min(1).default(1),
 });
 
 /**

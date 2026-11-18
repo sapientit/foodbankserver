@@ -266,6 +266,28 @@ export const REPEAT_REFERRAL_LIST_LIMIT = 50;
 export const REFERRAL_SEARCH_LIMIT = 50;
 
 /**
+ * How many rows one page of `GET /referrals` returns.
+ *
+ * The charity settled this at forty on 2026-11-18, alongside sorting the
+ * referrals nobody has acted on yet to the top of the list — see
+ * `INITIAL_SPEC1.txt`, `#Checking referrals`. Fixed rather than a client
+ * choice: this is a page size the screen is built around, not a cap like
+ * `REFERRAL_SEARCH_LIMIT`.
+ */
+export const REFERRAL_LIST_PAGE_SIZE = 40;
+
+/**
+ * How long a referral that needs nothing further stays on `GET /referrals`
+ * once it is settled — reviewed, rejected or cancelled.
+ *
+ * Counted from `referredAt`, the same clock the fifteen-month purge uses, not
+ * from the session date. A referral still awaiting review or not yet read
+ * through ignores this entirely; it never ages off the list. See
+ * `INITIAL_SPEC1.txt`, `#Checking referrals`.
+ */
+export const REFERRAL_LIST_STALE_AFTER_DAYS = 30;
+
+/**
  * How long a session stays reserved to one administrator's browser.
  *
  * The browser claims a session, writes it to the spreadsheet, then reports
