@@ -1600,8 +1600,9 @@ paths:
         (`referredAt`, not the session date). This holds whatever
         `sessionId` or `status` narrows the list to — the same
         attention-first, thirty-day-bounded result, narrowed to match.
-        Within each of the two groups the order is unchanged: oldest
-        referred first. See `INITIAL_SPEC1.txt`, "Checking referrals".
+        Within each of the two groups the newest referral comes first —
+        the opposite of `GET /referrals`'s own order. See
+        `INITIAL_SPEC1.txt`, "Checking referrals".
 
         `page` is 1-based and defaults to 1. The page size is fixed at forty
         and is not a request parameter; `totalCount` is every row the

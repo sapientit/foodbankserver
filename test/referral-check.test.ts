@@ -107,17 +107,19 @@ describe('GET /referrals/check: paginating the "Check referrals" screen', () => 
       await setReferredAt(id, new Date(Date.parse(NOW) + i * 60_000).toISOString());
       ids.push(id);
     }
+    // Newest referred first, so `ids`' own order is reversed on the screen.
+    const newestFirst = [...ids].reverse();
 
     const first = await checkReferrals(testApp, token);
     expect(first.page).toBe(1);
     expect(first.pageSize).toBe(40);
     expect(first.totalCount).toBe(45);
-    expect(first.referrals.map((r) => r.id)).toEqual(ids.slice(0, 40));
+    expect(first.referrals.map((r) => r.id)).toEqual(newestFirst.slice(0, 40));
 
     const second = await checkReferrals(testApp, token, '?page=2');
     expect(second.page).toBe(2);
     expect(second.totalCount).toBe(45);
-    expect(second.referrals.map((r) => r.id)).toEqual(ids.slice(40));
+    expect(second.referrals.map((r) => r.id)).toEqual(newestFirst.slice(40));
   });
 });
 

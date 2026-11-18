@@ -312,12 +312,15 @@ export function createReferralsRepository(db: Database) {
     },
 
     /**
-     * The paginated `GET /referrals` list — `REFERRAL_LIST_PAGE_SIZE` rows at
-     * a time, a referral nobody has acted on yet sorted above every settled
-     * one, and a settled referral (`reviewed`, `rejected` or `cancelled`)
-     * left out once it was referred more than `REFERRAL_LIST_STALE_AFTER_DAYS`
-     * days before `staleCutoff`. `staleCutoff` is computed by the service
-     * from its `Clock`, never here. `page` is 1-based.
+     * The paginated `GET /referrals/check` screen —
+     * `REFERRAL_LIST_PAGE_SIZE` rows at a time, a referral nobody has acted
+     * on yet sorted above every settled one, and a settled referral
+     * (`reviewed`, `rejected` or `cancelled`) left out once it was referred
+     * more than `REFERRAL_LIST_STALE_AFTER_DAYS` days before `staleCutoff`.
+     * `staleCutoff` is computed by the service from its `Clock`, never here.
+     * `page` is 1-based. **Newest referred first within each of those two
+     * groups** — the opposite of `list()` above, which stays oldest first
+     * for running a session.
      *
      * `totalCount` is the same `WHERE` without the limit or offset, so a
      * caller can tell how many pages there are — the same shape
@@ -341,7 +344,7 @@ export function createReferralsRepository(db: Database) {
           .select()
           .from(referrals)
           .where(where)
-          .orderBy(attentionRank(), asc(referrals.referredAt))
+          .orderBy(attentionRank(), desc(referrals.referredAt))
           .limit(REFERRAL_LIST_PAGE_SIZE)
           .offset((page - 1) * REFERRAL_LIST_PAGE_SIZE),
         db.select({ total: count() }).from(referrals).where(where),
