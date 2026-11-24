@@ -2228,7 +2228,7 @@ GET /api/v1/sessions/{sessionId}/referral-details
                          refereeAddress, refereePostcode, refereePhone,
                          referrerName, referrerOrganisation,
                          referrerPhone, pickNumber, picklistAdmin,
-                         isDelivery, firstTimeMarker,
+                         collectionMethod, firstTimeMarker,
                          voucherInstruction } ] }
 ```
 
@@ -2250,13 +2250,17 @@ are ringing, or give a picker the household's number over the same call.
 - `picklistAdmin` — the administrators' one line for the picker, **the
   referral's current value**, the same one `Parcel.picklistAdmin` reads. An
   amendment shows on the next read; no pick list needs generating again.
-- `isDelivery` — `true` only where `collectionMethod` is `delivery`; `false`
-  for `collection` and `referrer_collect`. The compact delivery marker.
+- `collectionMethod` — `collection`, `delivery` or `referrer_collect`, as on
+  the referral itself.
 
 **`answers` and `formId` are gone — breaking.** The Run Sheet no longer shows
 the "other information" answer (Referrer comments); `picklistAdmin` takes its
 place. The whole answer map was every dynamic answer on a team-lead payload for
 the sake of one, so it has been removed rather than kept unused.
+
+**`isDelivery` is gone too — breaking.** It collapsed `collection` and
+`referrer_collect` into the same `false`; `collectionMethod` shows all three
+apart.
 
 These come with the referral, not the parcel, so a household not yet picked
 for has them too. **Read them from here for the Run Sheet**, not from

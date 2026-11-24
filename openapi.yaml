@@ -1207,9 +1207,9 @@ paths:
 
         **It also carries what the Run Sheet shows beside each household** —
         `picklistAdmin` (the administrators' line for the picker, read live),
-        `isDelivery`, `firstTimeMarker` and `voucherInstruction`. These come
-        with the referral, not the parcel, so a household not yet picked for
-        carries them too; you do not need the pick list to show them.
+        `collectionMethod`, `firstTimeMarker` and `voucherInstruction`. These
+        come with the referral, not the parcel, so a household not yet picked
+        for carries them too; you do not need the pick list to show them.
 
         **No `answers` and no `formId`.** The Run Sheet no longer shows the
         "other information" answer — `picklistAdmin` has taken its place — and
@@ -6836,7 +6836,7 @@ components:
       type: object
       description: >-
         One household on the Run Sheet: contact details for the session being
-        run, plus the line for the picker, the delivery marker and the two
+        run, plus the line for the picker, the collection method and the two
         derived first-time and voucher values.
         `referrerOrganisation` and `pickNumber` aside, every field is typed
         nullable to match `Referral`'s own referee and referrer columns — in
@@ -6856,7 +6856,7 @@ components:
           referrerPhone,
           pickNumber,
           picklistAdmin,
-          isDelivery,
+          collectionMethod,
           firstTimeMarker,
           voucherInstruction,
         ]
@@ -6902,12 +6902,13 @@ components:
             has a parcel yet. It must never say why the household was referred;
             only the administrator typing it can ensure that. Null when there
             is none.
-        isDelivery:
-          type: boolean
+        collectionMethod:
+          type: string
+          enum: [collection, delivery, referrer_collect]
           description: >-
-            `true` only where the referral's `collectionMethod` is `delivery`;
-            `false` for `collection` and `referrer_collect`. For the Run
-            Sheet's compact delivery marker.
+            As `Referral.collectionMethod`. Replaces the earlier `isDelivery`
+            boolean so the Run Sheet can show `referrer_collect` apart from an
+            ordinary `collection`, not just apart from `delivery`.
         firstTimeMarker:
           type: [string, 'null']
           enum: [first_time, admin, null]

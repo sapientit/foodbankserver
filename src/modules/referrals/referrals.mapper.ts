@@ -690,12 +690,13 @@ export function toReferralSearchResponse(result: {
  * reason, no date of birth, no review comment, no referrer email. It exists so
  * the team can ring a household, not so they can read the referral.
  *
- * `picklistAdmin`, `isDelivery`, `firstTimeMarker` and `voucherInstruction`
- * are there because the Run Sheet shows the administrators' line for the
- * picker, whether the household is a delivery, whether it is new and what to
- * do about a voucher, for **every** household — including one not yet picked
- * for, which has no parcel to read them from. All four are read or derived
- * afresh on every read, never copied.
+ * `picklistAdmin`, `collectionMethod`, `firstTimeMarker` and
+ * `voucherInstruction` are there because the Run Sheet shows the
+ * administrators' line for the picker, how the household's parcel is
+ * reaching them, whether it is new and what to do about a voucher, for
+ * **every** household — including one not yet picked for, which has no
+ * parcel to read them from. All four are read or derived afresh on every
+ * read, never copied.
  *
  * **No `answers`.** The Run Sheet used to carry the referral's answers whole
  * so the client could pick out "other information"; it no longer shows that
@@ -729,11 +730,12 @@ export interface ReferralDetailsHousehold {
    */
   readonly picklistAdmin: string | null;
   /**
-   * `collectionMethod === 'delivery'`, through `collectionMethodOf` like
-   * every other response, rather than the `isDelivery` column, which is
-   * itself derived from it — see the schema.
+   * Through `collectionMethodOf`, like every other response — never the raw
+   * `collectionMethod` column, which is nullable in SQL. The Run Sheet shows
+   * all three values, not just a delivery mark: settled by Pete on
+   * 2026-11-24, replacing the earlier `isDelivery` boolean.
    */
-  readonly isDelivery: boolean;
+  readonly collectionMethod: CollectionMethod;
   /** Identical to `Parcel.firstTimeMarker`; see `derivations.ts#firstTimeMarkerFor`. */
   readonly firstTimeMarker: FirstTimeMarker | null;
   /** Identical to `Parcel.voucherInstruction`; see `derivations.ts#voucherInstructionFor`. */
@@ -757,7 +759,7 @@ export function toReferralDetailsHousehold(
     referrerPhone: referral.referrerPhone,
     pickNumber,
     picklistAdmin: referral.picklistAdmin,
-    isDelivery: collectionMethodOf(referral) === 'delivery',
+    collectionMethod: collectionMethodOf(referral),
     firstTimeMarker: firstTimeMarkerFor(referral.firstTimeReviewStatus),
     voucherInstruction: voucherInstructionFor(voucher.sessionDate, voucher.voucherRange, {
       status: referral.firstTimeReviewStatus,
