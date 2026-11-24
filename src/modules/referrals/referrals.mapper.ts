@@ -690,18 +690,24 @@ export function toReferralSearchResponse(result: {
  * reason, no date of birth, no review comment, no referrer email. It exists so
  * the team can ring a household, not so they can read the referral.
  *
- * `picklistAdmin`, `collectionMethod`, `firstTimeMarker` and
+ * `picklistAdmin`, `answers`, `formId`, `firstTimeMarker` and
  * `voucherInstruction` are there because the Run Sheet shows the
- * administrators' line for the picker, how the household's parcel is
- * reaching them, whether it is new and what to do about a voucher, for
- * **every** household — including one not yet picked for, which has no
- * parcel to read them from. All four are read or derived afresh on every
- * read, never copied.
+ * administrators' line for the picker, the form's answers whole, whether the
+ * household is new and what to do about a voucher, for **every** household —
+ * including one not yet picked for, which has no parcel to read them from.
+ * All are read or derived afresh on every read, never copied.
  *
- * **No `answers`.** The Run Sheet used to carry the referral's answers whole
- * so the client could pick out "other information"; it no longer shows that
- * answer, and the whole map is every dynamic answer the referrer gave. Do not
- * add it back for one field.
+ * **`answers` is back, carried whole, exactly as `ListenerSheetHousehold`
+ * carries it — settled by Pete on 2026-11-24, reversing the narrower shape
+ * this used to have.** The Run Sheet needed a specific answer (how a
+ * household's parcel is actually being collected, in more detail than the
+ * fixed `collectionMethod` column says) and the server does not know, and
+ * will not learn, which key on the form that is — same reasoning as the fuel
+ * help list. So the whole map comes back, `formId` with it so the client can
+ * read it against the right release, and the client picks out what the
+ * screen needs. **No separate `collectionMethod` or `isDelivery` field**:
+ * the fixed column's three values are a poorer answer to the same question
+ * now that the form's own answer is here.
  */
 export interface ReferralDetailsHousehold {
   readonly referralId: string;
@@ -730,12 +736,15 @@ export interface ReferralDetailsHousehold {
    */
   readonly picklistAdmin: string | null;
   /**
-   * Through `collectionMethodOf`, like every other response — never the raw
-   * `collectionMethod` column, which is nullable in SQL. The Run Sheet shows
-   * all three values, not just a delivery mark: settled by Pete on
-   * 2026-11-24, replacing the earlier `isDelivery` boolean.
+   * The referrer's dynamic answers, whole, exactly as stored — as on
+   * `ListenerSheetHousehold`. The server does not read or filter them.
    */
-  readonly collectionMethod: CollectionMethod;
+  readonly answers: Record<string, unknown>;
+  /**
+   * The form release the answers were given to; see
+   * `ListenerSheetHousehold.formId`.
+   */
+  readonly formId: string | null;
   /** Identical to `Parcel.firstTimeMarker`; see `derivations.ts#firstTimeMarkerFor`. */
   readonly firstTimeMarker: FirstTimeMarker | null;
   /** Identical to `Parcel.voucherInstruction`; see `derivations.ts#voucherInstructionFor`. */
@@ -759,7 +768,8 @@ export function toReferralDetailsHousehold(
     referrerPhone: referral.referrerPhone,
     pickNumber,
     picklistAdmin: referral.picklistAdmin,
-    collectionMethod: collectionMethodOf(referral),
+    answers: parseAnswers(referral.answersJson),
+    formId: referral.formId,
     firstTimeMarker: firstTimeMarkerFor(referral.firstTimeReviewStatus),
     voucherInstruction: voucherInstructionFor(voucher.sessionDate, voucher.voucherRange, {
       status: referral.firstTimeReviewStatus,

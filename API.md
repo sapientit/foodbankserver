@@ -2228,7 +2228,7 @@ GET /api/v1/sessions/{sessionId}/referral-details
                          refereeAddress, refereePostcode, refereePhone,
                          referrerName, referrerOrganisation,
                          referrerPhone, pickNumber, picklistAdmin,
-                         collectionMethod, firstTimeMarker,
+                         answers, formId, firstTimeMarker,
                          voucherInstruction } ] }
 ```
 
@@ -2250,17 +2250,24 @@ are ringing, or give a picker the household's number over the same call.
 - `picklistAdmin` — the administrators' one line for the picker, **the
   referral's current value**, the same one `Parcel.picklistAdmin` reads. An
   amendment shows on the next read; no pick list needs generating again.
-- `collectionMethod` — `collection`, `delivery` or `referrer_collect`, as on
-  the referral itself.
+- `answers` and `formId` — the referrer's dynamic answers, whole, and the
+  release they were given to, exactly as on the listener sheet. The server
+  does not read or filter them; take from them whatever the screen needs.
 
-**`answers` and `formId` are gone — breaking.** The Run Sheet no longer shows
-the "other information" answer (Referrer comments); `picklistAdmin` takes its
-place. The whole answer map was every dynamic answer on a team-lead payload for
-the sake of one, so it has been removed rather than kept unused.
+**`answers` and `formId` are back — breaking, again.** An earlier change
+removed them (`picklistAdmin` replacing "other information" on this screen),
+reasoning the whole answer map was every dynamic answer on a team-lead payload
+for the sake of one. The Run Sheet now needs a second answer the form holds —
+how a household's parcel is actually being collected, in more detail than a
+fixed column can say — and the server does not know, and will not learn,
+which key on the form that is, for the same reason the fuel help list leaves
+key-picking to the client. So the whole map is back rather than two fields
+being picked out by name.
 
-**`isDelivery` is gone too — breaking.** It collapsed `collection` and
-`referrer_collect` into the same `false`; `collectionMethod` shows all three
-apart.
+**Neither `collectionMethod` nor `isDelivery` is on this response.** Read
+collection detail from `answers` instead; the fixed column only ever said
+`collection`, `delivery` or `referrer_collect`, which is now the poorer of the
+two answers to the same question.
 
 These come with the referral, not the parcel, so a household not yet picked
 for has them too. **Read them from here for the Run Sheet**, not from
@@ -2268,8 +2275,8 @@ for has them too. **Read them from here for the Run Sheet**, not from
 
 **What it does not otherwise carry**, and must not be padded with from other
 endpoints: date of birth, the reason for referral, the review comment, the
-administrators' note, the form's answers, the parcel contents, and the
-referrer's email address. The reason stays where it was — a team leader gets it on the listener sheet and
+administrators' note, the parcel contents, and the referrer's email address.
+The reason stays where it was — a team leader gets it on the listener sheet and
 nowhere else, and putting it on a second sheet quietly undoes that.
 
 **Deliveries are included here**, unlike the listener sheet. That drops them

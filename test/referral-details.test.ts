@@ -64,7 +64,8 @@ interface ReferralDetailsHouseholdBody {
   readonly referrerPhone: string | null;
   readonly pickNumber: number | null;
   readonly picklistAdmin: string | null;
-  readonly collectionMethod: 'collection' | 'delivery' | 'referrer_collect';
+  readonly answers: Record<string, unknown>;
+  readonly formId: string | null;
   readonly firstTimeMarker: 'first_time' | 'admin' | null;
   readonly voucherInstruction: 'provide_voucher' | 'already_received' | 'refer_to_admin' | null;
 }
@@ -392,7 +393,7 @@ describe('pickNumber', () => {
   });
 });
 
-describe('picklistAdmin and collectionMethod', () => {
+describe('picklistAdmin, answers and formId', () => {
   it('gives both a team lead and an admin the current picklistAdmin', async () => {
     const { testApp, token, world } = await adminWorld();
     const { id } = await submitReferral(testApp, world, {}, { clientIp: nextClientIp() });
@@ -458,42 +459,34 @@ describe('picklistAdmin and collectionMethod', () => {
     ).toBeNull();
   });
 
-  it('carries collectionMethod as on the referral, all three values apart', async () => {
-    const { testApp, token, world } = await adminWorld({ deliveryCapacity: 1 });
-    const collecting = await submitReferral(
+  it('carries the answers whole and the formId they were given under, same as the listener sheet', async () => {
+    const { testApp, token, world } = await adminWorld();
+    const { id } = await submitReferral(
       testApp,
       world,
-      { refereeSurname: 'Ashworth' },
-      { clientIp: nextClientIp() },
-    );
-    const delivering = await submitReferral(
-      testApp,
-      world,
-      { refereeSurname: 'Bracken', collectionMethod: 'delivery' },
-      { clientIp: nextClientIp() },
-    );
-    const referrerCollecting = await submitReferral(
-      testApp,
-      world,
-      { refereeSurname: 'Cotswold', collectionMethod: 'referrer_collect' },
+      {
+        answers: {
+          'How is this being collected?': 'A neighbour is collecting it',
+          Dietary: 'no pork',
+        },
+      },
       { clientIp: nextClientIp() },
     );
 
     const details = await readDetails(testApp, token, world.sessionId);
-    const byId = new Map(
-      (details.body.referrals ?? []).map((referral) => [
-        referral.referralId,
-        referral.collectionMethod,
-      ]),
-    );
-    expect(byId.get(collecting.id)).toBe('collection');
-    expect(byId.get(delivering.id)).toBe('delivery');
-    expect(byId.get(referrerCollecting.id)).toBe('referrer_collect');
+    const household = details.body.referrals?.find((referral) => referral.referralId === id);
+
+    // The whole map, untouched — the server does not pick anything out of it.
+    expect(household?.answers).toEqual({
+      'How is this being collected?': 'A neighbour is collecting it',
+      Dietary: 'no pork',
+    });
+    expect(household?.formId).toBe(BASELINE_FORM_ID);
   });
 });
 
 describe('the response allowlist', () => {
-  it('carries the contact details, and never carries date of birth, the reason, the review comment, referrerEmail, the answers, formId, or any parcel or line data — asserted on the raw response text', async () => {
+  it('carries the contact details and the answers, and never carries date of birth, the reason, the review comment, referrerEmail, or any parcel or line data — asserted on the raw response text', async () => {
     const testApp = buildTestApp({ clock: fixedClock(NOW) });
     const { accessToken: token } = await devLogin(testApp, { email: 'admin@foodbank.org' });
     const world: PickingWorld = await setUpPickingWorld(testApp, token);
@@ -552,10 +545,12 @@ describe('the response allowlist', () => {
     expect(text).toContain(UNKNOWN_REFERRER.referrerOrganisation);
     expect(text).toContain('01483 000111'); // referrerPhone
     expect(text).toContain('picklistAdmin');
-    expect(text).toContain('collectionMethod');
+    expect(text).toContain('"answers"');
+    expect(text).toContain('"formId"');
+    expect(text).toContain('Allergic to shellfish specifically');
+    expect(text).toContain(BASELINE_FORM_ID);
 
-    // Absent on purpose. `answers` and `formId` were removed from this
-    // response entirely — neither the key nor any answer text should appear.
+    // Absent on purpose.
     for (const shouldNotLeak of [
       '1949-08-04',
       'refereeDateOfBirth',
@@ -572,10 +567,8 @@ describe('the response allowlist', () => {
       'parcelId',
       'quantity',
       world.stockItems.Beans,
-      '"answers"',
-      '"formId"',
-      'Allergic to shellfish specifically',
-      BASELINE_FORM_ID,
+      'collectionMethod',
+      'isDelivery',
     ]) {
       expect(text).not.toContain(shouldNotLeak);
     }
@@ -600,12 +593,12 @@ describe('First?, Voucher and Referrer comments, without depending on the pick l
     expect(response.status).toBe(200);
   }
 
-  it('carries picklistAdmin and collectionMethod before any pick list exists, with no pick number yet', async () => {
+  it('carries picklistAdmin, answers and formId before any pick list exists, with no pick number yet', async () => {
     const { testApp, token, world } = await adminWorld({ deliveryCapacity: 1 });
     const { id } = await submitReferral(
       testApp,
       world,
-      { collectionMethod: 'delivery' },
+      { collectionMethod: 'delivery', answers: { 'Other information': 'Gate code is 1234' } },
       { clientIp: nextClientIp() },
     );
     await testApp.request(`/api/v1/referrals/${id}`, {
@@ -619,7 +612,8 @@ describe('First?, Voucher and Referrer comments, without depending on the pick l
 
     expect(household?.pickNumber).toBeNull();
     expect(household?.picklistAdmin).toBe('Use the side door');
-    expect(household?.collectionMethod).toBe('delivery');
+    expect(household?.answers).toEqual({ 'Other information': 'Gate code is 1234' });
+    expect(household?.formId).toBe(BASELINE_FORM_ID);
   });
 
   it('derives the marker and the voucher instruction for households with no parcel, matching the pick list once one exists', async () => {
