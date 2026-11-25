@@ -66,7 +66,6 @@ interface ReferralDetailsHouseholdBody {
   readonly picklistAdmin: string | null;
   readonly answers: Record<string, unknown>;
   readonly formId: string | null;
-  readonly firstTimeMarker: 'first_time' | 'admin' | null;
   readonly voucherInstruction: 'provide_voucher' | 'already_received' | 'refer_to_admin' | null;
 }
 
@@ -569,6 +568,7 @@ describe('the response allowlist', () => {
       world.stockItems.Beans,
       'collectionMethod',
       'isDelivery',
+      'firstTimeMarker',
     ]) {
       expect(text).not.toContain(shouldNotLeak);
     }
@@ -576,14 +576,18 @@ describe('the response allowlist', () => {
 });
 
 /**
- * The Run Sheet shows First?, Voucher and Referrer comments for every
- * household, and a household not yet picked for has no parcel to read them
- * from — so they come with the referral. Same derivations as
- * `Parcel.firstTimeMarker` / `Parcel.voucherInstruction`; the answers whole,
- * as the listener sheet sends them, since which one is "other information"
- * is the form's business.
+ * The Run Sheet shows Voucher and Referrer comments for every household, and
+ * a household not yet picked for has no parcel to read them from — so they
+ * come with the referral. Same derivation as `Parcel.voucherInstruction`;
+ * the answers whole, as the listener sheet sends them, since which one is
+ * "other information" is the form's business.
+ *
+ * **No `firstTimeMarker` here** — removed from the Run Sheet, Pete,
+ * 2026-11-25. Its derivation is covered on the Client List and the listener
+ * sheet instead; see `pick-list-first-time.test.ts` and
+ * `listener-sheet.test.ts`.
  */
-describe('First?, Voucher and Referrer comments, without depending on the pick list', () => {
+describe('Voucher and Referrer comments, without depending on the pick list', () => {
   async function asAdmin(testApp: TestApp, token: string, path: string, body: unknown) {
     const response = await testApp.request(path, {
       method: path.endsWith('voucher-config') ? 'PUT' : 'POST',
@@ -616,7 +620,7 @@ describe('First?, Voucher and Referrer comments, without depending on the pick l
     expect(household?.formId).toBe(BASELINE_FORM_ID);
   });
 
-  it('derives the marker and the voucher instruction for households with no parcel, matching the pick list once one exists', async () => {
+  it('derives the voucher instruction for households with no parcel, matching the pick list once one exists', async () => {
     const testApp = buildTestApp({ clock: fixedClock(NOW) });
     const { accessToken: token } = await devLogin(testApp, { email: 'admin@foodbank.org' });
     const world: PickingWorld = await setUpPickingWorld(testApp, token);
@@ -649,32 +653,20 @@ describe('First?, Voucher and Referrer comments, without depending on the pick l
       endDate: '2026-08-31',
     });
 
-    const markers = async () => {
+    const instructions = async () => {
       const details = await readDetails(testApp, token, world.sessionId);
       return new Map(
         (details.body.referrals ?? []).map((referral) => [
           referral.referralId,
-          {
-            firstTimeMarker: referral.firstTimeMarker,
-            voucherInstruction: referral.voucherInstruction,
-          },
+          referral.voucherInstruction,
         ]),
       );
     };
 
-    const beforePicking = await markers();
-    expect(beforePicking.get(unreviewed.id)).toEqual({
-      firstTimeMarker: 'admin',
-      voucherInstruction: 'refer_to_admin',
-    });
-    expect(beforePicking.get(noPrevious.id)).toEqual({
-      firstTimeMarker: 'first_time',
-      voucherInstruction: 'provide_voucher',
-    });
-    expect(beforePicking.get(previousInRange.id)).toEqual({
-      firstTimeMarker: null,
-      voucherInstruction: 'already_received',
-    });
+    const beforePicking = await instructions();
+    expect(beforePicking.get(unreviewed.id)).toBe('refer_to_admin');
+    expect(beforePicking.get(noPrevious.id)).toBe('provide_voucher');
+    expect(beforePicking.get(previousInRange.id)).toBe('already_received');
 
     // The same values the Client List reads off the parcels.
     await generatePickList(testApp, token, world.sessionId);
@@ -682,19 +674,12 @@ describe('First?, Voucher and Referrer comments, without depending on the pick l
       headers: authHeaders(token),
     });
     const pickListBody: {
-      parcels?: {
-        referralId: string;
-        firstTimeMarker: string | null;
-        voucherInstruction: string | null;
-      }[];
+      parcels?: { referralId: string; voucherInstruction: string | null }[];
     } = await pickList.json();
-    const afterPicking = await markers();
+    const afterPicking = await instructions();
     expect(pickListBody.parcels?.length).toBe(3);
     for (const parcel of pickListBody.parcels ?? []) {
-      expect(afterPicking.get(parcel.referralId)).toEqual({
-        firstTimeMarker: parcel.firstTimeMarker,
-        voucherInstruction: parcel.voucherInstruction,
-      });
+      expect(afterPicking.get(parcel.referralId)).toBe(parcel.voucherInstruction);
     }
   });
 
@@ -705,7 +690,6 @@ describe('First?, Voucher and Referrer comments, without depending on the pick l
     const details = await readDetails(testApp, token, world.sessionId);
     const household = details.body.referrals?.find((referral) => referral.referralId === id);
 
-    expect(household?.firstTimeMarker).toBe('admin');
     expect(household?.voucherInstruction).toBeNull();
   });
 });

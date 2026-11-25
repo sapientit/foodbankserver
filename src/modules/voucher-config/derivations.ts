@@ -62,8 +62,8 @@ export type FirstTimeMarker = 'first_time' | 'admin';
  *
  * The listener sheet (`ListenerSheetHousehold`) shows the same marker: the
  * listener is the person actually talking to the household, so they see
- * whether it is new, just as the team leader does. So does the Run Sheet
- * (`ReferralDetailsHousehold`), for every household whether picked for or not.
+ * whether it is new, just as the team leader does. **Not** on the Run Sheet
+ * (`ReferralDetailsHousehold`) — removed from there, Pete, 2026-11-25.
  */
 export function firstTimeMarkerFor(
   status: FirstTimeReviewStatus | undefined,

@@ -690,12 +690,15 @@ export function toReferralSearchResponse(result: {
  * reason, no date of birth, no review comment, no referrer email. It exists so
  * the team can ring a household, not so they can read the referral.
  *
- * `picklistAdmin`, `answers`, `formId`, `firstTimeMarker` and
- * `voucherInstruction` are there because the Run Sheet shows the
- * administrators' line for the picker, the form's answers whole, whether the
- * household is new and what to do about a voucher, for **every** household —
- * including one not yet picked for, which has no parcel to read them from.
- * All are read or derived afresh on every read, never copied.
+ * `picklistAdmin`, `answers`, `formId` and `voucherInstruction` are there
+ * because the Run Sheet shows the administrators' line for the picker, the
+ * form's answers whole and what to do about a voucher, for **every**
+ * household — including one not yet picked for, which has no parcel to read
+ * them from. All are read or derived afresh on every read, never copied.
+ *
+ * **No `firstTimeMarker`.** Settled by Pete on 2026-11-25: no longer needed
+ * on the Run Sheet. It stays on the Client List and the listener sheet,
+ * neither of which this change touches.
  *
  * **`answers` is back, carried whole, exactly as `ListenerSheetHousehold`
  * carries it — settled by Pete on 2026-11-24, reversing the narrower shape
@@ -745,8 +748,6 @@ export interface ReferralDetailsHousehold {
    * `ListenerSheetHousehold.formId`.
    */
   readonly formId: string | null;
-  /** Identical to `Parcel.firstTimeMarker`; see `derivations.ts#firstTimeMarkerFor`. */
-  readonly firstTimeMarker: FirstTimeMarker | null;
   /** Identical to `Parcel.voucherInstruction`; see `derivations.ts#voucherInstructionFor`. */
   readonly voucherInstruction: VoucherInstruction | null;
 }
@@ -770,7 +771,6 @@ export function toReferralDetailsHousehold(
     picklistAdmin: referral.picklistAdmin,
     answers: parseAnswers(referral.answersJson),
     formId: referral.formId,
-    firstTimeMarker: firstTimeMarkerFor(referral.firstTimeReviewStatus),
     voucherInstruction: voucherInstructionFor(voucher.sessionDate, voucher.voucherRange, {
       status: referral.firstTimeReviewStatus,
       previousSessionDate: referral.firstTimeReviewDate,

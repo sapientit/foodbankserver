@@ -2228,8 +2228,7 @@ GET /api/v1/sessions/{sessionId}/referral-details
                          refereeAddress, refereePostcode, refereePhone,
                          referrerName, referrerOrganisation,
                          referrerPhone, pickNumber, picklistAdmin,
-                         answers, formId, firstTimeMarker,
-                         voucherInstruction } ] }
+                         answers, formId, voucherInstruction } ] }
 ```
 
 Admin **and team lead**, for the _Run Sheet_ screen. **You own the print
@@ -2244,15 +2243,19 @@ are ringing, or give a picker the household's number over the same call.
 
 **It also carries the Run Sheet's operational columns**, for every household:
 
-- `firstTimeMarker` and `voucherInstruction` — **identical to the `Parcel`
-  fields of the same name** (section on the derived values below), same rule,
-  worked out fresh on every read.
+- `voucherInstruction` — **identical to the `Parcel` field of the same
+  name** (section on the derived values below), same rule, worked out fresh
+  on every read.
 - `picklistAdmin` — the administrators' one line for the picker, **the
   referral's current value**, the same one `Parcel.picklistAdmin` reads. An
   amendment shows on the next read; no pick list needs generating again.
 - `answers` and `formId` — the referrer's dynamic answers, whole, and the
   release they were given to, exactly as on the listener sheet. The server
   does not read or filter them; take from them whatever the screen needs.
+
+**`firstTimeMarker` is gone — breaking.** Settled by Pete: no longer needed
+on the Run Sheet. It stays on the Client List and the listener sheet, neither
+of which this touches.
 
 **`answers` and `formId` are back — breaking, again.** An earlier change
 removed them (`picklistAdmin` replacing "other information" on this screen),
@@ -2492,10 +2495,11 @@ voucher is handed over at the session, not off the sheet carried round the
 hall, which still has no `answers`, no reason for referral and now no voucher
 instruction — see **5**.
 
-Both derived values are also on the listener sheet and on the Run Sheet
-(`GET /sessions/{sessionId}/referral-details`, **5h**), with the same values
-from the same rule. On the Run Sheet they are there for every household,
-including one with no parcel yet.
+`firstTimeMarker` is also on the listener sheet, with the same value from the
+same rule. `voucherInstruction` is also on the listener sheet **and** on the
+Run Sheet (`GET /sessions/{sessionId}/referral-details`, **5h**) — but
+`firstTimeMarker` is not on the Run Sheet, which carries `voucherInstruction`
+alone of the two, for every household, including one with no parcel yet.
 
 ---
 
